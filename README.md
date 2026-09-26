@@ -71,6 +71,7 @@ npm start
   teamspace-cordis 启动中 …
 
   后端监听   http://0.0.0.0:8080   （健康检查 /healthz）
+  调试控制台 dev 端口 5172（Vite，暂未启用）
   控制台 dev 端口 5173（Vite，暂未启用）
   团队空间 dev 端口 5174（Vite，暂未启用）
   环境       development
@@ -147,10 +148,12 @@ npm run typecheck
 | 端口 | 用途 | 现在启用了吗 |
 |---|---|---|
 | **8080** | 后端服务（HTTP 接口、健康检查） | ✅ 已启用 |
+| **5172** | **调试控制台**（插件 / 日志 / 数据库查看页，测试用、无登录直达） | ⬜ 还没做，见 `docs/ROADMAP.md` |
 | **5173** | 控制台前端（网页界面） | ⬜ 还没做 |
 | **5174** | 团队空间前端（网页界面） | ⬜ 还没做 |
 
-后两个是给之后的前端页面预留的，现在跑起来没有东西，属于正常。
+后三个现在跑起来没有东西，属于正常。
+⚠ 5172 是**新开**的测试端口，与 5173 **并存**，不是替换它。
 
 ---
 
@@ -195,6 +198,7 @@ teamspace-cordis/
 ```bash
 APP_HOST=0.0.0.0        # 监听地址：0.0.0.0 = 所有网卡，WSL2 下必须用它
 APP_PORT=8080           # 后端端口
+DEBUG_PORT=5172         # 调试控制台（测试用，无登录直达）
 CONSOLE_PORT=5173       # 控制台前端端口
 TEAMSPACE_PORT=5174     # 团队空间前端端口
 NODE_ENV=development
@@ -291,7 +295,7 @@ Node 不在系统路径里。设 `NODE_BIN_DIR` 指向 Node 所在目录，或�
 Node 版本太低，需要 20.6 以上。升级 Node。
 
 **Q：报错说 `.env` 缺少必需变量**
-`.env` 里少了 `APP_HOST` / `APP_PORT` / `CONSOLE_PORT` / `TEAMSPACE_PORT` 中的某一个。
+`.env` 里少了 `APP_HOST` / `APP_PORT` / `DEBUG_PORT` / `CONSOLE_PORT` / `TEAMSPACE_PORT` 中的某一个。
 打开 `.env` 对照 `.env.example` 补齐即可。
 
 **Q：`EADDRINUSE`（端口被占用）**

@@ -28,7 +28,7 @@ set +a
 # ── ③ 校验：缺一个就直接拒绝启动 ───────────────────────────────────────
 # 宁可直接报错，也不要退回内置默认值悄悄跑歪 —— 那正是"端口不一致"的来源。
 missing=""
-for key in APP_HOST APP_PORT CONSOLE_PORT TEAMSPACE_PORT; do
+for key in APP_HOST APP_PORT DEBUG_PORT CONSOLE_PORT TEAMSPACE_PORT; do
   if [ -z "${!key:-}" ]; then
     missing="${missing} ${key}"
   fi
@@ -54,6 +54,7 @@ say() { printf '  %s\n' "$*"; }
 # 打印运行时端口一览（各脚本复用，保证输出口径一致）
 print_endpoints() {
   say "后端监听   http://${APP_HOST}:${APP_PORT}   （健康检查 /healthz）"
+  say "调试控制台 dev 端口 ${DEBUG_PORT}（Vite，暂未启用）"
   say "控制台 dev 端口 ${CONSOLE_PORT}（Vite，暂未启用）"
   say "团队空间 dev 端口 ${TEAMSPACE_PORT}（Vite，暂未启用）"
 }

@@ -288,7 +288,7 @@ packages/bundle/
 
 | 阶段 | 内容 | 验收（可观测） |
 |---|---|---|
-| **P0 立骨架** | `npm workspaces` 接通；`packages/` 五层目录立起；**每个 `package.json` 写 `private: true` + `workspace:*`**；依赖方向门禁脚本（断言 ① ② ⑦）+ 实测改坏会红；**每个 seam 包只放一个空的 `Service` 声明**（零业务） | `npm run typecheck` 干净；门禁脚本故意把 `impl` 依赖另一个 `impl` → 退出码 1；故意给某包去掉 `private` → 退出码 1 |
+| **P0 立骨架** | `npm workspaces` 接通；`packages/` 五层目录立起；**每个 `package.json` 写 `private: true` + `workspace:*`**；依赖方向门禁脚本（断言 ① ② ⑦）+ 实测改坏会红；**每个 seam 包只放一个空的 `Service` 声明**（零业务）；**建 `scripts/check-console.sh`（断言 ⑩，铁律 2）**；**5172 控制台不许在立骨架过程中被弄丢** | `npm run typecheck` 干净；门禁脚本故意把 `impl` 依赖另一个 `impl` → 退出码 1；故意给某包去掉 `private` → 退出码 1；**`check-console.sh` 故意改错端口 → 退出码 1** |
 | **P1 首个真能力** | `seam/space-session` + `seam/space-event` + `impl/space-store-sqlite`（**只建 `sessions` / `session_members` / `events` 三张真表** —— 待定 6）+ `migrate`/`seed`/`reset` + **断言 ⑧**（DDL 只在迁移里） | 调试控制台 5172 的**数据库页从 0 张表变成 3 张真表**；迁移 `up→down→up` 幂等；故意在插件里写 `CREATE TABLE` → 退出码 1 |
 | **P2 交互元素** | `seam/space-command` + `seam/space-staging` + 指令族（`/add` `/cur` `/del` `/change` `/clear` `/commit`） | 非 `/` 开头消息只入暂存区、**不触发** coordinator；`/commit` 恰好触发**一次** Plan；未注册指令返回可用清单 |
 | **P3 协作大脑** | `seam/space-orchestrator` + `policy/space-authz`（业务硬约束按**可断言子集**落成断言 —— 待定 5，清单在该行） | 授权名单外目标 → 拒绝；人类 `@` 指令走 NLP 判定；三级兜底各自有断言；收到目标 agent 反馈后**必须**输出暂停并等人类 |
@@ -309,6 +309,8 @@ packages/bundle/
 | ⑥ | **注册重名 panic** | 命令 / 元素 / 工具重名 —— 沿用旧系统口径（重名是编程错误，测试期就炸） | 各 seam 单测 |
 | ⑦ | **包一律私有** | `packages/**/package.json` 里 `private` 不为 `true`，或出现 `publishConfig`（对应待定 3 的落地） | 随 P0 的 `scripts/lint-deps.sh` 同批建 |
 | ⑧ | **DDL 只在迁移里** | `packages/**` 下（**排除 `**/migrations/**`**）出现 `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE`（对应待定 7 的落地） | `scripts/lint-migrations.sh`，**待 P1 建迁移时同批建** —— 现在还没有迁移目录，先写就是空断言 |
+| ⑨ | **动作留痕**（铁律 2） | 跑过 `npm run gate` / `typecheck` / `migrate` / `seed` 之后，库里**必须多出可查记录**；「跑了但不留痕」判红 | `scripts/lint-observability.sh`，**待 P1 有库有表后建** —— 现在无处可落 |
+| ⑩ | **控制台可达**（铁律 2） | 启动后 5172 的插件 / 日志 / 数据库**三页 HTTP 200**；任一非 200 判红 | `scripts/check-console.sh`，**P0 建** —— M1 只是**手工**实测过，脚本还没有（这正是铁律 2 记账表里的缺口） |
 
 ---
 
@@ -327,6 +329,12 @@ packages/bundle/
 | **6** | ~~旧系统那 10 张表是否原样搬~~ | ✅ **已解决（2026-09-27）：P1 只搬 3 张** | `sessions` / `session_members` / `events`。**不做「先全搬再重构」** —— 全搬等于把旧模型照抄一遍（含我们打算不要的角色 / 权限字段），之后每改一次就欠一笔迁移债。其余 7 张按需：`users` / `auth_sessions` / `principals` / `team_accounts` 属鉴权，M1 已明确初期不做 → **后置**；`plugins` / `settings` / `meta` 是框架自身的，由 cordis 生态（loader / database 插件）接管。迁移文件命名与「已提交迁移不许改」承旧 `store/doc.go` 口径 |
 | **7** | ~~「每插件一节」迁移 与 cordis 运行时启停的耦合~~ | ✅ **已解决（2026-09-27）：留表不回滚，且 DDL 与插件生命周期彻底解耦** | 两条。① **停用插件时表与数据都留着**：cordis 的 `effect` 回滚的是**注册**（服务 / 事件 / 路由），**不是数据** —— 顺应框架语义；且数据回滚在多人协作系统里是危险动作，配置一改就静默删表，几乎无法排查。② **DDL 不许写在插件里**：不在 `apply` 生命周期跑建表，迁移是独立的 `migrate` 命令；schema 版本由**迁移链**自己管，与插件启停无关（插件停用再启用**不重跑迁移**）。断言见第 6 节 ⑧ |
 
+### 已知缺陷（发现即记账，不许只在对话里说过就完）
+
+| # | 缺陷 | 发现于 | 影响 | 状态 |
+|---|---|---|---|---|
+| **D1** | `scripts/stop.sh` 的端口清单**漏 `DEBUG_PORT`**（第 22 行只遍历 `APP_PORT` / `CONSOLE_PORT` / `TEAMSPACE_PORT`），而它自己的注释写着「停掉 `.env` 里那几个端口上的进程」 | 2026-09-27 停 8080/5172 时 | 今天因 8080 与 5172 **恰好是同一进程**才停干净。一旦两者不同进程（只跑 debug profile，或 5172 拆成独立实例），`npm run stop` 会**留下 5172**，下次启动直接撞端口；`--check` 也照不到 5172。违反「端口只在 `.env` 定义一次」的口径 | ⬜ **待用户确认后修**：补 `DEBUG_PORT` + 加强断言 ⑤（扫 `scripts/*.sh`，凡端口枚举必须含 `.env` 全量端口，**实测改坏会红**） |
+
 ---
 
 ## 修订记录
@@ -338,3 +346,4 @@ packages/bundle/
 | 2026-09-27 | **待定 1 解决**：`client-ui` 层选型定稿，写进 `.rules/IRON-RULES.md`「选型扩展」；门禁扫描范围加 `packages/`（实测通过）；新增 3 条判红条件留待 P4 变成断言 |
 | 2026-09-27 | **待定 2 解决**：前端构建面选 **A2** —— 各包 `vite build --manifest` 出 `dist/`，`devMode: false` 只读产物，**`dist/` 不入库、构建进启动脚本**；明确接受无 HMR。新增第 3.5 节「构建口径」（含官方样板三件套与 `addEntry` 原文） |
 | 2026-09-27 | **待定 3~7 全部拍板**，第 7 节改名为「决策记录」、当前无待定项：③seam **不发布**（`private: true`）；④`space-workspace` **不预拆** + 补「换实现必须独立」硬判据；⑤业务硬约束**只对可断言的子集**造断言，落 `policy/space-authz`；⑥P1 只搬 `sessions`/`session_members`/`events` 三张；⑦**留表不回滚** + DDL 与插件生命周期解耦。新增门禁 ⑦（包一律私有）、⑧（DDL 只在迁移里），落点与「何时建」都写明了 |
+| 2026-09-27 | **建档铁律 2（开发过程必须让人类看得见）后的对齐**：第 6 节新增断言 ⑨（动作留痕，待 P1）、⑩（控制台三页可达，P0 建）；P0 内容与验收补上「建 `scripts/check-console.sh`」「5172 不许丢」；新增「已知缺陷」小节，首条 **D1 = `stop.sh` 漏 `DEBUG_PORT`** | 用户新增铁律 2 —— 观测点必须进设施与门禁，不能只靠自觉；D1 是停服务时实测发现的，按「发现即记账」落档 |

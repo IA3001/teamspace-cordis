@@ -1,0 +1,28 @@
+{
+  "name": "teamspace-cordis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "多人 + 多 Agent 团队协作系统 —— 基于 cordis 元框架，一切皆插件",
+  "license": "MIT",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "./scripts/run.sh",
+    "dev": "./scripts/dev.sh",
+    "stop": "./scripts/stop.sh",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cordisjs/plugin-include": "^1.1.0",
+    "@cordisjs/plugin-loader": "^1.0.0-rc.7",
+    "@cordisjs/plugin-server": "^1.7.0",
+    "cordis": "^4.0.0-rc.10",
+    "js-yaml": "^5.4.2"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

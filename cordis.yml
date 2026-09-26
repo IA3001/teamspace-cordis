@@ -1,0 +1,42 @@
+# 插件组合清单（cordis 的「应用」就是这个文件）
+#
+# 格式（官方约束，核实日期 2026-09-26）：
+#   · 顶层必须是**数组**，每个元素是一个插件的配置项
+#   · 每项字段：id / name / config / disabled / inject / group
+#   · name 是模块指定符（相对路径或 npm 包名）
+#   · 各项并发启动，加载先后由服务依赖（inject）决定，与书写顺序无关
+#   来源：@cordisjs/plugin-include 校验逻辑（非数组即报错）
+#        https://deepseek-harness.github.io/deepseek-harness/develop/cordis-tutorial/01-first-plugin
+#
+# 启用/关闭插件：删掉 `disabled` 行即启用；写 `disabled: true` 即停用。
+# 停用后该插件注册的一切（服务、事件、定时器）会被框架自动回滚。
+#
+# !!js 是 include 插件官方的表达式标签，在 loader 上下文中求值
+#   （实现：new Function("ctx", "expr", "with (ctx) { return eval(expr) }")）。
+#   端口因此能从 .env 注入，不必在 YAML 里再写一遍数字。
+
+# ── 框架设施 ────────────────────────────────────────────────────────────
+# 官方 HTTP 服务（提供 ctx.server，路由挂在它上面）。
+# host/port 来自 .env —— 全系统端口唯一出处，不在这里写死数字。
+- id: server
+  name: '@cordisjs/plugin-server'
+  config:
+    host: !!js process.env.APP_HOST ?? '0.0.0.0'
+    port: !!js Number(process.env.APP_PORT ?? 8080)
+
+# ── 业务插件 ────────────────────────────────────────────────────────────
+# 健康检查：证明端口真的在听，也是后续所有路由的样板（inject 声明依赖）。
+- id: health
+  name: './plugins/health/index.ts'
+
+# 最早那个试金石插件，保留用于验证「加功能 = 加插件」。
+- id: app
+  name: './plugins/app/index.ts'
+  config:
+    greeting: cordis 框架已启动，一切就绪
+
+# 曾试挂官方 @cordisjs/plugin-logger（控制台日志导出器），**已撤掉**：
+# 它与 cordis@4.0.0-rc.10 组合下 ctx.logger().info/warn/error 全部静默
+# （实测 3 次，2026-09-26）。core 自带的 ctx.logger.exporter({ export })
+# 接口本身可用，是插件侧的消息形状没接上 —— RC 阶段的集成缺口。
+# 需要日志时再单独写一个基于 core 接口的 logger 插件。

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>teamspace-cordis · 最小框架架构图</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #FFFFFF;
+  --surface: #F7F7F8;
+  --surface-muted: #EFEFF2;
+  --text: #171717;
+  --text-muted: #52525B;
+  --border: rgba(23, 23, 23, 0.12);
+  --brand: #0FDC78;
+  --brand-soft: #E5FFF2;
+  --brand-text: #004D26;
+  --radius: 8px;
+  --radius-card: 12px;
+  --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0F0F0F;
+    --surface: #171717;
+    --surface-muted: #262626;
+    --text: #E5E5E5;
+    --text-muted: #A1A1AA;
+    --border: rgba(229, 229, 229, 0.12);
+    --brand: #32F08C;
+    --brand-soft: #004D26;
+    --brand-text: #E5FFF2;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 48px 24px 80px;
+  background: var(--page);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 880px; margin: 0 auto; }
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 26px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  margin: 56px 0 16px;
+  font-size: 18px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+h3 {
+  margin: 32px 0 12px;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+p { margin: 0 0 14px; }
+
+.lead {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.meta {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+code {
+  padding: 1px 5px;
+  background: var(--surface-muted);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.figure {
+  margin: 24px 0 8px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.figLabel {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.caption {
+  margin: 0 0 32px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+ul { margin: 0 0 14px; padding-left: 22px; }
+li { margin-bottom: 6px; }
+
+.rule {
+  margin: 24px 0;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--radius);
+}
+
+.rule p:last-child { margin-bottom: 0; }
+
+table {
+  width: 100%;
+  margin: 16px 0 24px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th, td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+td:first-child { font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
+
+footer {
+  margin-top: 64px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ── 图内样式（与看板/文档共用同一套色板）────────────────────────── */
+.dt  { fill: var(--text);       font: 500 14px var(--font-sans); }
+.dtB { fill: var(--brand-text); font: 500 14px var(--font-sans); }
+.ds  { fill: var(--text-muted); font: 400 12px var(--font-sans); }
+.dsB { fill: var(--brand-text); font: 400 12px var(--font-sans); }
+.cn  { fill: var(--surface);       stroke: var(--border); stroke-width: 1; }
+.cb  { fill: var(--brand-soft);    stroke: var(--brand);  stroke-width: 1.5; }
+.ce  { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 5 5; }
+.pill{ fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; }
+.bnd { fill: none; stroke: var(--border); stroke-width: 1.5; stroke-dasharray: 7 6; }
+.bndT{ fill: var(--text-muted); font: 500 12px var(--font-sans); }
+.arr { fill: none; stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.mk  { fill: var(--text-muted); }
+.cap { fill: var(--surface-muted); stroke: var(--border); }
+.capt{ fill: var(--text-muted); font: 500 12px var(--font-sans); }
+
+@media (max-width: 640px) {
+  body { padding: 32px 16px 64px; }
+  h1 { font-size: 22px; }
+  .figure { padding: 12px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>teamspace-cordis · 最小框架架构图</h1>
+  <p class="lead">两张图说明这套骨架：框架怎么被点着，以及点着之后内部怎么组织。</p>
+
+  <h2>一、启动链路</h2>
+  <p>从你敲下 <code>npm start</code> 到插件就位，一共四步。左侧与右侧的两个虚线框是<strong>外部输入</strong>，它们不是代码，是磁盘上的配置文件。</p>
+
+  <div class="figure">
+    <span class="figLabel">图 1 · 启动链路</span>
+    <svg viewBox="0 0 720 512" role="img" aria-label="启动链路：run.sh 读 .env，index.ts 建 Context，include 读 cordis.yml">
+      <defs>
+        <marker id="arwBoot" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+          <path class="mk" d="M1 1 L7 4 L1 7 Z" />
+        </marker>
+      </defs>
+
+      <path class="arr" d="M350 124 V 180" marker-end="url(#arwBoot)" />
+      <path class="arr" d="M350 240 V 296" marker-end="url(#arwBoot)" />
+      <path class="arr" d="M350 356 V 412" marker-end="url(#arwBoot)" />
+      <path class="arr" d="M516 210 H 480" marker-end="url(#arwBoot)" />
+      <path class="arr" d="M109 124 V 442 H 220" stroke-dasharray="6 6" marker-end="url(#arwBoot)" />
+
+      <rect class="ce" x="44" y="64" width="130" height="60" rx="8" />
+      <text class="dt" x="60" y="89">.env</text>
+      <text class="ds" x="60" y="109">端口唯一出处</text>
+
+      <rect class="ce" x="516" y="180" width="160" height="60" rx="8" />
+      <text class="dt" x="532" y="205">config/app.yml</text>
+      <text class="ds" x="532" y="225">应用名 · 清单路径</text>
+
+      <rect class="cn" x="220" y="64" width="260" height="60" rx="8" />
+      <text class="dt" x="236" y="89">scripts/run.sh</text>
+      <text class="ds" x="236" y="109">读 .env、校验端口、启动 node</text>
+
+      <rect class="cn" x="220" y="180" width="260" height="60" rx="8" />
+      <text class="dt" x="236" y="205">src/index.ts</text>
+      <text class="ds" x="236" y="225">建 Context、挂 Loader</text>
+
+      <rect class="cn" x="220" y="296" width="260" height="60" rx="8" />
+      <text class="dt" x="236" y="321">@cordisjs/plugin-include</text>
+      <text class="ds" x="236" y="341">读 cordis.yml 插件清单</text>
+
+      <rect class="cb" x="220" y="412" width="260" height="60" rx="8" />
+      <text class="dtB" x="236" y="437">cordis.yml</text>
+      <text class="dsB" x="236" y="457">插件清单：加功能就改这里</text>
+
+      <rect class="cap" x="124" y="406" width="88" height="24" rx="8" />
+      <text class="capt" x="168" y="422" text-anchor="middle">注入端口</text>
+    </svg>
+  </div>
+  <p class="caption">
+    <strong>两处值得注意的设计。</strong>
+    <code>.env</code> 用一条虚线同时到达 <code>run.sh</code> 与 <code>cordis.yml</code>，所以端口只在一处定义、一处修改；
+    <code>cordis.yml</code> 之所以能读到它，是靠 <code>!!js</code> 标签直接求值 <code>process.env</code>，而进程环境变量由
+    <code>run.sh</code> 用 Node 官方的 <code>--env-file</code> 载入。
+    整条链的终点是插件清单——<strong>加功能就是在那里加一行</strong>。
+  </p>
+
+  <h2>二、运行时结构</h2>
+  <p>框架点着之后，<code>src/index.ts</code> 的任务就结束了。此后所有能力都来自挂在 Context 上的插件——虚线大框就是 Context。</p>
+
+  <div class="figure">
+    <span class="figLabel">图 2 · 运行时结构</span>
+    <svg viewBox="0 0 720 440" role="img" aria-label="运行时结构：HTTP 请求进入 plugin-server，health 插件依赖 server 服务">
+      <defs>
+        <marker id="arwRun" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+          <path class="mk" d="M1 1 L7 4 L1 7 Z" />
+        </marker>
+      </defs>
+
+      <rect class="bnd" x="44" y="120" width="632" height="276" rx="12" />
+      <text class="bndT" x="68" y="154">Context（cordis 内核）</text>
+
+      <rect class="pill" x="260" y="48" width="200" height="48" rx="24" />
+      <text class="dt" x="360" y="69" text-anchor="middle">HTTP 请求</text>
+      <text class="ds" x="360" y="88" text-anchor="middle">浏览器 / curl</text>
+
+      <path class="arr" d="M360 96 V 188" marker-end="url(#arwRun)" />
+      <path class="arr" d="M206 304 V 248" stroke-dasharray="6 6" marker-end="url(#arwRun)" />
+
+      <rect class="cb" x="68" y="188" width="584" height="60" rx="8" />
+      <text class="dtB" x="84" y="213">@cordisjs/plugin-server</text>
+      <text class="dsB" x="84" y="233">提供 ctx.server · 监听 .env 里的 8080</text>
+
+      <rect class="cn" x="68" y="304" width="276" height="60" rx="8" />
+      <text class="dt" x="84" y="329">plugins/health</text>
+      <text class="ds" x="84" y="349">inject: ['server']</text>
+
+      <rect class="cn" x="376" y="304" width="276" height="60" rx="8" />
+      <text class="dt" x="392" y="329">plugins/app</text>
+      <text class="ds" x="392" y="349">无依赖 · 打印启动日志</text>
+
+      <rect class="cap" x="214" y="254" width="118" height="24" rx="8" />
+      <text class="capt" x="273" y="270" text-anchor="middle">inject: server</text>
+    </svg>
+  </div>
+  <p class="caption">
+    高亮的 <code>plugin-server</code> 是唯一「提供服务给别人用」的插件——它把 <code>ctx.server</code> 注册到 Context 上，
+    其余插件通过 <code>inject</code> 声明依赖来使用它。斜体虚线箭头 <code>inject: server</code> 是整张图最值得理解的一处机制。
+  </p>
+
+  <h2>三、从图里能读出的三条结论</h2>
+
+  <h3>① 内核极薄，功能全在插件里</h3>
+  <p><code>src/index.ts</code> 只有 30 行、零业务代码，它干的事就是「建 Context、挂 Loader、让 include 去读清单」。所有能力——HTTP 服务、健康检查、以后的日志系统——都是插件。在 <code>cordis.yml</code> 里删掉一项，那个功能连同它注册的路由、事件、定时器会被框架自动回滚。</p>
+
+  <h3>② <code>inject</code> 是插件之间唯一的耦合方式</h3>
+  <p><code>plugins/health</code> 声明 <code>inject = ['server']</code>，语义是：</p>
+  <ul>
+    <li>server 服务没就绪 → health <strong>不加载</strong></li>
+    <li>server 被重载 → health 自动回滚并跟随重载</li>
+    <li>加载顺序由依赖决定，<strong>与清单里的书写位置无关</strong></li>
+  </ul>
+  <p>所以插件之间不需要互相 import，也不需要谁去「启动」谁。<code>plugins/app</code> 没有任何依赖，框架就并发地把它挂上去。</p>
+
+  <h3>③ 端口一致性是「结构保证」的，不是靠人记住</h3>
+  <p>图 1 里 <code>.env</code> 那条虚线同时到达 <code>run.sh</code>（载入并校验）与 <code>cordis.yml</code>（<code>!!js</code> 读进程环境变量），两条路都来自同一个文件。图 2 里 server 的副标题写的是「监听 <code>.env</code> 里的 8080」——8080 这个数字没有散落在三处，它只有一处，其余全是引用。</p>
+
+  <div class="rule">
+    <p><strong>一句话总结这套骨架的规矩</strong></p>
+    <p><code>src/</code> 只放启动代码，<code>plugins/</code> 放所有功能，<code>cordis.yml</code> 决定谁上谁下，<code>.env</code> 决定跑在哪。四条边界互不越界，所以加功能时你只需要动两个地方——新建一个插件文件，然后在清单里加一行。</p>
+  </div>
+
+  <h2>附：图中出现的文件</h2>
+  <table>
+    <thead>
+      <tr><th>路径</th><th>职责</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>.env</td><td>端口 / 主机的唯一出处（<code>.env.example</code> 入库，<code>.env</code> 不入库）</td></tr>
+      <tr><td>config/app.yml</td><td>应用名、loader 去哪读插件清单</td></tr>
+      <tr><td>scripts/run.sh</td><td>载入并校验 <code>.env</code>，启动 node</td></tr>
+      <tr><td>scripts/env.sh</td><td>所有脚本的公共前置：读 <code>.env</code>、缺变量即拒绝启动</td></tr>
+      <tr><td>src/index.ts</td><td>程序入口：建 Context、挂 Loader 与 include，零业务</td></tr>
+      <tr><td>cordis.yml</td><td>插件清单：有哪些插件、各自什么配置</td></tr>
+      <tr><td>plugins/health</td><td>健康检查插件，注册 <code>GET /healthz</code></td></tr>
+      <tr><td>plugins/app</td><td>试金石插件，打印一行启动日志</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    teamspace-cordis · 图基于当前骨架（cordis v4.0.0-rc.10）绘制。端口口径：后端 8080 / 控制台 5173 / 团队空间 5174。
+  </footer>
+
+</div>
+</body>
+</html>

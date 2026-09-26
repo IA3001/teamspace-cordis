@@ -197,6 +197,36 @@ teamspace-cordis/
 > 令牌用外壳 `app/styles/index.scss` 的语义变量白名单，本仓库仍然**零样式文件**。
 > 门禁 `npm run lint:styles` 的扫描范围已加上 `packages/`（实测仍全绿）。
 
+#### 构建口径（定于 2026-09-27，解决待定 2 → 选 A2）
+
+官方包的长相是**三件套**，我们照抄（样板：`node_modules/@cordisjs/plugin-loader-webui`）：
+
+```
+space-client-ui-timeline/
+├─ client/index.ts      页面源码（只被 Vite 编译，不进 npm 包）
+├─ lib/index.js         服务端：apply 里 ctx.webui.addEntry({ baseUrl, source, manifest }, data)
+├─ dist/                ← vite build --manifest 的产物：index-<hash>.js / index-<hash>.css / manifest.json
+└─ package.json         "build": "vite build --manifest"
+```
+
+- 注册调用的官方原文（`plugin-loader-webui/lib/browser.js:131`）：
+
+  ```js
+  this.ctx.webui.addEntry({
+    baseUrl: import.meta.url,
+    source: "../client/index.ts",      // 开发态用 —— 这条路我们不启用
+    manifest: "../dist/manifest.json", // 生产态用 —— 我们只走这条
+  }, data)
+  ```
+
+  `manifest.json` 就是**普通 Vite manifest**（`client/index.ts` → `index-<hash>.js`，`style.css` → `index-<hash>.css`）。
+- 运行时保持 `devMode: false`，只读 `dist/manifest.json`。
+- **`dist/` 不入库**（`.gitignore` 第 14 行本来就在忽略 `dist/`），**构建进启动脚本**：各包 `build` 脚本 + 根 `package.json` 串一个总入口，由 `scripts/run.sh` / `scripts/dev.sh` 在启动前调用。
+- **代价（明确接受）**：不吃 HMR。改一行页面代码要重跑 build 再刷新浏览器。
+- **不修 `devMode` 的原因**：`devMode: true` 下 webui 会去编译 `@cordisjs/client` 的源码，在 `theme/menu/menu.vue` 处报
+  `No fs option provided to compileScript in non-Node environment`，页面全白（记在 `docs/ROADMAP.md` 的 M1 小节）。
+  要修得改官方包的 `createVite` 行为 —— 在没有真实痛点之前不动它。
+
 ### 3.6 bundle 层与 profile（组合）
 
 ```
@@ -262,7 +292,7 @@ packages/bundle/
 | **P1 首个真能力** | `seam/space-session` + `seam/space-event` + `impl/space-store-sqlite`（先建 `sessions` / `session_members` / `events` 三张真表）+ `migrate`/`seed`/`reset` | 调试控制台 5172 的**数据库页从 0 张表变成 3 张真表**；迁移 `up→down→up` 幂等 |
 | **P2 交互元素** | `seam/space-command` + `seam/space-staging` + 指令族（`/add` `/cur` `/del` `/change` `/clear` `/commit`） | 非 `/` 开头消息只入暂存区、**不触发** coordinator；`/commit` 恰好触发**一次** Plan；未注册指令返回可用清单 |
 | **P3 协作大脑** | `seam/space-orchestrator` + `policy/space-authz` | 授权名单外目标 → 拒绝；人类 `@` 指令走 NLP 判定；三级兜底各自有断言；收到目标 agent 反馈后**必须**输出暂停并等人类 |
-| **P4 前端** | `seam/space-ui` + `client-ui/space-client-ui-*` | 前置「待定 1」**已解决**（见第 7 节）；`npm run lint:styles` 扫到 `packages/client-ui/` 且全绿。P4 开工时须把铁律新增的 3 条判红条件变成**会红的**断言（见第 6 节 ④） |
+| **P4 前端** | `seam/space-ui` + `client-ui/space-client-ui-*` | 前置「待定 1 / 待定 2」**均已解决**（见第 3.5 节与第 7 节）；`npm run lint:styles` 扫到 `packages/client-ui/` 且全绿；**每个包 `vite build --manifest` 能出 `dist/`，且 `git status` 里看不到 `dist/`（A2 生效）**。P4 开工时须把铁律新增的 3 条判红条件变成**会红的**断言（见第 6 节 ④） |
 | **P5 组合收敛** | `bundle/space-base` + 两个 surface + `profiles/{debug,teamspace}`；现有 `cordis.yml` 退化为叠加结果 | 「同一 id 最多出现两层」断言通过；删掉用户层某行 → 该能力确实消失；5172 / 5173 / 5174 三面并存互不污染 |
 
 ---
@@ -285,7 +315,7 @@ packages/bundle/
 | # | 事项 | 现状 | 为什么是门槛 |
 |---|---|---|---|
 | **1** | ~~铁律 1 与 `client-ui` 层正面冲突~~ | ✅ **已解决（2026-09-27）** | 选型扩展已定稿并写进选型表：组件 = 外壳全局注册的 `element-plus` + `k-*` 组件集；令牌 = 外壳 `app/styles/index.scss` 语义变量白名单；**不引入第二套组件库**。新增 3 条判红条件（用错令牌层 / 第二个令牌来源 / 重复 import element-plus）。**P4 的前置门槛由此满足** |
-| **2** | 前端构建面 | M1 是「用官方包预置的 `dist/manifest.json`，我们不跑 Vite」 | `client-ui` 包需要自己的构建（Vite + unocss）。**注意 `devMode: true` 已实测不通**（`No fs option provided to compileScript`），要定「各包预构建 dist」还是「修 fs 问题吃 HMR」 |
+| **2** | ~~前端构建面~~ | ✅ **已解决（2026-09-27，选 A2）** | 见第 3.5 节「构建口径」：各包自己 `vite build --manifest` 产出 `dist/`，运行时 `devMode: false` 只读产物；**`dist/` 不入库**（`.gitignore` 第 14 行本来就在忽略），构建进启动脚本。**不吃 HMR** —— 改一行要重跑 build |
 | **3** | seam 包是否发布 | 方案 A 是 monorepo | 建议 **workspace 内私有，不发布**；将来真要发布再开 `publishConfig` |
 | **4** | `space-workspace` 拆不拆 | 暂合成一个包 | 出现第二个实现者/第二个消费者再拆，**不预拆** |
 | **5** | 授权名单等业务硬约束的落点 | 现在写在 `project_memory` 与本文档 | 应落到 `policy/space-authz` 的**断言**里（第 6 节 ⑥），不要只留在文档 |
@@ -301,3 +331,4 @@ packages/bundle/
 | 2026-09-27 | 建档。调研三个参照系（旧 `teamspace/`、deepseek-harness 240 个包、cordis 官方），定方案 A（monorepo 多包），给出五层骨架 + 依赖方向表 + 迁移映射 + P0~P5 落地顺序 + 6 条门禁断言 |
 | 2026-09-27 | 补：迁移口径承旧 `store/doc.go`（按域分文件、插件域用插件名前缀、已提交迁移不许改）；`space-staging` 更正为「旧库尚未建表」；新增待定 7（迁移与运行时启停的耦合） |
 | 2026-09-27 | **待定 1 解决**：`client-ui` 层选型定稿，写进 `.rules/IRON-RULES.md`「选型扩展」；门禁扫描范围加 `packages/`（实测通过）；新增 3 条判红条件留待 P4 变成断言 |
+| 2026-09-27 | **待定 2 解决**：前端构建面选 **A2** —— 各包 `vite build --manifest` 出 `dist/`，`devMode: false` 只读产物，**`dist/` 不入库、构建进启动脚本**；明确接受无 HMR。新增第 3.5 节「构建口径」（含官方样板三件套与 `addEntry` 原文） |

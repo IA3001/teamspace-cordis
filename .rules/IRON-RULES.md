@@ -116,7 +116,8 @@
 | 令牌白名单 | 背景 `--bg-{primary,secondary,tertiary,elevated,hover,active}`；文字 `--text-{primary,secondary,tertiary,inverse}`；边框 `--border-{primary,secondary,focus}`；语义色 `--accent{-hover,-muted}` / `--success{-muted}` / `--warning{-muted}` / `--error{-muted}` / `--info`；圆角 `--radius-{sm,md,lg,xl}`；阴影 `--shadow-{sm,md,lg}`；字体 `--font-sans` / `--font-mono`；过渡 `--color-transition` | `app/styles/index.scss` |
 | **禁用的令牌层** | `--k-*`、`--bg0`–`--bg3`、`--fg0`–`--fg3`（Koishi 遗留层）与 `--el-*`（element-plus 自己的层）。外壳**已经把 `--el-*` 映射到设计令牌**，我们只写设计令牌，让映射层去转 | `app/styles/element.scss` 头注释原文：「Map el-* tokens onto the design-system tokens so el-* components visually align」 |
 | 本仓库新增令牌 / 样式文件 | **仍然是零。** 不新增 `.css` / `.scss`，不覆盖外壳主题、不改外壳源码 | 铁律 1 落地动作 5 |
-| 页面插件契约 | 服务端 `apply(ctx)` 调 `ctx.webui.addEntry({ baseUrl: import.meta.url, source: '<dev 入口>', manifest: '../dist/manifest.json' })`；客户端入口由 Vite 构建出 `dist/`（含 `manifest.json`） | `@cordisjs/plugin-webui` 的 `Entry.Files`；官方样板 `@cordisjs/plugin-loader-webui` 的 `dist/{index-*.js, index-*.css, manifest.json}` |
+| 页面插件契约 | 服务端 `apply(ctx)` 调 `ctx.webui.addEntry({ baseUrl: import.meta.url, source: '<dev 入口>', manifest: '../dist/manifest.json' })`；客户端入口由 Vite 构建出 `dist/`（含 `manifest.json`） | `@cordisjs/plugin-webui` 的 `Entry.Files`；官方样板 `@cordisjs/plugin-loader-webui`（`dist/{index-*.js,index-*.css,manifest.json}`） |
+| 构建口径（定于 2026-09-27） | 每个 `client-ui` 包自带 `"build": "vite build --manifest"`，产出 `dist/`；运行时 `devMode: false` **只读产物**；**`dist/` 不入库**（`.gitignore` 已在忽略），**构建进启动脚本**。**接受没有 HMR** | 与官方包同构；`.gitignore` 第 14 行；不修 `devMode` 的理由见 `docs/ROADMAP.md` 的 M1 小节 |
 | 封装粒度 | ① 页面只做**组合**，不做**定义**；② 同一视觉语义出现**第二次** → 抽成组件，放进 `packages/client-ui/space-client-ui-shared`；③ 抽出来的组件也只准用上表的原语 + 白名单令牌 | 铁律 1 落地动作 4 |
 
 **为什么不用第二套组件库（比如蚂蚁的 ui）**：外壳已经把 element-plus 的 `--el-*`
@@ -184,3 +185,4 @@
 | 2026-09-27 | 落地动作 6 补上脚本落点与扫描范围 | 门禁从「要求」变成「可执行」，并明确 `docs/` 不扫以对齐适用范围 |
 | 2026-09-27 | **选型扩展**：解决「自己写页面」的选型（MODULE-PLAN 待定 1）。不引入第二套组件库 —— 组件 = element-plus（外壳已 `app.use` 全局注册）+ 外壳 `k-*` 组件集；令牌 = 外壳 `app/styles/index.scss` 的语义变量白名单；追加 3 条判红条件（用错令牌层 / 第二个令牌来源 / 重复 import element-plus） | 团队空间的时间线、输入区、右栏官方没有现成页面，「将来再说」的那一天到了；实测外壳源码后重定 |
 | 2026-09-27 | 门禁扫描范围加上 `packages/`（`scripts/lint-styles.sh`） | `client-ui` 页面包将落在 `packages/` 下，不扫就等于没覆盖 |
+| 2026-09-27 | **选型表再补一行「构建口径」**（解决 MODULE-PLAN 待定 2，选 A2）：各包 `vite build --manifest` 出 `dist/`，`devMode: false` 只读产物，**`dist/` 不入库、构建进启动脚本**，明确接受无 HMR | 照抄官方包形状（样板 `@cordisjs/plugin-loader-webui` 的三件套）；`.gitignore` 本来就在忽略 `dist/`，所以零结构改动 |

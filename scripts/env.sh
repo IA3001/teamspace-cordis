@@ -42,19 +42,34 @@ fi
 # ── ④ Node 运行时指路 ──────────────────────────────────────────────────
 # WSL 里 node 不在 PATH（系统 /usr/bin/node 不存在），统一在这里指定。
 # 可用 NODE_BIN_DIR 覆盖。
-export PATH="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node/bin}:$PATH"
+#
+# 为什么是 node24 而不是 node：调试控制台用的@cordisjs/plugin-logger-webui
+# 依赖 node:sqlite（Node ≥ 22.5 才有），而 .toolchain/node 是 v20.17.0。
+# 两个版本并存，v20 原样留着，改 NODE_BIN_DIR 即可回退。
+NODE_BIN_DIR="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}"
+export PATH="$NODE_BIN_DIR:$PATH"
 
 command -v node >/dev/null 2>&1 || {
-  printf '✗ 找不到 node（期望在 %s）\n' "${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node/bin}" >&2
+  printf '✗ 找不到 node（期望在 %s）\n' "$NODE_BIN_DIR" >&2
   exit 1
 }
+
+# 版本下限：Node ≥ 22.5 才有 node:sqlite，低于此版本必须当场失败，
+# 否则会在启动 webui 时才炸，报错离现场很远。
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+NODE_MINOR="$(node -p 'process.versions.node.split(".")[1]')"
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 5 ]; }; then
+  printf '✗ Node 版本过低：%s（需要 ≥ 22.5，node:sqlite 要求）\n  当前 NODE_BIN_DIR=%s\n' \
+    "$(node -v)" "$NODE_BIN_DIR" >&2
+  exit 1
+fi
 
 say() { printf '  %s\n' "$*"; }
 
 # 打印运行时端口一览（各脚本复用，保证输出口径一致）
 print_endpoints() {
   say "后端监听   http://${APP_HOST}:${APP_PORT}   （健康检查 /healthz）"
-  say "调试控制台 dev 端口 ${DEBUG_PORT}（Vite，暂未启用）"
-  say "控制台 dev 端口 ${CONSOLE_PORT}（Vite，暂未启用）"
-  say "团队空间 dev 端口 ${TEAMSPACE_PORT}（Vite，暂未启用）"
+  say "调试控制台 http://${APP_HOST}:${DEBUG_PORT}   （插件 / 日志 / 数据库，无登录直达）"
+  say "控制台 dev 端口 ${CONSOLE_PORT}（暂未启用）"
+  say "团队空间 dev 端口 ${TEAMSPACE_PORT}（暂未启用）"
 }

@@ -14,6 +14,9 @@ lib/
 dist/
 *.log
 
+# 缓存（webui 的 Vite 缓存，cacheDir 默认 cache/vite；可随时删）
+cache/
+
 # 编辑器
 .DS_Store
 .vscode/

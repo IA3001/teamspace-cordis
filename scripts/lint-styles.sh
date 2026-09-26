@@ -5,7 +5,7 @@
 # 铁律原文要求：断言必须**故意改坏一次确认它真的会红** —— 见文末自检记录。
 #
 # 扫描范围严格对齐铁律的「适用范围」：
-#   ✅ 扫描：src/ plugins/ web/            （web 端产品界面代码）
+#   ✅ 扫描：src/ plugins/ packages/       （web 端产品界面代码；packages/ 下有 client-ui 页面包）
 #   ⬜ 不扫：docs/                          （一次性文档，铁律明确不覆盖）
 #   ⬜ 不扫：node_modules/                  （第三方包自带样式，非我方代码）
 #
@@ -28,12 +28,12 @@ printf '铁律 1 门禁：web 端 UI 禁止手写 / 自制样式\n'
 
 # ── 扫描范围 ────────────────────────────────────────────────────────────
 scan_dirs=()
-for d in src plugins web; do
+for d in src plugins packages web; do
   [ -d "$d" ] && scan_dirs+=("$d")
 done
 
 if [ "${#scan_dirs[@]}" -eq 0 ]; then
-  note 'src/ plugins/ web/ 都不存在，无代码可扫（不是错误）'
+  note 'src/ plugins/ packages/ web/ 都不存在，无代码可扫（不是错误）'
 fi
 
 EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build --exclude-dir=.git)

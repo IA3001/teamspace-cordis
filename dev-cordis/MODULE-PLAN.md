@@ -154,7 +154,7 @@ teamspace-cordis/
 | `space-memory` | `ctx.memory` | `elements/memory/` | 私有记忆的服务接口 |
 | `space-tool` | `ctx.tools` | `elements/tool/` + `internal/tools/` | 工具目录 + 注册表 |
 | `space-bus` | `ctx.bus` | `services/sse/` | 推送信封（谁订阅、重放策略） |
-| `space-workspace` | `ctx.workspace` | `domain/{gantt,story,kickoff,template,disposition,evaluation,summarizer}` | 工作台视图模型（**先合一个包，出现第二个实现者再拆**） |
+| `space-workspace` | `ctx.workspace` | `domain/{gantt,story,kickoff,template,disposition,evaluation,summarizer}` | 工作台视图模型（**先合一个包，不预拆**）。**硬判据**：桶里成员一旦「需要换实现」必须立刻独立成 seam，不得赖在这里 —— 见第 7 节待定 4 |
 
 ### 3.3 impl 层（`packages/impl/`）
 
@@ -288,10 +288,10 @@ packages/bundle/
 
 | 阶段 | 内容 | 验收（可观测） |
 |---|---|---|
-| **P0 立骨架** | `npm workspaces` 接通；`packages/` 五层目录立起；依赖方向门禁脚本 + 实测改坏会红；**每个 seam 包只放一个空的 `Service` 声明**（零业务） | `npm run typecheck` 干净；门禁脚本故意把 `impl` 依赖另一个 `impl` → 退出码 1 |
-| **P1 首个真能力** | `seam/space-session` + `seam/space-event` + `impl/space-store-sqlite`（先建 `sessions` / `session_members` / `events` 三张真表）+ `migrate`/`seed`/`reset` | 调试控制台 5172 的**数据库页从 0 张表变成 3 张真表**；迁移 `up→down→up` 幂等 |
+| **P0 立骨架** | `npm workspaces` 接通；`packages/` 五层目录立起；**每个 `package.json` 写 `private: true` + `workspace:*`**；依赖方向门禁脚本（断言 ① ② ⑦）+ 实测改坏会红；**每个 seam 包只放一个空的 `Service` 声明**（零业务） | `npm run typecheck` 干净；门禁脚本故意把 `impl` 依赖另一个 `impl` → 退出码 1；故意给某包去掉 `private` → 退出码 1 |
+| **P1 首个真能力** | `seam/space-session` + `seam/space-event` + `impl/space-store-sqlite`（**只建 `sessions` / `session_members` / `events` 三张真表** —— 待定 6）+ `migrate`/`seed`/`reset` + **断言 ⑧**（DDL 只在迁移里） | 调试控制台 5172 的**数据库页从 0 张表变成 3 张真表**；迁移 `up→down→up` 幂等；故意在插件里写 `CREATE TABLE` → 退出码 1 |
 | **P2 交互元素** | `seam/space-command` + `seam/space-staging` + 指令族（`/add` `/cur` `/del` `/change` `/clear` `/commit`） | 非 `/` 开头消息只入暂存区、**不触发** coordinator；`/commit` 恰好触发**一次** Plan；未注册指令返回可用清单 |
-| **P3 协作大脑** | `seam/space-orchestrator` + `policy/space-authz` | 授权名单外目标 → 拒绝；人类 `@` 指令走 NLP 判定；三级兜底各自有断言；收到目标 agent 反馈后**必须**输出暂停并等人类 |
+| **P3 协作大脑** | `seam/space-orchestrator` + `policy/space-authz`（业务硬约束按**可断言子集**落成断言 —— 待定 5，清单在该行） | 授权名单外目标 → 拒绝；人类 `@` 指令走 NLP 判定；三级兜底各自有断言；收到目标 agent 反馈后**必须**输出暂停并等人类 |
 | **P4 前端** | `seam/space-ui` + `client-ui/space-client-ui-*` | 前置「待定 1 / 待定 2」**均已解决**（见第 3.5 节与第 7 节）；`npm run lint:styles` 扫到 `packages/client-ui/` 且全绿；**每个包 `vite build --manifest` 能出 `dist/`，且 `git status` 里看不到 `dist/`（A2 生效）**。P4 开工时须把铁律新增的 3 条判红条件变成**会红的**断言（见第 6 节 ④） |
 | **P5 组合收敛** | `bundle/space-base` + 两个 surface + `profiles/{debug,teamspace}`；现有 `cordis.yml` 退化为叠加结果 | 「同一 id 最多出现两层」断言通过；删掉用户层某行 → 该能力确实消失；5172 / 5173 / 5174 三面并存互不污染 |
 
@@ -307,20 +307,25 @@ packages/bundle/
 | ④ | **样式来源** | 分两批：**已实现**——内联样式 / 自写样式块 / 硬编码颜色（铁律 1），扫描范围**已扩到 `packages/`**（实测通过）；**待实现**——铁律 2026-09-27 新增的 3 条（用错令牌层 `--k-*`/`--bg0-3`/`--fg0-3`/`--el-*`、第二个令牌来源、重复 `import 'element-plus'`）。**必须在 P4 开工时补齐，且实测改坏会红**——`packages/` 现在还不存在，此时写就是空断言，铁律自己不接受 | `npm run lint:styles`（已建） |
 | ⑤ | **端口唯一出处** | 代码 / 清单里出现第二个写死的端口数字 | 已由 `scripts/env.sh` 拒绝启动覆盖 |
 | ⑥ | **注册重名 panic** | 命令 / 元素 / 工具重名 —— 沿用旧系统口径（重名是编程错误，测试期就炸） | 各 seam 单测 |
+| ⑦ | **包一律私有** | `packages/**/package.json` 里 `private` 不为 `true`，或出现 `publishConfig`（对应待定 3 的落地） | 随 P0 的 `scripts/lint-deps.sh` 同批建 |
+| ⑧ | **DDL 只在迁移里** | `packages/**` 下（**排除 `**/migrations/**`**）出现 `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE`（对应待定 7 的落地） | `scripts/lint-migrations.sh`，**待 P1 建迁移时同批建** —— 现在还没有迁移目录，先写就是空断言 |
 
 ---
 
-## 7. 待定项与风险
+## 7. 决策记录（原「待定项」）与风险
+
+> **7 项全部已定，当前无待定项。** 下表保留「为什么这么定」的理由 —— 决策本身会随实践修订，
+> 但修订时必须回到这里改，不许只在代码里默默改掉。
 
 | # | 事项 | 现状 | 为什么是门槛 |
 |---|---|---|---|
 | **1** | ~~铁律 1 与 `client-ui` 层正面冲突~~ | ✅ **已解决（2026-09-27）** | 选型扩展已定稿并写进选型表：组件 = 外壳全局注册的 `element-plus` + `k-*` 组件集；令牌 = 外壳 `app/styles/index.scss` 语义变量白名单；**不引入第二套组件库**。新增 3 条判红条件（用错令牌层 / 第二个令牌来源 / 重复 import element-plus）。**P4 的前置门槛由此满足** |
 | **2** | ~~前端构建面~~ | ✅ **已解决（2026-09-27，选 A2）** | 见第 3.5 节「构建口径」：各包自己 `vite build --manifest` 产出 `dist/`，运行时 `devMode: false` 只读产物；**`dist/` 不入库**（`.gitignore` 第 14 行本来就在忽略），构建进启动脚本。**不吃 HMR** —— 改一行要重跑 build |
-| **3** | seam 包是否发布 | 方案 A 是 monorepo | 建议 **workspace 内私有，不发布**；将来真要发布再开 `publishConfig` |
-| **4** | `space-workspace` 拆不拆 | 暂合成一个包 | 出现第二个实现者/第二个消费者再拆，**不预拆** |
-| **5** | 授权名单等业务硬约束的落点 | 现在写在 `project_memory` 与本文档 | 应落到 `policy/space-authz` 的**断言**里（第 6 节 ⑥），不要只留在文档 |
-| **6** | 旧系统那 10 张表是否原样搬 | 未定 | 建议 P1 只搬 `sessions` / `session_members` / `events`，其余按新 seam 需要再建；**不做「先全搬再重构」** |
-| **7** | **「每插件一节」迁移 与 cordis 运行时启停的耦合** | 旧系统是「装不装一个插件，看它的迁移 + 启用开关」；cordis 里插件**可在运行时停用**，但迁移是一次性脚本 | 要定：停用一个插件时，它建的表**留着**（数据不丢）还是跟着回滚？建议**留表不回滚**（cordis 的 `effect` 只回滚注册，不回滚数据），由迁移链自己管版本 |
+| **3** | ~~seam 包是否发布~~ | ✅ **已解决（2026-09-27）：不发布** | 发布 npm 的前提是「仓库外有消费者」。我们是单仓单部署，**没有外部消费者** —— 发布只会换来版本号纪律、publish 凭据、以及「改了 seam 要记得 bump + 通知消费者」的长期成本。方案 A 已经把**包边界**立起来了，而**边界才是重构成本**；发布只是 `private: false` + `publishConfig`，**将来要发布不需要重构**。落地：`packages/**/package.json` 一律 `"private": true`，互引用 `workspace:*`；断言见第 6 节 ⑦ |
+| **4** | ~~`space-workspace` 拆不拆~~ | ✅ **已解决（2026-09-27）：暂合成一个包，不预拆**，**另附一条硬判据** | 「出现第二个实现者 / 第二个消费者再拆」与 dsh 的做法一致。**补一条防杂物袋的判据**：桶里任何成员一旦出现**「需要换实现」**（如 `summarizer` 换模型、`evaluation` 换评分器），该成员**必须立刻独立成 seam**，不得赖在 `space-workspace` 里。理由：混着放，`ctx.workspace` 就会变成什么都能挂的口袋 —— 那正是旧 `internal/domain/` 的病。**这条是判据、不是断言**：「需要换实现」是判断题，不硬造断言（口径同待定 5） |
+| **5** | ~~授权名单等业务硬约束的落点~~ | ✅ **已解决（2026-09-27）：落到 `policy/space-authz` 的断言**，但**只做可断言的子集** | **口径**：凡能写成「给定输入 → 期望允许 / 期望拒绝」的，**必须有会红的断言**；纯表述质量（如「回复要自然」）**不硬造断言**。可断言的子集（来自 `project_memory`）：授权名单只含需求分析师 / 挑战者 / 会议记录官且**排除 coordinator**；名单外目标必拒；一轮内同一目标只能调一次；未经人类授权不得调用；收到目标反馈后必须暂停；`@` 提及列表不含 coordinator；coordinator 显示为 `a_coordinator`；只有发送者可撤回 / 编辑自己的待发消息；「先讨论」「只商议」→ 暂停且 `delegate: null`；三级兜底三种入参三种期望；负向语气 / 多目标 / 空输出 → 不委托、不报错、不暂停 |
+| **6** | ~~旧系统那 10 张表是否原样搬~~ | ✅ **已解决（2026-09-27）：P1 只搬 3 张** | `sessions` / `session_members` / `events`。**不做「先全搬再重构」** —— 全搬等于把旧模型照抄一遍（含我们打算不要的角色 / 权限字段），之后每改一次就欠一笔迁移债。其余 7 张按需：`users` / `auth_sessions` / `principals` / `team_accounts` 属鉴权，M1 已明确初期不做 → **后置**；`plugins` / `settings` / `meta` 是框架自身的，由 cordis 生态（loader / database 插件）接管。迁移文件命名与「已提交迁移不许改」承旧 `store/doc.go` 口径 |
+| **7** | ~~「每插件一节」迁移 与 cordis 运行时启停的耦合~~ | ✅ **已解决（2026-09-27）：留表不回滚，且 DDL 与插件生命周期彻底解耦** | 两条。① **停用插件时表与数据都留着**：cordis 的 `effect` 回滚的是**注册**（服务 / 事件 / 路由），**不是数据** —— 顺应框架语义；且数据回滚在多人协作系统里是危险动作，配置一改就静默删表，几乎无法排查。② **DDL 不许写在插件里**：不在 `apply` 生命周期跑建表，迁移是独立的 `migrate` 命令；schema 版本由**迁移链**自己管，与插件启停无关（插件停用再启用**不重跑迁移**）。断言见第 6 节 ⑧ |
 
 ---
 
@@ -332,3 +337,4 @@ packages/bundle/
 | 2026-09-27 | 补：迁移口径承旧 `store/doc.go`（按域分文件、插件域用插件名前缀、已提交迁移不许改）；`space-staging` 更正为「旧库尚未建表」；新增待定 7（迁移与运行时启停的耦合） |
 | 2026-09-27 | **待定 1 解决**：`client-ui` 层选型定稿，写进 `.rules/IRON-RULES.md`「选型扩展」；门禁扫描范围加 `packages/`（实测通过）；新增 3 条判红条件留待 P4 变成断言 |
 | 2026-09-27 | **待定 2 解决**：前端构建面选 **A2** —— 各包 `vite build --manifest` 出 `dist/`，`devMode: false` 只读产物，**`dist/` 不入库、构建进启动脚本**；明确接受无 HMR。新增第 3.5 节「构建口径」（含官方样板三件套与 `addEntry` 原文） |
+| 2026-09-27 | **待定 3~7 全部拍板**，第 7 节改名为「决策记录」、当前无待定项：③seam **不发布**（`private: true`）；④`space-workspace` **不预拆** + 补「换实现必须独立」硬判据；⑤业务硬约束**只对可断言的子集**造断言，落 `policy/space-authz`；⑥P1 只搬 `sessions`/`session_members`/`events` 三张；⑦**留表不回滚** + DDL 与插件生命周期解耦。新增门禁 ⑦（包一律私有）、⑧（DDL 只在迁移里），落点与「何时建」都写明了 |

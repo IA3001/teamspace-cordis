@@ -6,12 +6,17 @@
   "description": "多人 + 多 Agent 团队协作系统 —— 基于 cordis 元框架，一切皆插件",
   "license": "MIT",
   "main": "src/index.ts",
+  "workspaces": [
+    "packages/*/*"
+  ],
   "scripts": {
     "start": "./scripts/run.sh",
     "dev": "./scripts/dev.sh",
     "stop": "./scripts/stop.sh",
     "typecheck": "tsc --noEmit",
-    "lint:styles": "./scripts/lint-styles.sh"
+    "lint:styles": "./scripts/lint-styles.sh",
+    "lint:deps": "./scripts/lint-deps.sh",
+    "check:console": "./scripts/check-console.sh"
   },
   "dependencies": {
     "@cordisjs/client": "^0.8.2",

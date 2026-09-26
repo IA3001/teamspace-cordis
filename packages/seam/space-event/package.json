@@ -1,0 +1,11 @@
+{
+  "name": "space-event",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.eventLog —— append-only 事件模型、会话内序号（不叫 ctx.events：内核已占用）。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

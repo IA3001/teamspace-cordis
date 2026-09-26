@@ -1,0 +1,7 @@
+# client-ui 层（前端，一区一包）—— 占位。
+#
+# 允许依赖：cordis、@cordisjs/client、@cordisjs/components、seam 的**类型**。
+# 禁止依赖：impl、policy、bundle。
+#
+# ⚠️ 铁律 1：样式只能来自组件库 props / 布局原语 / 设计令牌，不许新建样式文件。
+# 门禁见 ../../scripts/lint-deps.sh（依赖方向）+ ../../scripts/lint-styles.sh（样式来源）。

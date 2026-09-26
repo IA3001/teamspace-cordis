@@ -1,0 +1,11 @@
+{
+  "name": "space-staging",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.staging —— 暂存区 Entry{ID,SessionID,AuthorID,Seq,Text,CreatedAt}。只有词汇与 Service 声明，零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

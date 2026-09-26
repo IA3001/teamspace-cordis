@@ -1,0 +1,11 @@
+{
+  "name": "space-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.workspace —— 工作台视图模型（先合一个包不预拆；成员一旦需要换实现必须立刻独立成缝）。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

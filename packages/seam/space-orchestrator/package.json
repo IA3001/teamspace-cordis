@@ -1,0 +1,11 @@
+{
+  "name": "space-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.orchestrator —— 委托决策、授权名单、暂停点 await_human、三级兜底结果形状。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

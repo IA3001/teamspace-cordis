@@ -1,0 +1,5 @@
+# policy 层（策略）—— 占位。
+#
+# 策略不实现能力，只包裹能力。允许依赖：cordis、任意 seam。
+# 禁止依赖：impl 的具体实现类、bundle、client-ui。
+# 门禁见 ../../scripts/lint-deps.sh（MODULE-PLAN 第 3.7 节 / 断言 ①②）。

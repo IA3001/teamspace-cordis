@@ -53,7 +53,9 @@
 | 调试控制台（测试用，无登录） | **5172** · **已启用**，插件 / 日志 / 数据库三个页面 |
 | 控制台 / 团队空间前端 | **5173 / 5174**（尚未启用） |
 | Node | **≥22.5 必需**（`node:sqlite`）；本机用 `/home/ia3000/SPM/.toolchain/node24`，v20.17.0 保留未删 |
-| 铁律门禁 | `npm run lint:styles`（铁律 1 的四条断言，违反会以退出码 1 结束） |
+| 铁律 1 门禁 | `npm run lint:styles`（铁律 1 的四条断言，违反会以退出码 1 结束） |
+| **依赖方向门禁** | `npm run lint:deps`（断言 ①②⑦：方向矩阵 / seam 无 IO / 包一律私有） |
+| **控制台可达门禁** | `npm run check:console`（断言 ⑩：5172 三页 HTTP 200，需服务在跑） |
 | 插件清单 | `cordis.yml` —— **加功能 = 加插件文件 + 清单加一行** |
 
 > ⚠ 端口只在 `.env` 定义一次，代码 / 清单 / 脚本全部从它取值，谁都不得自带默认数字。
@@ -76,9 +78,18 @@
 | 路径 | 作用 |
 |---|---|
 | `src/` | **只放启动代码**，不许塞业务 |
-| `plugins/` | 所有功能插件，一个功能一个目录 |
+| `plugins/` | **叶子插件**：不需要 seam、也不会被策略包裹，一个目录一个 `index.ts` |
+| `packages/seam/` | **能力缝**：只有 `Service` 声明 + 词汇类型，零实现零 IO（当前 13 个，全是空壳） |
+| `packages/impl/` | 实现层（可换后端，如 sqlite / 内存） |
+| `packages/policy/` | 策略层（只包裹能力，不实现能力） |
+| `packages/client-ui/` | 前端，一区一包 |
+| `packages/bundle/` | 组合层（只写 `cordis.patch.yml` 清单，不写代码） |
+| `dev-cordis/` | 模块划分规范（`MODULE-PLAN.md`）与调研记录 |
 | `cordis.yml` | 插件清单：有哪些插件、各自什么配置 |
 | `config/app.yml` | 框架自身参数（应用名、loader 去哪读清单）；**不含端口** |
 | `scripts/` | 所有运行脚本（`env.sh` 是公共前置） |
 | `.rules/` | 铁律正文 |
 | `docs/` | 文档 |
+
+> `plugins/` 与 `packages/` 的分工：前者是「没有缝」的叶子，后者是「有缝」的（需要被别人替换实现、或被策略包裹）。
+> 层与层之间的依赖方向由 `npm run lint:deps` 强制，表在 `dev-cordis/MODULE-PLAN.md` 第 3.7 节。

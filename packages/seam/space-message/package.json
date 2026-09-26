@@ -1,0 +1,11 @@
+{
+  "name": "space-message",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.messages —— 入站消息管线（拦截 / 改写 / 落库的顺序约定）。只有词汇与 Service 声明，零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

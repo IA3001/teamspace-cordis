@@ -1,0 +1,11 @@
+{
+  "name": "space-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.ui —— Panel{Key,Slot,Title,Props} + ManifestItem + 槽位常量。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

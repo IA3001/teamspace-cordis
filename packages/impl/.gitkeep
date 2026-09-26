@@ -1,0 +1,5 @@
+# impl 层（实现）—— 占位。
+#
+# 这里放「能力缝」的具体实现。允许依赖：cordis、任意 seam、第三方驱动。
+# 禁止依赖：任何其它 impl、policy、bundle、client-ui。
+# 门禁见 ../../scripts/lint-deps.sh（MODULE-PLAN 第 3.7 节 / 断言 ①②）。

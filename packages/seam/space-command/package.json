@@ -1,0 +1,11 @@
+{
+  "name": "space-command",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.commands —— Invocation / Reply / Ctx；Parse 与 Dispatch 是本缝仅有的两个机制函数。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

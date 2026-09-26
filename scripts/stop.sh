@@ -19,7 +19,9 @@ if ! command -v lsof >/dev/null 2>&1; then
 fi
 
 found=0
-for port in "$APP_PORT" "$CONSOLE_PORT" "$TEAMSPACE_PORT"; do
+# DEBUG_PORT 必须在列 —— 5172 是铁律 2 要求常驻的开发设施，漏了它就会出现
+# 「以为停了服务、其实 5172 还活着」的假象（P0 实测踩到过，见已知缺陷 D1）。
+for port in "$APP_PORT" "$DEBUG_PORT" "$CONSOLE_PORT" "$TEAMSPACE_PORT"; do
   pids="$(lsof -ti:"$port" 2>/dev/null || true)"
   if [ -z "$pids" ]; then
     continue
@@ -44,5 +46,5 @@ for port in "$APP_PORT" "$CONSOLE_PORT" "$TEAMSPACE_PORT"; do
 done
 
 if [ "$found" = 0 ]; then
-  say "没有进程占用这些端口（${APP_PORT}/${CONSOLE_PORT}/${TEAMSPACE_PORT}）"
+  say "没有进程占用这些端口（${APP_PORT}/${DEBUG_PORT}/${CONSOLE_PORT}/${TEAMSPACE_PORT}）"
 fi

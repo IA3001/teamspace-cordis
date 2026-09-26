@@ -1,0 +1,11 @@
+{
+  "name": "space-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.memory —— 私有记忆的服务接口。只有词汇与 Service 声明，零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

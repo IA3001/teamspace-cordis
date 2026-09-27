@@ -166,7 +166,10 @@ for (const p of all) {
   for (const section of ['dependencies', 'peerDependencies', 'devDependencies']) {
     for (const [dep, ver] of Object.entries(p.json[section] ?? {})) {
       if (!layerOf.has(dep)) continue
-      if (ver !== 'workspace:*') privHits.push(`${p.dir}: ${section} 里的内部包 "${dep}" 必须写 workspace:*，当前是 "${ver}"`)
+      // npm workspaces 的官方口径是 "*"（workspace:* 是 pnpm/yarn 协议，
+      // npm 直接 EUNSUPPORTEDPROTOCOL —— 2026-09-27 P1 实测）。npm 会把命中
+      // workspace 范围的 "*" 解析成仓内符号链接，不会装到 npm 源上。
+      if (ver !== '*') privHits.push(`${p.dir}: ${section} 里的内部包 "${dep}" 必须写 "*"（npm workspaces 口径），当前是 "${ver}"`)
     }
   }
 }
@@ -188,6 +191,9 @@ NODE
 if [ "$rc" -ne 0 ]; then
   exit 1
 fi
+
+# 断言 ⑨：跑过就留痕（失败不记 —— 失败要人看，不属于"悄悄跑过"）
+"$NODE_BIN" scripts/record-action.mjs "gate:lint-deps" '{"ok":true}' || true
 
 # 自检记录（2026-09-27 实测，逐条单独改坏、单独验证）：
 #   ① packages/impl/__probe-impl-a 依赖 packages/impl/__probe-impl-b（同层 impl）

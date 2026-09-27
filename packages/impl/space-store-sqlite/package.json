@@ -1,0 +1,16 @@
+{
+  "name": "space-store-sqlite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "impl：ctx.session / ctx.eventLog 的 sqlite 后端 —— 迁移链（DDL 唯一出处）+ seed/reset + model 注册（5172 数据库页展示）",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-event": "*",
+    "space-session": "*"
+  },
+  "peerDependencies": {
+    "@cordisjs/plugin-database": "^4.1.1",
+    "cordis": "^4.0.0-rc.10"
+  }
+}

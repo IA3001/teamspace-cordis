@@ -13,10 +13,17 @@
     "start": "./scripts/run.sh",
     "dev": "./scripts/dev.sh",
     "stop": "./scripts/stop.sh",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && node scripts/record-action.mjs typecheck",
     "lint:styles": "./scripts/lint-styles.sh",
     "lint:deps": "./scripts/lint-deps.sh",
-    "check:console": "./scripts/check-console.sh"
+    "check:console": "./scripts/check-console.sh",
+    "migrate": "tsx scripts/store.ts up",
+    "migrate:down": "tsx scripts/store.ts down",
+    "seed": "tsx scripts/store.ts seed",
+    "reset": "tsx scripts/store.ts reset",
+    "lint:migrations": "./scripts/lint-migrations.sh",
+    "lint:observe": "./scripts/lint-observability.sh",
+    "gate": "npm run typecheck && npm run lint:deps && npm run lint:migrations && npm run lint:styles && npm run check:console && npm run lint:observe"
   },
   "dependencies": {
     "@cordisjs/client": "^0.8.2",

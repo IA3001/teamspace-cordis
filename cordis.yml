@@ -104,3 +104,14 @@
 
 - id: debug-database-webui
   name: '@cordisjs/plugin-database-webui'
+
+# ── 业务实现：P1 ───────────────────────────────────────────────────────
+# ctx.session / ctx.eventLog 的 sqlite 后端（impl/space-store-sqlite）。
+# 依赖 database 服务（debug-database-sqlite 驱动提供的那个），自动排在其后；
+# path 与 debug-database-sqlite 显式写成**同一个文件** —— 5172 数据库页看的
+# 就是它。表结构一律由 npm run migrate 从 migrations/ 建（断言 ⑧），
+# 插件里没有一行 DDL；启动时校验 schema_version，不一致拒绝启动。
+- id: space-store-sqlite
+  name: './packages/impl/space-store-sqlite/src/index.ts'
+  config:
+    path: !!js process.cwd() + '/data/database.db'

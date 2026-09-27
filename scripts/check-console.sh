@@ -96,6 +96,9 @@ if [ "$fail" -ne 0 ]; then
 fi
 printf '✓ 调试控制台门禁通过（三页均 200）—— 亲眼看：%s\n' "$BASE"
 
+# 断言 ⑨：跑过就留痕
+node scripts/record-action.mjs "gate:check-console" '{"ok":true}' || true
+
 # 自检记录（2026-09-27 实测）：
 #   ① 服务在跑、.env 的 DEBUG_PORT=5172 → 外壳 + 三页共 7 个 URL 全 200，退出码 0
 #   ② 把 .env 的 DEBUG_PORT 改成 5999（空端口）→ `外壳 期望 200，实际 000`，退出码 1

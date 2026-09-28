@@ -1,5 +1,0 @@
-# bundle 层（组合，只写清单不写代码）—— 占位。
-#
-# 每包自带 cordis.patch.yml，声明 "cordis": { "bundle": { "patch": "./cordis.patch.yml" } }。
-# 允许依赖：任意。反向禁止：**任何包都不得依赖 bundle**。
-# 门禁见 ../../scripts/lint-deps.sh（MODULE-PLAN 第 3.7 节 / 断言 ①②）。

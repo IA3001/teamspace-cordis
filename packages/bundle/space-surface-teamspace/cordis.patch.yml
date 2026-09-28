@@ -1,0 +1,44 @@
+# space-surface-teamspace —— 团队空间面（P5）：client-ui 包族 + 5174（原样迁入）
+#
+# 本面与 space-base 不得出现同 id（断言③）。用户层在 profiles/teamspace/cordis.patch.yml。
+#
+# 从旧 cordis.yml 原样迁入（2026-09-28 P5），注释保留原决策上下文。
+
+# ── 团队空间面（P4，端口 5174）─────────────────────────────────────────
+# 与 5172 调试控制台同款拓扑：第二个 server 实例（isolate 换名 realm）+
+# webui 只认这个 realm 的 server。页面菜单：时间线 / 输入区 / 轮次状态 / 成员。
+- id: teamspace-server
+  name: '@cordisjs/plugin-server'
+  isolate:
+    server: teamspace
+  config:
+    host: !!js process.env.APP_HOST ?? '0.0.0.0'
+    port: !!js Number(process.env.TEAMSPACE_PORT ?? 5174)
+
+# timer / webui 都要进 teamspace realm：isolate 只标 server 的话，它们提供的
+# 'timer' / 'webui' 会注册到 root 键上，与 5172 那套直接撞名（实测
+# `service "webui" has been registered at <NodeWebUI>`）。页面包消费 webui
+# 也要带同标签 —— 否则只会看见 5172 的那份。
+- id: teamspace-timer
+  name: '@cordisjs/plugin-timer'
+  isolate:
+    timer: teamspace
+
+- id: teamspace-webui
+  name: '@cordisjs/plugin-webui'
+  isolate:
+    server: teamspace
+    timer: teamspace
+    webui: teamspace
+  config:
+    devMode: false
+    open: false
+
+# 页面包（官方三件套：client 源码 + dist/manifest.json；devMode false 只读产物）。
+# 一页整体（用户拍板「不要散页」）：时间线 + 轮次状态/成员 + 输入区在一个
+# component 里组合。isolate.webui 指到 teamspace realm；session/eventLog/ui/
+# staging/orchestrator 仍走 root（那些服务全局只有一份）。
+- id: client-ui-teamspace
+  name: './packages/client-ui/space-client-ui-teamspace/src/index.ts'
+  isolate:
+    webui: teamspace

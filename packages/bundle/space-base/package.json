@@ -1,0 +1,11 @@
+{
+  "name": "space-base",
+  "version": "0.1.0",
+  "private": true,
+  "description": "组合层第一片：核心行（框架设施 + 全部业务服务提供者）。不写代码，只带 cordis.patch.yml。",
+  "cordis": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

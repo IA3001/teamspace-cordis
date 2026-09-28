@@ -1,0 +1,71 @@
+# space-surface-debug —— 调试控制台面（P5）：官方 webui 套件 + 5172（= M1 那套原样迁入）
+#
+# 本面与 space-base 不得出现同 id（断言③：每行最多「一个 bundle 层 + 用户层」）。
+# 用户层可用 profiles/debug/cordis.patch.yml 按 id 停用/覆盖——例如停掉
+# debug-database-webui 后 5172 的数据库页即消失（check:console 门禁会红）。
+#
+# 从旧 cordis.yml 原样迁入（2026-09-28 P5），注释保留原决策上下文。
+
+# ── 调试控制台（M1）────────────────────────────────────────────────────
+# 目标：在 DEBUG_PORT（.env，默认 5172）上打开一个测试用的 web 控制台，
+#      能看 插件清单 / 日志 / 数据库 三个页面，无登录、直达。
+#
+# 为什么页面代码是 0 行：三个页面由官方 webui 页面插件提供，且每个包都
+# 预置了 dist/manifest.json，不需要我们跑 Vite、不需要写任何前端代码。
+# 这正是铁律 1（禁止手写样式）能成立的原因 —— 见 .rules/IRON-RULES.md 选型表。
+#
+# 为什么要第二个 server 实例：@cordisjs/plugin-webui 只 inject('server')，
+# 默认会挂到后端 8080 上，那样调试页就和正式后端混在一个端口了。
+# `isolate: { server: debug }` 把「server」这个**服务名**换到独立 realm：
+# 带同样 isolate 的插件互相看见，不带的人看不见 —— 于是 webui 只认 5172。
+# 机制出处：@cordisjs/plugin-loader/lib/config/isolate.d.ts
+#   isolate?: Dict<true | string>   （值为 realm 标签，同标签共享实例）
+- id: debug-server
+  name: '@cordisjs/plugin-server'
+  isolate:
+    server: debug
+  config:
+    host: !!js process.env.APP_HOST ?? '0.0.0.0'
+    port: !!js Number(process.env.DEBUG_PORT ?? 5172)
+
+# webui 依赖 timer 服务（页面轮询/节流用）。
+- id: debug-timer
+  name: '@cordisjs/plugin-timer'
+
+# 控制台外壳 + 服务端路由。与 debug-server 同 realm，才能拿到 5172 那个 server。
+- id: debug-webui
+  name: '@cordisjs/plugin-webui'
+  isolate:
+    server: debug
+  config:
+    # devMode 必须显式关掉。它默认取 NODE_ENV === 'development'（本机就是），
+    # 打开后 webui 会临时起一个 Vite、去跑 @cordisjs/client 的**源码**，
+    # 实测页面空白、模块 404（theme/menu/menu.vue 之类，2026-09-27）。
+    # 关掉后走各包自带的 dist/ 预构建产物 —— 我们零 UI 代码，本来也不需要
+    # 前端 HMR。这就是官方「生产态」路径。
+    devMode: false
+    open: false
+
+# ── 三个页面插件 ───────────────────────────────────────────────────────
+# ① 插件系统查看：扫描 node_modules 里带 cordis 字段的包，可看可启停。
+- id: debug-loader-webui
+  name: '@cordisjs/plugin-loader-webui'
+
+# ② 日志系统：把 ctx.logger 的日志落到 sqlite，在页面上看。
+#    注意它 import 了 node:sqlite —— 所以 Node 必须 ≥ 22.5（见 scripts/env.sh）。
+- id: debug-logger-webui
+  name: '@cordisjs/plugin-logger-webui'
+  config:
+    path: !!js process.cwd() + '/data/logs.db'
+
+# ③ 数据库系统：需要 model 服务（@cordisjs/plugin-database）+ 一个驱动。
+- id: debug-database
+  name: '@cordisjs/plugin-database'
+
+- id: debug-database-sqlite
+  name: '@cordisjs/plugin-database-sqlite'
+  config:
+    path: !!js process.cwd() + '/data/database.db'
+
+- id: debug-database-webui
+  name: '@cordisjs/plugin-database-webui'

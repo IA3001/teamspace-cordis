@@ -1,15 +1,18 @@
 # 应用级基础配置参数
 #
 # 职责划分（不要混）：
-#   config/app.yml   —— 框架自身参数：应用叫什么、loader 去哪读插件清单
-#   cordis.yml       —— 插件清单：有哪些插件、各自什么配置
+#   config/app.yml                        —— 框架自身参数：应用叫什么、loader 去读哪份清单
+#   packages/bundle/*/cordis.patch.yml    —— 插件清单的 bundle 层（base + 各 surface）
+#   profiles/*/cordis.patch.yml           —— 插件清单的用户层（最后写赢）
 #
-# 改这里不影响插件；改 cordis.yml 才是「增删功能」。
+# 改这里不影响插件；「增删功能」改 patch 层（P5 组合收敛后 cordis.yml 不再存在）。
 
 app:
   name: teamspace-cordis
   description: 多人 + 多 Agent 团队协作系统
 
 loader:
-  # loader/include 读取的插件组合清单（相对项目根目录）
-  configPath: ./cordis.yml
+  # loader/include 读取的组合清单（相对项目根目录）。
+  # 这是 src/compose.ts 的生成产物（bundle 层 + 用户层叠加，data/ 已 gitignore），
+  # 每次启动重新生成——手改无效，改 patch 层。
+  configPath: ./composed.cordis.yml

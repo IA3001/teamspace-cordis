@@ -1,0 +1,14 @@
+# profiles/debug —— 用户层（最后写赢）。
+#
+# 只做三件事，且不重复 bundle 里已有的行（断言③会红）：
+#   1. 按 id 覆盖整项 config（整体替换，不深合并）
+#   2. 写 disabled: true 停用某行
+#   3. 追加本面私有新行
+#
+# 示例（去掉注释即生效）：
+# - id: debug-database-webui
+#   disabled: true
+#
+# 红测②（2026-09-28 P5 实测）：上面示例生效时停用 debug-database-webui →
+# 5172 数据库页 chunk 404、check:console 判红（退出码 1）；还原复绿。
+[]

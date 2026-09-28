@@ -1,0 +1,11 @@
+{
+  "name": "space-surface-teamspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "团队空间面：client-ui 包族 + 5174。不写代码，只带 cordis.patch.yml。",
+  "cordis": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

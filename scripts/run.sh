@@ -6,7 +6,7 @@
 #
 # 标准约定（不要绕过）：
 #   · 端口/主机只来自 .env（经 scripts/env.sh 校验后导出）
-#   · 插件清单来自 cordis.yml
+#   · 插件清单来自组合产物 data/composed.cordis.yml（启动时由 patch 层叠加生成）
 #   · 用 node 官方的 --env-file 载入 .env，不自己写 dotenv 解析
 set -euo pipefail
 source "$(dirname "$0")/env.sh"

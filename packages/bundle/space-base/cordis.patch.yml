@@ -1,0 +1,75 @@
+# space-base —— 组合层第一片：核心行（P5，断言③的「一个 bundle 层」之一）
+#
+# 角色与语法（对照 deepseek-harness 的 bundle 形状，MODULE-PLAN 3.6 节）：
+#   · 这里只放「随模式取值无关」的核心行：框架设施 + 全部业务服务提供者
+#   · 每行最多出现在「一个 bundle 层 + 用户层」——base 与各 surface 不得出现同 id
+#   · 用户层（profiles/*/cordis.patch.yml）可按 id 覆盖 config / 写 disabled 停用 / 追加新行
+#   · 本文件由 src/compose.ts 在启动时叠加，不再被直接加载
+#
+# 从旧 cordis.yml 原样迁入（2026-09-28 P5），注释保留原决策上下文。
+
+# ── 框架设施 ────────────────────────────────────────────────────────────
+# 官方 HTTP 服务（提供 ctx.server，路由挂在它上面）。
+# host/port 来自 .env —— 全系统端口唯一出处，不在这里写死数字。
+- id: server
+  name: '@cordisjs/plugin-server'
+  config:
+    host: !!js process.env.APP_HOST ?? '0.0.0.0'
+    port: !!js Number(process.env.APP_PORT ?? 8080)
+
+# ── 业务插件 ────────────────────────────────────────────────────────────
+# 健康检查：证明端口真的在听，也是后续所有路由的样板（inject 声明依赖）。
+- id: health
+  name: './plugins/health/index.ts'
+
+# 最早那个试金石插件，保留用于验证「加功能 = 加插件」。
+- id: app
+  name: './plugins/app/index.ts'
+  config:
+    greeting: cordis 框架已启动，一切就绪
+
+# 曾试挂官方 @cordisjs/plugin-logger（控制台日志导出器），**已撤掉**：
+# 它与 cordis@4.0.0-rc.10 组合下 ctx.logger().info/warn/error 全部静默
+# （实测 3 次，2026-09-26）。core 自带的 ctx.logger.exporter({ export })
+# 接口本身可用，是插件侧的消息形状没接上 —— RC 阶段的集成缺口。
+# 需要日志时再单独写一个基于 core 接口的 logger 插件。
+
+# ── 业务实现：P1 ───────────────────────────────────────────────────────
+# ctx.session / ctx.eventLog 的 sqlite 后端（impl/space-store-sqlite）。
+# 依赖 database 服务（space-surface-debug 的 debug-database-sqlite 驱动提供的那个），
+# 自动排在其后；path 与它显式写成**同一个文件** —— 5172 数据库页看的就是它。
+# 表结构一律由 npm run migrate 从 migrations/ 建（断言 ⑧），插件里没有一行
+# DDL；启动时校验 schema_version，不一致拒绝启动。
+- id: space-store-sqlite
+  name: './packages/impl/space-store-sqlite/src/index.ts'
+  config:
+    path: !!js process.cwd() + '/data/database.db'
+
+# ── 业务插件：P2（交互元素）────────────────────────────────────────────
+# ctx.commands 注册表的唯一提供者（指令实现、入站路由、P3 的 authz 都依赖它）。
+- id: command-bus
+  name: './plugins/command-bus/index.ts'
+
+# 暂存区指令族（/add /cur /del /change /clear /commit）+ 入站消息路由。
+# inject 声明依赖 server / commands / staging / session，加载顺序由依赖决定。
+- id: staging-commands
+  name: './plugins/staging-commands/index.ts'
+
+# ── 业务插件：P3（协作大脑）────────────────────────────────────────────
+# ctx.orchestrator 服务提供者 + Plan 触发的接管者：订阅 ctx.on('staging/plan')
+# （P2 留的接缝，接缝不变）→ 每回合恰好一次大脑调用 → 名单校验 / 三级兜底
+# 走 policy/space-authz 纯函数。协调者大脑通过 ctx.orchestrator.registerBrain
+# 注入（P3 拍板：不含真实 LLM 适配器，只留接口；未注册 → coordinator_unconfigured
+# 暂停等人类，安全默认）。回合状态进程内存，重启回 static。
+- id: orchestrator
+  name: './plugins/orchestrator/index.ts'
+
+# ── 只读查询 + 面板注册表（P4）──────────────────────────────────────────
+# 只读口：时间线/成员页的数据源（HTTP 可 curl 观测）；写路径仍然只在
+# staging-commands 的 POST /messages，这里一个写口都不加。
+- id: space-api
+  name: './plugins/space-api/index.ts'
+
+# ctx.ui 唯一提供者：各 client-ui 区域包往这一个实例登记 Panel 描述符。
+- id: ui-registry
+  name: './plugins/ui-registry/index.ts'

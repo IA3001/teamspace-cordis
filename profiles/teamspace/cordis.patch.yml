@@ -1,0 +1,6 @@
+# profiles/teamspace —— 用户层（最后写赢）。语义同 profiles/debug/cordis.patch.yml。
+#
+# 示例（去掉注释即生效）：
+# - id: client-ui-teamspace
+#   disabled: true
+[]

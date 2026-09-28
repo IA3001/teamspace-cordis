@@ -1,0 +1,11 @@
+{
+  "name": "space-surface-debug",
+  "version": "0.1.0",
+  "private": true,
+  "description": "调试控制台面：官方 webui 套件 + 5172（M1 套件）。不写代码，只带 cordis.patch.yml。",
+  "cordis": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

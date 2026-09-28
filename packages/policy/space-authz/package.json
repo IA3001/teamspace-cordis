@@ -1,0 +1,15 @@
+{
+  "name": "space-authz",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "policy：ctx.orchestrator + ctx.commands 的授权策略 —— 授权名单、NLP 判定口径、三级兜底。纯函数，零 IO",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-orchestrator": "*",
+    "space-session": "*"
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

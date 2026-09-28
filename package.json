@@ -23,8 +23,9 @@
     "reset": "tsx scripts/store.ts reset",
     "lint:migrations": "./scripts/lint-migrations.sh",
     "lint:observe": "./scripts/lint-observability.sh",
-    "gate": "npm run typecheck && npm run lint:deps && npm run lint:migrations && npm run lint:styles && npm run check:console && npm run verify:staging && npm run lint:observe",
-    "verify:staging": "tsx scripts/verify-staging.ts"
+    "gate": "npm run typecheck && npm run lint:deps && npm run lint:migrations && npm run lint:styles && npm run check:console && npm run verify:staging && npm run verify:orchestrator && npm run lint:observe",
+    "verify:staging": "tsx scripts/verify-staging.ts",
+    "verify:orchestrator": "tsx scripts/verify-orchestrator.ts"
   },
   "dependencies": {
     "@cordisjs/client": "^0.8.2",

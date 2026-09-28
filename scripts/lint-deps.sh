@@ -15,7 +15,9 @@
 #   client-ui   → seam                       （impl / policy / bundle 不允许）
 #   bundle      → 全部                        （它只写清单不写代码）
 #   反向：任何包都不得引用 bundle —— 上表里没有 bundle 就是这条的落地
-#   plugins/ 叶子（有 package.json 时一并检查）→ seam
+#   plugins/ 叶子（有 package.json 时一并检查）→ seam、policy
+#     （P3 起允许 policy：叶子插件是组合点，要把 policy 纯函数接到能力上 ——
+#      如 plugins/orchestrator 引 space-authz。纯函数无状态，不构成第二实现）
 #
 # 用法：npm run lint:deps      （退出码 0 = 通过，1 = 判红）
 #
@@ -96,7 +98,7 @@ if (existsSync(join(ROOT, 'plugins'))) {
     }
   }
 }
-for (const p of leafPkgs) { p.name = p.json.name ?? p.name; ALLOWED.plugins = ['seam'] }
+for (const p of leafPkgs) { p.name = p.json.name ?? p.name; ALLOWED.plugins = ['seam', 'policy'] }
 
 const all = [...pkgs, ...leafPkgs]
 const layerOf = new Map(all.map((p) => [p.name, p.layer]))

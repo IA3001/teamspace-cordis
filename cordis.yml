@@ -125,3 +125,12 @@
 # inject 声明依赖 server / commands / staging / session，加载顺序由依赖决定。
 - id: staging-commands
   name: './plugins/staging-commands/index.ts'
+
+# ── 业务插件：P3（协作大脑）────────────────────────────────────────────
+# ctx.orchestrator 服务提供者 + Plan 触发的接管者：订阅 ctx.on('staging/plan')
+# （P2 留的接缝，接缝不变）→ 每回合恰好一次大脑调用 → 名单校验 / 三级兜底
+# 走 policy/space-authz 纯函数。协调者大脑通过 ctx.orchestrator.registerBrain
+# 注入（P3 拍板：不含真实 LLM 适配器，只留接口；未注册 → coordinator_unconfigured
+# 暂停等人类，安全默认）。回合状态进程内存，重启回 static。
+- id: orchestrator
+  name: './plugins/orchestrator/index.ts'

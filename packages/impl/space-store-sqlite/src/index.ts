@@ -69,9 +69,18 @@ declare module '@cordisjs/plugin-database' {
       ok: boolean
       created_at: string
     }
+    staging_entries: {
+      id: string
+      session_id: string
+      author_id: string
+      seq: number
+      text: string
+      created_at: string
+    }
   }
 }
 import { SqliteEventLog } from './eventlog.ts'
+import { SqliteStagingStore } from './staging.ts'
 import { currentVersion, expectedVersion } from './loader.ts'
 import { SqliteSessionStore } from './session.ts'
 
@@ -160,12 +169,25 @@ export function apply(ctx: Context, config: Config = {}) {
     created_at: { type: 'string', nullable: false },
   }, { primary: 'id', autoInc: true })
 
+  // 暂存区（P2）：与 0004_staging_entries 逐列对齐。
+  ctx.database.extend('staging_entries', {
+    id: { type: 'string', nullable: false },
+    session_id: { type: 'string', nullable: false },
+    author_id: { type: 'string', nullable: false },
+    seq: { type: 'integer', nullable: false },
+    text: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: 'id' })
+
   // ── 4. 两个缝的真正实现 ───────────────────────────────────────────────────
   new SqliteSessionStore(ctx, db) // 提供 ctx.session
-  new SqliteEventLog(ctx, db) // 提供 ctx.eventLog
+  const eventLog = new SqliteEventLog(ctx, db) // 提供 ctx.eventLog
+  // staging 的 commit 要落人类发言事件（跨缝组合在同一 impl 内完成，
+  // 契约见 seam/space-staging 的 commit），所以把 eventLog 递给它。
+  new SqliteStagingStore(ctx, db, eventLog) // 提供 ctx.staging
 
   console.log(
-    `[${name}] 就绪：${path}（schema v${current}，业务表 sessions / session_members / events + 留痕表 action_log）`,
+    `[${name}] 就绪：${path}（schema v${current}，业务表 sessions / session_members / events / staging_entries + 留痕表 action_log）`,
   )
 
   // 清理：cordis v4 惯用法 —— apply 返回函数即 disposer（卸载/停止时关库连接）。

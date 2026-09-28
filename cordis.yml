@@ -115,3 +115,13 @@
   name: './packages/impl/space-store-sqlite/src/index.ts'
   config:
     path: !!js process.cwd() + '/data/database.db'
+
+# ── 业务插件：P2（交互元素）────────────────────────────────────────────
+# ctx.commands 注册表的唯一提供者（指令实现、入站路由、P3 的 authz 都依赖它）。
+- id: command-bus
+  name: './plugins/command-bus/index.ts'
+
+# 暂存区指令族（/add /cur /del /change /clear /commit）+ 入站消息路由。
+# inject 声明依赖 server / commands / staging / session，加载顺序由依赖决定。
+- id: staging-commands
+  name: './plugins/staging-commands/index.ts'

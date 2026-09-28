@@ -133,6 +133,57 @@ else
   note "④ 跳过选型依赖检查（找不到 node：$NODE_BIN）"
 fi
 
+# ── 断言 ⑤：禁用的令牌层（2026-09-27 选型扩展新增，P4 2026-09-28 落地）───
+# 用错令牌层：--k-*（Koishi 遗留）、--bg0~3 / --fg0~3（Koishi 遗留）、--el-*
+# （element-plus 自己的层 —— 外壳已把 el-* 映射到设计令牌，我们只写设计令牌）。
+# 见 .rules/IRON-RULES.md「选型扩展」的「禁用的令牌层」行。
+forbidden_tokens=""
+forbidden_re='--(k-[a-zA-Z]|bg[0-3]([^a-zA-Z0-9-]|$)|fg[0-3]([^a-zA-Z0-9-]|$)|el-[a-zA-Z])'
+for d in "${scan_dirs[@]}"; do
+  # 注意：模式以 -- 开头，必须给 grep 显式 -- 分隔符，否则被当成选项报错、
+  # 被 || true 吃掉后表现为"什么都扫不到"（⑥⑦ 同理，都带 --）。
+  hits="$(grep -rnE -- "$forbidden_re" "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "$d" 2>/dev/null || true)"
+  [ -n "$hits" ] && forbidden_tokens+="$hits"$'\n'
+done
+if [ -n "$forbidden_tokens" ]; then
+  report '出现禁用的令牌层（--k-* / --bg0~3 / --fg0~3 / --el-*，铁律 1 选型扩展判红条件）：'
+  printf '%s\n' "$forbidden_tokens" | sed 's/^/      /'
+else
+  note '⑤ 无禁用令牌层 ✅'
+fi
+
+# ── 断言 ⑥：第二个令牌来源（选型扩展新增，P4 落地）──────────────────────
+# 我们的代码里**只准消费**外壳白名单令牌，**不准定义**任何 CSS 自定义属性 ——
+# 出现定义（`--xxx:`）就意味着第二个令牌来源，两套令牌的口子一开就收不住。
+token_defs=""
+for d in "${scan_dirs[@]}"; do
+  hits="$(grep -rnE -- '--[a-zA-Z][a-zA-Z0-9-]*[[:space:]]*:' "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "$d" 2>/dev/null || true)"
+  [ -n "$hits" ] && token_defs+="$hits"$'\n'
+done
+if [ -n "$token_defs" ]; then
+  report '出现自定义属性定义（第二个令牌来源，铁律 1 选型扩展判红条件）：'
+  printf '%s\n' "$token_defs" | sed 's/^/      /'
+  note '只准消费外壳白名单令牌（--bg-* / --text-* / --border-* / --accent* 等），不准定义新的'
+else
+  note '⑥ 无第二个令牌来源 ✅'
+fi
+
+# ── 断言 ⑦：页面里不许 import element-plus（选型扩展新增，P4 落地）──────
+# 外壳已全局注册 element-plus（页面里直接写 <el-*> 标签即可）；再 import 一份
+# 就是第二套组件库 —— 铁律 1 要消灭的东西。
+ep_imports=""
+ep_dir="packages/client-ui"
+if [ -d "$ep_dir" ]; then
+  ep_imports="$(grep -rnE "from ['\"]element-plus|import ['\"]element-plus|require\(['\"]element-plus" \
+      "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "$ep_dir" 2>/dev/null || true)"
+fi
+if [ -n "$ep_imports" ]; then
+  report '页面代码 import element-plus（外壳已全局注册，再引一份 = 两套组件库）：'
+  printf '%s\n' "$ep_imports" | sed 's/^/      /'
+else
+  note '⑦ 页面零 element-plus import（用外壳全局注册的组件）✅'
+fi
+
 # ── 结论 ────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -ne 0 ]; then

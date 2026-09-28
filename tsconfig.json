@@ -1,16 +1,30 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@cordisjs/client": [
+        "./types/cordis-client.stub.d.ts"
+      ]
+    }
   },
-  "include": ["src", "plugins", "packages"]
+  "include": [
+    "src",
+    "plugins",
+    "packages"
+  ]
 }

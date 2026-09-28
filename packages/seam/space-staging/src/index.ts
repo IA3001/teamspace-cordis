@@ -39,6 +39,12 @@ export interface Entry {
   /** 会话内自增序号（从 1 起）；删除后不重排，新条目永远取 max(seq)+1。 */
   seq: number
   text: string
+  /**
+   * 该条目里 @ 到的成员 id（空数组 = 无提及）。迁移 0005 起随条目持久化；
+   * /commit 合并时取全部条目提及的并集写进人类发言事件（orchestrator 的
+   * mentionHints 来源 —— @ 只是提示，授权与否由大脑读原话判断）。
+   */
+  mentions: string[]
   /** ISO 8601（UTC）。 */
   createdAt: string
 }
@@ -83,8 +89,8 @@ export abstract class StagingService extends Service {
     super(ctx, 'staging')
   }
 
-  /** 追加一条暂存发言，分配 seq，返回落定后的完整条目。 */
-  abstract append(sessionId: string, authorId: string, text: string): Entry
+  /** 追加一条暂存发言，分配 seq，返回落定后的完整条目。mentions = 该条 @ 到的成员 id（缺省无提及）。 */
+  abstract append(sessionId: string, authorId: string, text: string, mentions?: string[]): Entry
 
   /** 某会话全部暂存条目，按 seq 升序。 */
   abstract list(sessionId: string): Entry[]
@@ -103,8 +109,8 @@ export abstract class StagingService extends Service {
 
   /**
    * /commit 的执行体：把暂存区全部条目按 seq 顺序用换行拼接成**一条**
-   * 人类发言事件落库（authorKind=human / kind=message），随后清空暂存区，
-   * 并发出恰好一次 Plan 信号。
+   * 人类发言事件落库（authorKind=human / kind=message，mentions = 各条目
+   * 提及的并集），随后清空暂存区，并发出恰好一次 Plan 信号。
    * 暂存区为空 → 返回 null：不落事件、不清空、**不触发 Plan**。
    * 把 commit 放进缝而不是让指令层自己拼：信号与「落库 + 清空」绑死在
    * 同一个实现里，"恰好一次"才是结构保证，不是口头约定。

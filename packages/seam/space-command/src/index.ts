@@ -172,6 +172,14 @@ export class CommandService extends Service {
   }
 
   /**
+   * 全部已注册指令（含 usage / 参数上下限），按注册序。
+   * 输入区 / 联想菜单的数据源：界面不该自己硬编码指令清单 —— 注册表是唯一出处。
+   */
+  list(): Command[] {
+    return [...this.cmds.values()].map((c) => ({ ...c }))
+  }
+
+  /**
    * 机制函数 ②：Dispatch —— 分派执行一条解析好的指令。
    * 未注册 → CommandError('unknown') 且必带可用清单（不静默）；
    * 参数个数越界 → CommandError('bad_args') 且必带 usage。

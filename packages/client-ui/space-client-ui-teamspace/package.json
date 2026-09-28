@@ -1,0 +1,18 @@
+{
+  "name": "space-client-ui-teamspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "client-ui：团队空间整页（时间线 + 轮次状态/成员 + 输入区）。页面只做组合（铁律 1）",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-client-ui-shared": "*",
+    "space-ui": "*"
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  },
+  "scripts": {
+    "build": "vite build --manifest manifest.json"
+  }
+}

@@ -51,7 +51,10 @@ const ALLOWED = {
   seam: ['seam'],
   impl: ['seam'],
   policy: ['seam'],
-  'client-ui': ['seam'],
+  // client-ui → client-ui（2026-09-28 P4 起）：页面共享件 space-client-ui-shared
+  // 是铁律 1 选型表明定的抽组件去处，页面包引它天经地义 —— 不许引用的
+  // 只是「别的页面」（页面之间互引 = 隐形耦合，要抽就抽进 shared）。
+  'client-ui': ['seam', 'client-ui'],
   bundle: ['seam', 'impl', 'policy', 'client-ui', 'bundle'],
 }
 

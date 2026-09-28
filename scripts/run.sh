@@ -13,6 +13,10 @@ source "$(dirname "$0")/env.sh"
 
 cd "$REPO_ROOT"
 
+# 构建进启动脚本（A2 口径，MODULE-PLAN 第 3.5 节）：页面产物 dist/ 不入库，
+# 启动前现构建 —— 构建失败 = 启动失败（fail fast，不带上旧产物裸奔）。
+npm run build:web --silent
+
 cat <<EOF
 
   teamspace-cordis 启动中 …

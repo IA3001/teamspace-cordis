@@ -134,3 +134,52 @@
 # 暂停等人类，安全默认）。回合状态进程内存，重启回 static。
 - id: orchestrator
   name: './plugins/orchestrator/index.ts'
+
+# ── 只读查询 + 面板注册表（P4）──────────────────────────────────────────
+# 只读口：时间线/成员页的数据源（HTTP 可 curl 观测）；写路径仍然只在
+# staging-commands 的 POST /messages，这里一个写口都不加。
+- id: space-api
+  name: './plugins/space-api/index.ts'
+
+# ctx.ui 唯一提供者：各 client-ui 区域包往这一个实例登记 Panel 描述符。
+- id: ui-registry
+  name: './plugins/ui-registry/index.ts'
+
+# ── 团队空间面（P4，端口 5174）─────────────────────────────────────────
+# 与 5172 调试控制台同款拓扑：第二个 server 实例（isolate 换名 realm）+
+# webui 只认这个 realm 的 server。页面菜单：时间线 / 输入区 / 轮次状态 / 成员。
+- id: teamspace-server
+  name: '@cordisjs/plugin-server'
+  isolate:
+    server: teamspace
+  config:
+    host: !!js process.env.APP_HOST ?? '0.0.0.0'
+    port: !!js Number(process.env.TEAMSPACE_PORT ?? 5174)
+
+# timer / webui 都要进 teamspace realm：isolate 只标 server 的话，它们提供的
+# 'timer' / 'webui' 会注册到 root 键上，与 5172 那套直接撞名（实测
+# `service "webui" has been registered at <NodeWebUI>`）。页面包消费 webui
+# 也要带同标签 —— 否则只会看见 5172 的那份。
+- id: teamspace-timer
+  name: '@cordisjs/plugin-timer'
+  isolate:
+    timer: teamspace
+
+- id: teamspace-webui
+  name: '@cordisjs/plugin-webui'
+  isolate:
+    server: teamspace
+    timer: teamspace
+    webui: teamspace
+  config:
+    devMode: false
+    open: false
+
+# 页面包（官方三件套：client 源码 + dist/manifest.json；devMode false 只读产物）。
+# 一页整体（用户拍板「不要散页」）：时间线 + 轮次状态/成员 + 输入区在一个
+# component 里组合。isolate.webui 指到 teamspace realm；session/eventLog/ui/
+# staging/orchestrator 仍走 root（那些服务全局只有一份）。
+- id: client-ui-teamspace
+  name: './packages/client-ui/space-client-ui-teamspace/src/index.ts'
+  isolate:
+    webui: teamspace

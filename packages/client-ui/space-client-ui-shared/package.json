@@ -1,0 +1,11 @@
+{
+  "name": "space-client-ui-shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "client-ui：页面共享件（显示映射 + 事件条目组件）。只准用外壳原语与白名单令牌（铁律 1）",
+  "main": "src/index.ts",
+  "exports": {
+    "./client/*": "./client/*"
+  }
+}

@@ -17,12 +17,20 @@ type Row = Record<string, unknown>
 const now = () => new Date().toISOString()
 
 function toEntry(r: Row): Entry {
+  let mentions: string[] = []
+  try {
+    const parsed = JSON.parse(String(r.mentions ?? '[]'))
+    if (Array.isArray(parsed)) mentions = parsed.map(String)
+  } catch {
+    // 列损坏时按无提及处理（旧行在 0005 前没有该列，DEFAULT '[]' 兜底）
+  }
   return {
     id: r.id as string,
     sessionId: r.session_id as string,
     authorId: r.author_id as string,
     seq: Number(r.seq),
     text: r.text as string,
+    mentions,
     createdAt: r.created_at as string,
   }
 }
@@ -36,7 +44,7 @@ export class SqliteStagingStore extends StagingService {
     super(ctx)
   }
 
-  append(sessionId: string, authorId: string, text: string): Entry {
+  append(sessionId: string, authorId: string, text: string, mentions?: string[]): Entry {
     if (!text.trim()) {
       throw new StagingError('empty_text', '暂存条目文本为空（纯空白不入暂存区）')
     }
@@ -46,14 +54,15 @@ export class SqliteStagingStore extends StagingService {
       authorId,
       seq: this.nextSeq(sessionId),
       text,
+      mentions: [...new Set(mentions ?? [])],
       createdAt: now(),
     }
     this.db
       .prepare(
-        `INSERT INTO staging_entries(id, session_id, author_id, seq, text, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO staging_entries(id, session_id, author_id, seq, text, mentions, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(entry.id, entry.sessionId, entry.authorId, entry.seq, entry.text, entry.createdAt)
+      .run(entry.id, entry.sessionId, entry.authorId, entry.seq, entry.text, JSON.stringify(entry.mentions), entry.createdAt)
     return entry
   }
 
@@ -110,6 +119,8 @@ export class SqliteStagingStore extends StagingService {
     if (entries.length === 0) return null
     // 合并语义（用户拍板 2026-09-27）：按 seq 顺序换行拼接成一条人类发言。
     const text = entries.map((e) => e.text).join('\n')
+    // 提及取全部条目的并集（保序去重）—— orchestrator 的 mentionHints 来源。
+    const mentions = [...new Set(entries.flatMap((e) => e.mentions))]
     const event = this.eventLog.append({
       id: randomUUID(),
       sessionId,
@@ -118,7 +129,7 @@ export class SqliteStagingStore extends StagingService {
       authorKind: 'human',
       kind: 'message',
       text,
-      mentions: [],
+      mentions,
       toolCalls: [],
       replyMode: '',
     })

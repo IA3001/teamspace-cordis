@@ -121,12 +121,60 @@ function toSeq(s: string): number {
   return n
 }
 
-/** 指令执行或暂存操作的已知错误 → 结构化 400；其余原样上抛（500）。 */
-function errorResponse(e: unknown): Response | undefined {
-  if (e instanceof CommandError || e instanceof StagingError) {
-    return Response.json({ error: e.name, code: e.code, detail: e.message }, { status: 400 })
+/**
+ * 入站消息的语义处理体（HTTP 路由与 P4 composer 页共用同一条路径 ——
+ * 语义只有一份：行首 / 走指令（Consume），否则入暂存区（Stage）。
+ * 返回结构化结果而不是 Response：调用方自己决定 HTTP 形状。
+ */
+export async function handleInbound(
+  ctx: Context,
+  sessionId: string,
+  authorId: string,
+  text: string,
+  mentions: string[] = [],
+): Promise<{ reply: string } | { error: string; code?: string; detail: string }> {
+  const session = ctx.session.getSession(sessionId)
+  if (!session) {
+    return { error: 'session_not_found', detail: `会话 ${sessionId} 不存在` }
   }
-  return undefined
+  if (!text.trim()) {
+    return { error: 'empty_text', detail: '消息文本为空' }
+  }
+  if (!authorId.trim()) {
+    return { error: 'missing_author', detail: '缺少 authorId（调试期由调用方提供，身份域落地后由登录身份注入）' }
+  }
+
+  const base: CommandCtx = { sessionId, authorId, arg: '', args: [], raw: text }
+  const inv = parse(text)
+  if (inv) {
+    // 指令路径（Consume 语义）：执行并把回执回给人类。
+    try {
+      const reply = await ctx.commands.dispatch(base, inv)
+      return { reply: reply.text }
+    } catch (e) {
+      if (e instanceof CommandError || e instanceof StagingError) {
+        return { error: e.name, code: e.code, detail: e.message }
+      }
+      console.error('[staging-commands] 指令执行失败（500）：', e)
+      throw e
+    }
+  }
+
+  // 非 / 消息：自动入暂存区（Stage 语义）——
+  // 不落人类发言事件、不触发 Plan，最小确认「已记下 #N」。
+  // 提及在服务端解析（@token 与在册成员 id 精确匹配），与调用方显式给的
+  // mentions 取并集 —— UI 与 curl 都不需要自己懂成员表。
+  try {
+    const memberIds = ctx.session.listMembers(sessionId, true).map((m) => m.principalId)
+    const textMentions = (text.match(/@([^\s@]+)/g) ?? []).map((t) => t.slice(1)).filter((t) => memberIds.includes(t))
+    const entry = ctx.staging.append(sessionId, authorId, text, [...new Set([...mentions, ...textMentions])])
+    return { reply: `已记下 #${entry.seq}（当前共 ${ctx.staging.count(sessionId)} 条）` }
+  } catch (e) {
+    if (e instanceof CommandError || e instanceof StagingError) {
+      return { error: e.name, code: e.code, detail: e.message }
+    }
+    throw e
+  }
 }
 
 export function apply(ctx: Context) {
@@ -135,48 +183,15 @@ export function apply(ctx: Context) {
   // ── 入站唯一写入口 ────────────────────────────────────────────────────
   ctx.server.post('/api/sessions/:id/messages', async (req) => {
     const sessionId = req.params.id
-    const session = ctx.session.getSession(sessionId)
-    if (!session) {
-      return Response.json({ error: 'session_not_found', detail: `会话 ${sessionId} 不存在` }, { status: 404 })
-    }
     const body = await req.json().catch(() => null as Record<string, unknown> | null)
     const text = typeof body?.text === 'string' ? body.text : ''
     const authorId = typeof body?.authorId === 'string' ? body.authorId.trim() : ''
-    if (!text.trim()) {
-      return Response.json({ error: 'empty_text', detail: '消息文本为空' }, { status: 400 })
-    }
-    if (!authorId) {
-      return Response.json(
-        { error: 'missing_author', detail: '缺少 authorId（调试期由调用方提供，身份域落地后由登录身份注入）' },
-        { status: 400 },
-      )
-    }
+    const mentions = Array.isArray(body?.mentions) ? body.mentions.map(String) : []
 
-    const base: CommandCtx = { sessionId, authorId, arg: '', args: [], raw: text }
-    const inv = parse(text)
-    if (inv) {
-      // 指令路径（Consume 语义）：执行并把回执回给人类。
-      try {
-        const reply = await ctx.commands.dispatch(base, inv)
-        return Response.json({ reply: reply.text })
-      } catch (e) {
-        const handled = errorResponse(e)
-        if (handled) return handled
-        console.error('[staging-commands] 指令执行失败（500）：', e)
-        throw e
-      }
-    }
-
-    // 非 / 消息：自动入暂存区（Stage 语义）——
-    // 不落人类发言事件、不触发 Plan，最小确认「已记下 #N」。
-    try {
-      const entry = ctx.staging.append(sessionId, authorId, text)
-      return Response.json({ reply: `已记下 #${entry.seq}（当前共 ${ctx.staging.count(sessionId)} 条）` })
-    } catch (e) {
-      const handled = errorResponse(e)
-      if (handled) return handled
-      throw e
-    }
+    const result = await handleInbound(ctx, sessionId, authorId, text, mentions)
+    if ('reply' in result) return Response.json(result)
+    const status = result.error === 'session_not_found' ? 404 : 400
+    return Response.json(result, { status })
   })
 
   // ── 暂存区只读清单（写操作一律走 / 指令，承旧契约）──────────────────

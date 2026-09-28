@@ -75,6 +75,7 @@ declare module '@cordisjs/plugin-database' {
       author_id: string
       seq: number
       text: string
+      mentions: string
       created_at: string
     }
   }

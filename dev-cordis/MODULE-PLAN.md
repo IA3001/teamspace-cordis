@@ -155,6 +155,8 @@ teamspace-cordis/
 | `space-tool` | `ctx.tools` | `elements/tool/` + `internal/tools/` | 工具目录 + 注册表 |
 | `space-bus` | `ctx.bus` | `services/sse/` | 推送信封（谁订阅、重放策略） |
 | `space-workspace` | `ctx.workspace` | `domain/{gantt,story,kickoff,template,disposition,evaluation,summarizer}` | 工作台视图模型（**先合一个包，不预拆**）。**硬判据**：桶里成员一旦「需要换实现」必须立刻独立成 seam，不得赖在这里 —— 见第 7 节待定 4 |
+| `space-agent`（**P6 草案，未开工**） | `ctx.agents` | 无旧对应（2026-09-29 新需求，见第 7 节新增小节） | **机器人注册表**：`AgentDescriptor{kind: meeting\|coding, 提示词引用, 能力清单}`、入驻/退驻/心跳、生命周期状态机（idle/working/paused/done）。**入驻 = 向本缝注册**；会议机器人与 Coding Agent 同一张表（成员即 `Member`）。「自己的天地」用 cordis isolate realm 承载（5172/5174 先例），「自己的生命」= 插件生命周期 + 每 agent runtime（timer/loop 先例） |
+| `space-workdir`（**P6 草案，未开工**） | `ctx.workdir` | 承旧 `internal/sandbox` 的 `execdir` 语义 + 新需求 | **每 agent 文件工作区**：领取/创建/清理、路径隔离、与沙箱 policy 的边界。**刻意与 `space-workspace`（工作台视图模型）分开**，防杂物袋（命名见待定 8，推荐新缝） |
 
 ### 3.3 impl 层（`packages/impl/`）
 
@@ -294,6 +296,7 @@ packages/bundle/
 | **P3 协作大脑** ✅ **已完成（2026-09-28）** | `seam/space-orchestrator` + `policy/space-authz`（业务硬约束按**可断言子集**落成断言 —— 待定 5，清单在该行） | 授权名单外目标 → 拒绝；人类 `@` 指令走 NLP 判定；三级兜底各自有断言；收到目标 agent 反馈后**必须**输出暂停并等人类。**✅ 全部达成（2026-09-28）**：`verify:orchestrator` 52 断言全过且进 gate（第八门禁，用户拍板）；**红测三组各自会红**（摘名单校验 → 6 红退出码 1；摘「反馈后必须暂停」→ A5g/A5j 红；停用 orchestrator 插件 → Part B 接线 3 红，各自还原复绿）；`npm run gate` 八门禁全绿（exit=0，verify-staging 44/0 依旧） |
 | **P4 前端** ✅ **已完成（2026-09-28）** | `seam/space-ui` + `client-ui/space-client-ui-*` | 前置「待定 1 / 待定 2」**均已解决**（见第 3.5 节与第 7 节）；`npm run lint:styles` 扫到 `packages/client-ui/` 且全绿；**每个包 `vite build --manifest` 能出 `dist/`，且 `git status` 里看不到 `dist/`（A2 生效）**。P4 开工时须把铁律新增的 3 条判红条件变成**会红的**断言（见第 6 节 ④）。**✅ 全部达成（2026-09-28）**：① 铁律新增 3 条判红条件落成 lint:styles 断言 ⑤⑥⑦ 且**实测改坏会红**（--el-/--k-/--bg2 探针、--brand-x 定义探针、import 'element-plus' 探针各自判红）；② 五包就位（shared + timeline/composer/right-panel/members，用户拍板最小集），`build:web` 出 dist/、`check:web` 断言外壳 + 四页 chunk 全 200 + dist 不入库（删 dist → 红）；③ 5174 团队空间面（TEAMSPACE_PORT）与 5172 并存互不污染；④ `npm run gate` 九门禁全绿 |
 | **P5 组合收敛** ✅ **已完成（2026-09-28）** | `bundle/space-base` + 两个 surface + `profiles/{debug,teamspace}`；现有 `cordis.yml` 退化为叠加结果（产物 `composed.cordis.yml` 落项目根，gitignore 不入库，启动时由 `src/compose.ts` 生成） | **✅ 全部达成（2026-09-28）**：断言 ③ 落成 `scripts/lint-patch.sh`（第十门禁，列 lint:deps 后），**红测改坏必红**（surface-teamspace 塞 `id: server` → 「出现在两个 bundle 层」判红，还原复绿）；**用户层停用行实测**：`debug-database-webui: disabled: true` → 组合产物「停用 1」→ 5172 数据库页 chunk 404、check:console 判红（退出码 1）→ 还原复绿（chunk 200 / 退出码 0），一举实证「删用户层行能力消失」+ 断言 ⑩ 活着；组合产物与旧 cordis.yml **按 id 逐项等价**（21 = 21 行，含 `!!js` 原文逐字一致）后删旧清单；`npm run gate` 十门禁全绿。**拓扑拍板（用户 2026-09-28）**：方案 A 单进程多面（compose 合成「base + 两 surface + 用户层」单清单单进程）；**5173 保持未启用**，本行验收口径按「5172 / 5174 两实 + 5173 预留」执行 |
+| **P6 多智能体入驻（Coding Agent 可插拔）** ⬜ **规划已落（2026-09-29），未开工** | `seam/space-agent` + `seam/space-workdir`（命名待定 8）+ `impl/space-agent-*`（生命周期 runtime）+ 工具/沙箱缝补真 + 4 个角色提示词接入（**等用户给原文**） | **两条不变式**：①开会功能不回退（gate 十门禁全绿不动）；②**入驻 = 纯新增**——新增一个 Coding Agent 只允许「新增包 + patch 层加一行」，任何既有文件零改动（断言 ⑪ 实测改坏会红）。步骤：缝声明（零实现）→ 最小入驻示例（stub 生命周期：报到/领任务/回执，不接真模型也能证明入驻机制）→ 断言 + 红测 → 提示词接入。需求原话见第 7 节 2026-09-29 小节 |
 
 ---
 
@@ -311,12 +314,13 @@ packages/bundle/
 | ⑧ | **DDL 只在迁移里** | `packages/**` + `plugins/**` 下（**排除 `**/migrations/**`**）出现 `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE`（对应待定 7 的落地） | ✅ **P1 已建并实测改坏会红**（`scripts/lint-migrations.sh`；探针 绿→红→绿；scripts/ 豁免并记账：迁移运行器自身要建 schema_version） |
 | ⑨ | **动作留痕**（铁律 2） | 跑过 `npm run gate` / `typecheck` / `migrate` / `seed` 之后，库里**必须多出可查记录**；「跑了但不留痕」判红 | ✅ **P1 已建并验证**（留痕表 `action_log` 由迁移 0003 建；`scripts/store.ts` 强制留痕 migrate/seed/reset，`scripts/record-action.mjs` 留痕 gate；核查已跑通：action_log 留痕齐全） |
 | ⑩ | **控制台可达**（铁律 2） | 启动后 5172 的插件 / 日志 / 数据库**三页 HTTP 200**；任一非 200 判红 | ✅ **已建（P0）**：`scripts/check-console.sh`（`npm run check:console`）。不只验 `GET /`（SPA 外壳恒 200，那是弱断言），而是读三个页面包各自的 `dist/manifest.json`，按 webui 的模块 URL 规则 `{uiPath}/-/v1/modules/{manifest.path}/{chunk.file}` 逐个取 chunk —— 这才证明三页**真被加载**。2026-09-27 实测：7 个 URL 全 200；把 `DEBUG_PORT` 改错 → 退出码 1 |
+| ⑪ | **Agent 可插拔入驻**（**P6 草案，未建**——P6 开工时必须实测改坏会红，现在写就是空断言） | 新增/停用一个机器人时，除「**新增包 + patch 层行**」外不得改动任何既有文件（git 路径白名单校验）；且开会功能回归（`verify:staging` / `verify:orchestrator` 仍全绿） | **P6 建**：故意把 agent 特判写进核心文件 → 判红；还原 → 复绿 |
 
 ---
 
 ## 7. 决策记录（原「待定项」）与风险
 
-> **7 项全部已定，当前无待定项。** 下表保留「为什么这么定」的理由 —— 决策本身会随实践修订，
+> **原 7 项全部已定**（2026-09-29 起新增 P6 待定 8~10，见下方小节）。下表保留「为什么这么定」的理由 —— 决策本身会随实践修订，
 > 但修订时必须回到这里改，不许只在代码里默默改掉。
 
 | # | 事项 | 现状 | 为什么是门槛 |
@@ -328,6 +332,17 @@ packages/bundle/
 | **5** | ~~授权名单等业务硬约束的落点~~ | ✅ **已解决（2026-09-27）：落到 `policy/space-authz` 的断言**，但**只做可断言的子集** | **口径**：凡能写成「给定输入 → 期望允许 / 期望拒绝」的，**必须有会红的断言**；纯表述质量（如「回复要自然」）**不硬造断言**。可断言的子集（来自 `project_memory`）：授权名单只含需求分析师 / 挑战者 / 会议记录官且**排除 coordinator**；名单外目标必拒；一轮内同一目标只能调一次；未经人类授权不得调用；收到目标反馈后必须暂停；`@` 提及列表不含 coordinator；coordinator 显示为 `a_coordinator`；只有发送者可撤回 / 编辑自己的待发消息；「先讨论」「只商议」→ 暂停且 `delegate: null`；三级兜底三种入参三种期望；负向语气 / 多目标 / 空输出 → 不委托、不报错、不暂停 |
 | **6** | ~~旧系统那 10 张表是否原样搬~~ | ✅ **已解决（2026-09-27）：P1 只搬 3 张** | `sessions` / `session_members` / `events`。**不做「先全搬再重构」** —— 全搬等于把旧模型照抄一遍（含我们打算不要的角色 / 权限字段），之后每改一次就欠一笔迁移债。其余 7 张按需：`users` / `auth_sessions` / `principals` / `team_accounts` 属鉴权，M1 已明确初期不做 → **后置**；`plugins` / `settings` / `meta` 是框架自身的，由 cordis 生态（loader / database 插件）接管。迁移文件命名与「已提交迁移不许改」承旧 `store/doc.go` 口径 |
 | **7** | ~~「每插件一节」迁移 与 cordis 运行时启停的耦合~~ | ✅ **已解决（2026-09-27）：留表不回滚，且 DDL 与插件生命周期彻底解耦** | 两条。① **停用插件时表与数据都留着**：cordis 的 `effect` 回滚的是**注册**（服务 / 事件 / 路由），**不是数据** —— 顺应框架语义；且数据回滚在多人协作系统里是危险动作，配置一改就静默删表，几乎无法排查。② **DDL 不许写在插件里**：不在 `apply` 生命周期跑建表，迁移是独立的 `migrate` 命令；schema 版本由**迁移链**自己管，与插件启停无关（插件停用再启用**不重跑迁移**）。断言见第 6 节 ⑧ |
+| **8** | 多智能体入驻（P6 方向） | ✅ **方向已拍板（2026-09-29）：先落规划，未开工** | 用户原话：「这个插件系统必须承受得住新机器人的加入，除了支持基本的会议中的机器人，还要支持新的机器人比如开发项目者、测试者等，他们有自己的生命，有自己的工作区，有自己的天地，可以理解为一个 Coding Agent。因此这个插件系统必须经得起**通过添加插件的方式添加入驻**这种 Coding Agent，同时又不失之前定义好的开会功能，支持机器人的特殊功能，比如开发项目之类的。」落表：§3.2 两缝草案 + §5 P6 行 + §6 断言 ⑪ 草案；细节待定见下节 |
+
+### P6 待定项（2026-09-29 新增，开工前清零）
+
+| # | 待定 | 选项与推荐 |
+|---|---|---|
+| 8 | 文件工作区缝语义 | **新缝 `space-workdir`（推荐**，`space-workspace` 已有防杂物袋判据，不污染）vs 扩义现缝 |
+| 9 | Coding Agent 任务回路 | orchestrator 委托（复用授权名单）vs 人类 `@` 直派 vs 独立任务队列——推荐先做最小（人类 `@`，orchestrator 委托随后） |
+| 10 | 4 个角色提示词的接入形态 | 提示词 = agent 配置的一部分（入驻/建会话时选用）；**等用户提供原文**（角色1 会议记录 / 角色2 编码 / 角色3 测试 / 角色4 代码审查） |
+
+**拟升铁律 4（待用户拍板是否写入 `IRON-RULES.md`）**：「机器人可插拔入驻 + 开会功能不回退」两条不变式。
 
 ### 已知缺陷（发现即记账，不许只在对话里说过就完）
 
@@ -366,3 +381,4 @@ packages/bundle/
 | 2026-09-28 | **P3 完成（协作大脑，人类授权制状态机）**：①`seam/space-orchestrator` 词汇补真（承旧 `domain/coordinator.go`：`DecisionCase` 四分支 / `Delegation` 单槽位 / `PlanRequest{humanText, mentionHints, targets}` / 回合状态机 `Turn{state, decisionCalls, delegatedTargets, stopReason, stopDetail}` / 暂停点 `await_human` / `OrchestratorBrain` 接口 + `'orchestrator/pause'` 内核事件）；②`policy/space-authz` 新建（**纯函数零 IO**：授权名单 = 在册目标 agent 三角色且协调者必不在、三级兜底解析 0 合法 JSON → 1 纯文本只回复 → 2 坏 JSON 正则救回 → 3 明说「将转达 X」用人类原话补委托、负面语气/多目标/空输出护栏每次 Warn 留原文；解析器只转述不越权拒绝，名单裁决归引擎）；③`plugins/orchestrator`（`ctx.orchestrator` 提供者 + `ctx.on('staging/plan')` 原地接管，接缝零改动；每回合恰好一次大脑调用、委托前宣告「已收到指令，将委托[target]：…」、`reportFeedback` 后强制 `await_human`；回合状态进程内存——用户拍板，重启回 static 安全默认；只读口 GET `/api/sessions/:id/turn` 供 P4 右栏与验收探针）；④大脑接口**返回原始文本**而非结构体（三级兜底必须打在真模型输出上才有意义；P3 拍板不含真实 LLM 适配器，验收用桩离线重放——承旧 Coordinator interface 门禁口径）；⑤3.7 允许表 plugins 行扩到 `policy`（组合点引用纯函数）；⑥`scripts/verify-orchestrator.ts` **52 断言进 gate（第八门禁）**，红测三组各自会红（见 P3 行）；⑦`npm run gate` 八门禁全绿 | 核心教训：**cordis 严格注入检查**——apply 里摸到的每个服务都必须出现在 `inject`，漏了报 `cannot get property "server" without inject` 且**只进 5172 日志页（data/logs.db），控制台与启动日志全静默**（本次排查靠 logs.db 定位）；「未配置大脑 → 暂停零调用（decisionCalls=0）」承旧口径，Part B 断言曾与此相矛盾，按旧口径修正。三项用户拍板：不含 LLM 适配器只留接口、回合状态进程内存、verify 进 gate |
 | 2026-09-28 | **P2 完成（指令族 + 暂存区，首个交互能力）**：①`seam/space-command` 补真（`Invocation`/`Reply`/`CommandCtx`/`Command` 注册契约：usage 必填否则注册即炸、aliases、minArgs/maxArgs；`parse` 只认行首 `/`、大小写敏感、`rest` 保留原文空格；`CommandError` 三类：unknown 带可用清单 / duplicate 重名即炸 / bad_args 带 usage）；②`seam/space-staging` 补真（`Entry`/`StagingError` not_found·not_author·empty_text / append·list·remove·update·count·clear·`commit` 契约；`Events` 增补 **`'staging/plan'` 内核事件**）；③迁移 `0004_staging_entries`（FK sessions `ON DELETE CASCADE`、唯一索引 `(session_id, seq)`、down 删表——暂存草稿无历史价值，与 events「留表不回滚」刻意不同）；④`SqliteStagingStore`（seq=max+1 删除不重排；`commit` 把「换行拼接合并→落 events→清空→发信号」绑死在同一方法，空暂存返回 null 零事件零信号）；⑤两个叶子插件（用户拍板）：`command-bus`（`ctx.commands` 唯一提供者）+ `staging-commands`（6 指令回执 + POST `/api/sessions/:id/messages` 入站路由 + GET `/staging` 只读）挂 `cordis.yml`；⑥`scripts/verify-staging.ts` **44 断言进 gate**（用户拍板；Part A 进程内机制 30 条 + Part B HTTP 接线 14 条，全过留痕 action_log）；⑦**验收全过**：verify 44 过/0 红；红测改坏（临时删 emit）→ 3 红退出码 1 → 还原复绿；迁移 down→up→再 up 幂等（v4→v0→v4→无变更）+ seed 重播 9 行幂等（down 清业务表后种子须重播——迁移语义正确行为）；`npm run gate` 七门禁全绿；5172 数据库页 4→5 张表 | 核心教训：**cordis 服务代理重绑 this（栈帧 `Proxy.xxx` + `Object.apply` at cordis/lib/index.js:141），Service 类 `#` 私有字段品牌校验必炸**（`Cannot read private member #planCbs`；Part A 直连实例、服务进程走代理，故只在线上 500 暴露）——TS `private`（编译期）字段安全；跨接缝信号弃回调注册表改走**内核事件总线**（seam 声明事件、impl `ctx.emit`、verify `ctx.on`），更惯用、接缝更薄，P3 orchestrator 以 `ctx.on('staging/plan')` 原地接管。三项用户拍板：/commit 拼接成一条+清空暂存、两叶子插件、端到端验收脚本进 gate |
 | 2026-09-28 | **P5 完成（组合收敛）**：①三 bundle 包落位（space-base 核心 9 行 + space-surface-debug M1 套件 8 行 + space-surface-teamspace 4 行，注释随行迁移，package.json 声明 `cordis.bundle.patch`）+ `profiles/{debug,teamspace}` 用户层（当前空根 `[]`）；②`src/compose.ts` 组合引擎：层收集（base 钉最前 + 字母序 + 用户层）、断言 ③ 台账（bundle 层间 / 用户层文件间 / 总层数>2 判红）、同 id 后层整项替换（不深合并）、`compose-cli.ts` 出 `--lint` 与 `--out` 两种形态；③**!!js 不求值往返**：照抄 plugin-include 的 JsExpr 语义，读入包 `{__jsExpr}` 标记、写出还原 `!!js` 原文，求值时机完全留给 loader（零语义漂移）——用 js-yaml 5.4.2 新 API `defineScalarTag` + `JSON_SCHEMA.withTags` 实现（顶层就是这个新大版本，无 `yaml` 包、无 4.x `Type` API）；④接线：`src/index.ts` 启动即 compose（fail fast）→ `config/app.yml` 的 `configPath` 指产物 `composed.cordis.yml`（项目根，gitignore），删旧 `cordis.yml`（等价对照背书：按 id 逐项 JSON 相等含 `!!js` 原文）；⑤断言 ③ 落 `scripts/lint-patch.sh` 进 gate（第十门禁，列 lint:deps 后）+ action_log 留痕；⑥`npm run gate` 十门禁全绿 | **拓扑两项用户拍板**：方案 A 单进程多面、5173 保持未启用（验收按「5172/5174 两实 + 5173 预留」）。**关键发现两条**：plugin-include 把 ctx.baseUrl 覆写为清单文件所在目录（lib/index.js:425）——产物放 `data/` 会让 `./plugins/...` 相对路径与 loader-webui 依赖扫描全部失锚（实测启动即崩 data//package.json），产物必须落项目根，恰是 3.1 节「cordis.yml 退化为叠加结果」的原地置换；loader 层原生支持行级 `disabled: true`（entry.options.disabled），用户层停用语义零成本。红测两条均已实测（层间同 id 判红复绿；用户层停 debug-database-webui → 数据库页 chunk 404、check:console 退出码 1 → 还原复绿） |
+| 2026-09-29 | **P6 规划草案落表（未开工）**：用户提出架构级需求（Coding Agent 可插拔入驻）并拍板「先落规划」。落表四处：§3.2 新增 `space-agent` / `space-workdir` 两缝草案；§5 新增 P6 行（两条不变式：开会功能不回退 + 入驻=纯新增）；§6 新增断言 ⑪ 草案（入驻白名单 + 开会回归）；§7 新增决策 8 行 + 待定 8~10（工作区缝语义 / 任务回路 / 提示词接入——等原文）+ 拟升铁律 4 待拍板。需求原话与飞书截图已登记 project memory（截图备份 `ai-handover/需求-2026-09-29-角色提示词与实验冲突.png`） |

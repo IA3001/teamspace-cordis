@@ -73,3 +73,10 @@
 # ctx.ui 唯一提供者：各 client-ui 区域包往这一个实例登记 Panel 描述符。
 - id: ui-registry
   name: './plugins/ui-registry/index.ts'
+
+# ── 业务插件：P6（多智能体入驻，2026-09-29）────────────────────────────
+# ctx.agents 唯一提供者（机制行，P6 一次性建设；铁律 4：入驻 = 向 space-agent 缝注册）。
+# 此后的新 agent **不改本文件**：新增包 + 自带 bundle 层一行
+# （packages/bundle/space-agent-*/，compose 扫描自动发现）。
+- id: agent-registry
+  name: './plugins/agent-registry/index.ts'

@@ -1,0 +1,11 @@
+{
+  "name": "space-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.agents —— AgentDescriptor{kind: meeting|coding} + 生命周期状态机（idle/working/paused/done）+ 入驻/退驻/心跳。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

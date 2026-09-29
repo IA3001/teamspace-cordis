@@ -1,0 +1,11 @@
+{
+  "name": "space-workdir",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.workdir —— 每 agent 文件工作区（领取/创建/清理、路径隔离、execdir 铁则）。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

@@ -10,3 +10,30 @@ import type { Ref } from 'vue'
 
 /** 页面 entry 的 data（服务端 addEntry 第二参）：函数即 RPC，值即共享状态。 */
 export declare function useRpc<T = unknown>(): Ref<T>
+
+// ── 外壳路由 / 上下文（2026-09-29 改版新增：URL 同步会话选择 + 跨 entry 槽位视图）──
+// 依据 @cordisjs/client@0.8.2 实测源码：
+//   · client/plugins/router.ts —— RouterService.slot() 把组件注册进 views[type]，
+//     任意 <k-slot name={type}> 都会渲染它（外壳原生跨 entry 组合通道）；
+//   · client/plugins/router.ts —— replace()/currentRoute.query 支持编程导航；
+//   · client/context.ts —— useContext() 返回当前 entry 的 fiber ctx。
+
+/** 外壳路由位置的最小视图（本仓库只消费 path / query）。 */
+export interface ClientRoute {
+  path: string
+  query: Record<string, string>
+}
+
+/** 外壳路由器的最小视图（页面注册 / 槽位视图注册 / 编程导航 / 视图注册表）。 */
+export interface ClientRouter {
+  page(options: { path: string; name: string; icon?: string; order?: number; component: unknown }): unknown
+  slot(options: { type: string; component: unknown; order?: number }): unknown
+  replace(target: { path?: string; query?: Record<string, string | undefined> }): Promise<void>
+  /** 已注册的槽位视图（reactive；读 length 可判断某槽位是否有视图入驻）。 */
+  readonly views: Record<string, readonly unknown[]>
+}
+
+/** 当前组件所属 entry 的上下文（wrapComponent 注入的 kContext）。 */
+export declare function useContext(): { client: { router: ClientRouter } }
+export declare function useRouter(): ClientRouter
+export declare function useRoute(): ClientRoute

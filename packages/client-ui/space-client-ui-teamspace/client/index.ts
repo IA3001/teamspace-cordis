@@ -1,23 +1,38 @@
-// 团队空间整页（客户端）。
+// 团队空间整页（客户端）—— 2026-09-29 三区骨架改版（用户拍板方案落地）。
 //
-// 布局（用户拍板）：一屏定高——左「时间线」、右「轮次状态 + 成员」各自
-// el-scrollbar 内部滚动（height 组件 prop，非内联样式），输入区固定底部；
-// 时间线自动滚到最新一条。
-// 视觉（大道至简 + 功能齐）：el-timeline（作者彩签 + 时间轴）承载事件流，
-// el-descriptions 承载轮次状态，el-card 分区，快捷按钮直接发 /commit。
-// 原语全部来自外壳全局注册的 element-plus / k-*，零样式文件、零内联样式。
+// 布局（k-layout 外壳 chrome + 外壳共享布局类，零手写样式）：
+//   k-layout（.page-content：薄顶栏 .layout-header + .main-content flex 行）
+//   ├ #header 槽（薄顶栏左上角）：折叠开关 + 会话标题 + 状态徽章
+//   ├ #menu   槽（薄顶栏右上角）：「协作面板」呼出（el-drawer，默认收起）
+//   └ 默认槽 → .main-content（flex 行）：
+//       ├ aside.page-sidebar（左：会话栏，内容来自 'space-teamspace-sidebar'
+//       │   槽位视图 —— 由 space-client-ui-sessions 包经 router.slot 入驻；
+//       │   该包缺席时 k-slot 渲染为空，整页照常工作 = 纯新增可插拔）
+//       └ div.content-area（中：消息区 + composer）
+//           ├ div.content-body > el-scrollbar > div.k-content
+//           │   （消息列居中限宽 55rem、大留白；人类消息右对齐 el-card 气泡，
+//           │    agent/系统消息左对齐平文 + 角色标签；时间戳默认不显示，
+//           │    悬停消息行内揭示「作者 · 时间」—— 2026-09-30 回炉：弃 el-tooltip
+//           │    传送门（长会话下 popper 弹出不确定），改组件状态驱动的行内揭示，
+//           │    真实鼠标与测试注入两条路径都确定可见）
+//           └ div.k-content > composer 卡片（悬浮卡片化：贴底居中，不再通栏）
 //
-// @ 提及：输入 @ 浮出候选（目标 agent + 人类，协调者不可被调用），点选插入
-// @id；服务端把 @token 与在册成员精确匹配并随条目持久化（迁移 0005），
-// /commit 合并进 events.mentions —— orchestrator 的 mentionHints 由此而来。
-// 发送走 handleInbound（staging-commands 语义处理体），与 HTTP 入站同路径。
-import { defineComponent, h, nextTick, onMounted, onUnmounted, ref, resolveComponent, watch } from 'vue'
-import { useRpc } from '@cordisjs/client'
+// 不可回退的既有交互（原样保留）：普通文本自动暂存 +「已记下 #N」回执、
+// closable el-tag 暂存条目（点 × = /del）、/cur //commit 并入斜杠联想菜单、
+// @ 联想浮层（el-popover virtual-triggering）与完整键盘导航（↑↓/Enter/Tab/
+// Esc/Shift+Enter/菜单关时 Enter 直发）、右面板数据口径（轮次状态/暂停原因/
+// 调用次数/本回合已委托 + 可@成员）、发送走 handleInbound 与 HTTP 入站同路径。
+//
+// 会话选中态走 URL（?session=<id>）：会话栏（独立 entry）与本页经外壳 router
+// 单例同步，无跨包共享状态。
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, resolveComponent, watch } from 'vue'
+import { useRpc, useContext, useRoute, useRouter } from '@cordisjs/client'
 import EventItem from 'space-client-ui-shared/client/EventItem.ts'
+import IconBtn from 'space-client-ui-shared/client/IconBtn.ts'
 import { authorLabel, formatTime } from 'space-client-ui-shared/client/labels.ts'
 import type { EventLite, MemberLite } from 'space-client-ui-shared/client/labels.ts'
 
-interface SessionLite { id: string; title: string }
+interface SessionLite { id: string; title: string; status: string }
 interface StagingEntry { id: string; seq: number; text: string; authorId: string }
 interface TurnLite {
   state: string
@@ -45,15 +60,16 @@ const STOP_LABEL: Record<string, string> = {
   duplicate_target: '同轮重复委托',
   '': '—',
 }
+/** 会话状态徽章（sessions.status：open/closed）。 */
+const sessionStatus = (s: SessionLite) =>
+  ({ label: s.status === 'closed' ? '已结束' : '进行中', tag: s.status === 'closed' ? 'info' : 'success' })
 
 /** 可被 @ 的角色（目标 agent + 人类）——协调者不在清单。 */
 const MENTION_ROLES = new Set(['会议记录官', '挑战者', '需求分析师', 'DRI', '成员'])
 
-/** 成员标签配色：DRI 绿（审批权），目标 agent 蓝，其他灰。 */
-const roleTagType = (role: string) => (role === 'DRI' ? 'success' : MENTION_ROLES.has(role) ? 'primary' : 'info')
-
-/** 中间/右列滚动区固定高：视口减去输入区/标题/外壳占位。 */
-const PANE_HEIGHT = 'calc(100vh - 300px)'
+/** 中间消息列与 composer 共用的居中限宽容器：外壳 k-content 的现成类
+ *  （max-width 55rem + margin auto + 响应式内边距，即「业界 ~720px 观感」）。 */
+const CENTERED = 'k-content'
 
 const TeamspacePage = defineComponent({
   name: 'SpaceTeamspace',
@@ -67,6 +83,9 @@ const TeamspacePage = defineComponent({
       turn(sessionId: string): Promise<TurnLite>
       send(sessionId: string, authorId: string, text: string, mentions?: string[]): Promise<SendResult>
     }>()
+    const appCtx = useContext()
+    const router = useRouter()
+    const route = useRoute()
 
     const sessions = ref([]) as { value: SessionLite[] }
     const members = ref([]) as { value: MemberLite[] }
@@ -74,16 +93,28 @@ const TeamspacePage = defineComponent({
     const staging = ref([]) as { value: StagingEntry[] }
     const turn = ref(null) as { value: TurnLite | null }
     const activeId = ref('')
-    const authorId = ref('u_dri')
     const draft = ref('')
     const reply = ref('')
     const replyOk = ref(true)
     const menu = ref(null) as { value: Menu }
     const activeIdx = ref(0)
-    const inputEl = ref(null) as { value: HTMLElement | null }
+    const inputEl = ref(null) as { value: HTMLTextAreaElement | null }
     const commands = ref([]) as { value: CommandLite[] }
+    const drawerOpen = ref(false)
+    /** 悬停揭示「作者 · 时间」的消息 id —— 必须住 setup 体：render 体内声明
+     *  会被每次重渲染重建（4s 轮询即触发），悬停状态随渲染丢弃（第四轮根因）。 */
+    const hoveredId = ref('')
+    /** 左栏开关：宽屏默认展开、窄视口默认收起（业界统一：开关在中央顶栏左上角）。 */
+    const railOpen = ref(!window.matchMedia('(max-width: 768px)').matches)
+    /** 会话栏是否已入驻（sessions 包缺席 → 左区整体不渲染，折叠开关随之隐藏）。 */
+    const hasRail = computed(() => (appCtx.client.router.views['space-teamspace-sidebar']?.length ?? 0) > 0)
     const scrollbar = ref<{ setScrollTop: (v: number) => unknown } | null>(null)
     let timer: ReturnType<typeof setInterval> | undefined
+
+    const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
+    /** 发送身份：所选会话的 DRI（成员表缺 DRI 时降级为调试期约定身份 u_dri）。 */
+    const authorId = computed(() =>
+      members.value.find((m) => m.role === 'DRI')?.principalId ?? 'u_dri')
 
     const mentionCandidates = () => members.value.filter((m) => MENTION_ROLES.has(m.role))
 
@@ -92,11 +123,19 @@ const TeamspacePage = defineComponent({
     //  @ 联想：结尾的 "@token" —— token 与成员 id / 角色名子串匹配
     const slashRe = /(?:^|\n)\/([a-z]*)$/i
     const mentionRe = /@([\w\u4e00-\u9fa5-]*)$/
+    // 空匹配（如「@第一行」无人可匹配）一律视为菜单关闭 —— 空浮层是竞态温床：
+    // 用户以为存在选中态，Enter 却落进直发分支把原文发出（2026-09-29 回炉实测）。
     function deriveMenu(text: string): Menu {
       const slash = slashRe.exec(text)
-      if (slash) return { kind: 'slash', query: slash[1]!.toLowerCase() }
+      if (slash) {
+        const q = slash[1]!.toLowerCase()
+        return slashItems(q).length ? { kind: 'slash', query: q } : null
+      }
       const at = mentionRe.exec(text)
-      if (at) return { kind: 'mention', query: at[1]!.toLowerCase() }
+      if (at) {
+        const q = at[1]!.toLowerCase()
+        return mentionItems(q).length ? { kind: 'mention', query: q } : null
+      }
       return null
     }
     const slashItems = (q: string) => commands.value.filter((c) => c.name.startsWith(q))
@@ -112,9 +151,14 @@ const TeamspacePage = defineComponent({
 
     async function load() {
       try {
-        if (sessions.value.length === 0) sessions.value = await rpc.value.sessions()
+        sessions.value = await rpc.value.sessions()
         if (commands.value.length === 0) commands.value = await rpc.value.commands()
-        if (!activeId.value && sessions.value.length > 0) activeId.value = sessions.value[0]!.id
+        // 缺省选中：URL 指定的会话优先，否则首个会话，并回写 URL（会话栏据此高亮）。
+        if (!activeId.value && sessions.value.length > 0) {
+          const initial = sessions.value.find((s) => s.id === route.query.session) ?? sessions.value[0]!
+          activeId.value = initial.id
+          if (route.query.session !== initial.id) void router.replace({ query: { session: initial.id } })
+        }
         if (!activeId.value) return
         const [ev, mb, st, tn] = await Promise.all([
           rpc.value.events(activeId.value),
@@ -133,20 +177,27 @@ const TeamspacePage = defineComponent({
       }
     }
 
-    function pick(id: string) {
-      activeId.value = id
-      events.value = []
-      void load()
-    }
+    // 会话栏改选 = 改 URL；本页只认 URL，唯一的选中真相源。
+    watch(() => route.query.session, (v) => {
+      if (v && v !== activeId.value) {
+        activeId.value = v
+        events.value = []
+        void load()
+      }
+    })
 
     function onDraft(v: string) {
       draft.value = v
       menu.value = deriveMenu(v)
-      activeIdx.value = 0
+      activeIdx.value = -1 // 打开菜单不预选高亮（P2：选中态只由键盘动作产生）
     }
 
-    // ── 键盘导航（业界惯例）：↑↓ 换选中项，Enter/Tab 补全，Esc 关闭；
-    //    菜单关闭时 Enter 直发、Shift+Enter 换行。
+    // ── 键盘状态机（2026-09-29 回炉定稿，单一 handler 无竞态）：
+    //    · Shift+Enter 恒换行 —— 先于一切分支放行，绝不 preventDefault；
+    //    · 菜单开（有候选）：Enter/Tab 恒确认选中项（未选过则确认第 0 项），
+    //      ↑↓ 换选中、Esc 关闭 —— Enter 只归菜单，绝不直发；
+    //    · 菜单关（无候选/已 Esc）：裸 Enter 直发。
+    //    菜单「开着」的定义 = 有候选（deriveMenu 已把空匹配折算成关闭）。
     function menuCount(): number {
       const m = menu.value
       if (!m) return 0
@@ -156,26 +207,46 @@ const TeamspacePage = defineComponent({
       const m = menu.value
       if (!m) return
       if (m.kind === 'slash') {
-        const c = slashItems(m.query)[activeIdx.value]
+        const items = slashItems(m.query)
+        const c = items[activeIdx.value] ?? items[0] // 未选过/越界 → 第 0 项
         if (c) pickCommand(c.name)
       } else {
-        const mm = mentionItems(m.query)[activeIdx.value]
+        const items = mentionItems(m.query)
+        const mm = items[activeIdx.value] ?? items[0]
         if (mm) insertMention(mm.principalId)
       }
     }
+    /** Shift+Enter 恒换行：preventDefault + 在光标处显式插 \n。不依赖浏览器
+     *  默认行为 —— 合成事件（测试注入）不会触发默认动作，显式插入才对真实
+     *  键盘与注入两条路径都成立（2026-09-30 回炉：旧写法裸 return 依赖默认
+     *  行为，合成注入下零换行）。 */
+    function insertNewline(): void {
+      const ta = inputEl.value
+      const text = draft.value
+      const start = ta?.selectionStart ?? text.length
+      const end = ta?.selectionEnd ?? text.length
+      const next = text.slice(0, start) + '\n' + text.slice(end)
+      onDraft(next)
+      if (ta) {
+        ta.value = next
+        ta.selectionStart = ta.selectionEnd = start + 1
+      }
+    }
     function onKeydown(e: KeyboardEvent): void {
+      if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); insertNewline(); return }
       const n = menuCount()
       if (n > 0) {
-        if (e.key === 'ArrowDown') { activeIdx.value = (activeIdx.value + 1) % n; e.preventDefault(); return }
-        if (e.key === 'ArrowUp') { activeIdx.value = (activeIdx.value - 1 + n) % n; e.preventDefault(); return }
+        if (e.key === 'ArrowDown') { activeIdx.value = activeIdx.value < 0 ? 0 : (activeIdx.value + 1) % n; e.preventDefault(); return }
+        if (e.key === 'ArrowUp') { activeIdx.value = activeIdx.value < 0 ? n - 1 : (activeIdx.value - 1 + n) % n; e.preventDefault(); return }
         if (e.key === 'Enter' || e.key === 'Tab') { pickActive(); e.preventDefault(); return }
         if (e.key === 'Escape') { menu.value = null; e.preventDefault(); return }
+        return
       }
-      if (e.key === 'Enter' && !e.shiftKey) { void sendText(draft.value); e.preventDefault() }
+      if (e.key === 'Enter') { void sendText(draft.value); e.preventDefault() }
     }
-    // 失焦延迟关闭：给浮层里的点选留出 mouseup 时间
+    // 失焦延迟关闭：给浮层里的点选留出 click 完成时间
     function onBlur(): void {
-      setTimeout(() => { if (menu.value && !menu.value) return; setTimeout(() => { menu.value = null }, 0) }, 150)
+      setTimeout(() => { menu.value = null }, 200)
     }
 
     /** 点选指令联想：把行尾 "/token" 补全成 "/name "（有参指令留给用户填参数）。 */
@@ -191,9 +262,14 @@ const TeamspacePage = defineComponent({
     }
 
     async function sendText(text: string) {
-      if (!activeId.value || !text.trim() || !authorId.value) {
+      if (!activeId.value) {
         replyOk.value = false
-        reply.value = '先选会议、选作者、写点什么'
+        reply.value = '请先选择或新建一个会议'
+        return
+      }
+      if (!text.trim()) {
+        replyOk.value = false
+        reply.value = '请输入内容再发送'
         return
       }
       try {
@@ -222,85 +298,129 @@ const TeamspacePage = defineComponent({
     onUnmounted(() => clearInterval(timer))
 
     return () => {
+      const ElButton = resolveComponent('el-button') as unknown as string
       const ElCard = resolveComponent('el-card') as unknown as string
       const ElRow = resolveComponent('el-row') as unknown as string
-      const ElCol = resolveComponent('el-col') as unknown as string
-      const ElSelect = resolveComponent('el-select') as unknown as string
-      const ElOption = resolveComponent('el-option') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
-      const ElButton = resolveComponent('el-button') as unknown as string
       const ElTag = resolveComponent('el-tag') as unknown as string
       const ElEmpty = resolveComponent('el-empty') as unknown as string
       const ElScrollbar = resolveComponent('el-scrollbar') as unknown as string
       const ElPopover = resolveComponent('el-popover') as unknown as string
-      const ElAlert = resolveComponent('el-alert') as unknown as string
-      const KLayout = resolveComponent('k-layout') as unknown as string
+      const KCard = resolveComponent('k-card') as unknown as string
+      const ElDrawer = resolveComponent('el-drawer') as unknown as string
+      const ElDivider = resolveComponent('el-divider') as unknown as string
+      const ElText = resolveComponent('el-text') as unknown as string
       const ElTimeline = resolveComponent('el-timeline') as unknown as string
       const ElTimelineItem = resolveComponent('el-timeline-item') as unknown as string
       const ElDescriptions = resolveComponent('el-descriptions') as unknown as string
       const ElDescriptionsItem = resolveComponent('el-descriptions-item') as unknown as string
+      const KLayout = resolveComponent('k-layout') as unknown as string
+      const KIcon = resolveComponent('k-icon') as unknown as string
+      const KSlot = resolveComponent('k-slot') as unknown as string
 
-      const sessionSelect = () => h(ElSelect, {
-        modelValue: activeId.value,
-        'onUpdate:modelValue': pick,
-        filterable: true,
-        placeholder: '选择会议',
-      }, {
-        default: () => sessions.value.map((s) => h(ElOption, { key: s.id, label: `${s.title}（${s.id}）`, value: s.id })),
-      })
+      // ── 薄顶栏（k-layout #header / #menu 槽，外壳 .layout-header 44px）──
+      const activeStatus = activeSession.value ? sessionStatus(activeSession.value) : null
+      const topbarLeft = () => [
+        hasRail.value
+          ? h(ElButton, {
+              key: 'rail-toggle', text: true, onClick: () => { railOpen.value = !railOpen.value },
+            }, { default: () => h(KIcon, { name: railOpen.value ? 'chevron-left' : 'chevron-right' }) })
+          : null,
+        h('span', { class: 'layout-header-title', key: 'title' },
+          activeSession.value?.title ?? '未选择会议'),
+        activeStatus
+          ? h(ElTag, {
+              key: 'status', size: 'small', type: activeStatus.tag,
+            }, { default: () => activeStatus.label })
+          : null,
+      ]
+      const topbarRight = () => [
+        turn.value?.state === 'static'
+          ? h(ElTag, { key: 'paused', size: 'small', type: 'warning' }, { default: () => '已暂停' })
+          : null,
+        h(ElButton, {
+          key: 'panel', text: true, onClick: () => { drawerOpen.value = true },
+        }, { default: () => '协作面板' }),
+      ]
 
-      // ── 左：时间线卡（header = 会议选择；body = el-timeline 内部滚动）──
-      const timelineCard = h(ElCard, { shadow: 'hover' }, {
-        header: () => sessionSelect(),
-        default: () => h(ElScrollbar, { height: PANE_HEIGHT, ref: scrollbar }, {
-          default: () => events.value.length === 0
-            ? [h(ElEmpty, { description: '还没有事件 —— 在下方输入区发言，/commit 提交后这里出现时间线' })]
-            : [h(ElTimeline, {}, {
-                default: () => events.value.map((ev) => h(ElTimelineItem, {
-                  key: ev.id,
-                  timestamp: formatTime(ev.ts),
-                  placement: 'top',
-                  type: ev.authorKind === 'human' ? 'primary' : ev.authorKind === 'agent' ? 'success' : 'info',
-                  hollow: ev.authorKind !== 'human',
-                }, { default: () => h(EventItem, { event: ev, members: members.value }) })),
-              })],
-        }),
-      })
+      // ── 消息行（时间戳默认不显示；悬停消息行内揭示「作者 · 时间」）──────
+      // 2026-09-30 回炉：弃 el-tooltip —— popper 走传送门，弹出不确定；改
+      // hoveredId（setup 级 ref）驱动的行内揭示。⚠ 第四轮二次回炉根因：ref
+      // 曾误声明在这个 render 体内 —— 页面 4s 轮询等任何重渲染都会重建 ref，
+      // 悬停状态随渲染丢弃，揭示条件永不成立（真实 CDP 复现坐实）。修法：
+      // ref 上移 setup 体，跨重渲染存续。
+      const messageRow = (ev: EventLite) => {
+        const main = ev.authorKind === 'human'
+          // 人类消息 = 右对齐气泡（el-card 作为 el-row 的直接子项按内容收缩）
+          ? h(ElRow, { justify: 'end' }, {
+              default: () => h(ElCard, { shadow: 'never' }, { default: () => h('div', ev.text) }),
+            })
+          // agent/系统消息 = 左对齐平文 + 角色标签（shared 的 EventItem，只此一份）
+          : h(EventItem, { event: ev, members: members.value })
+        return h(ElTimelineItem, {
+          key: ev.id,
+          type: ev.authorKind === 'human' ? 'primary' : ev.authorKind === 'agent' ? 'success' : 'info',
+          hollow: ev.authorKind !== 'human',
+        }, { default: () => h('div', {
+            onMouseenter: () => { hoveredId.value = ev.id },
+            onMouseleave: () => { if (hoveredId.value === ev.id) hoveredId.value = '' },
+          }, [
+            main,
+            hoveredId.value === ev.id
+              ? h(ElText, { size: 'small', type: 'info' },
+                  { default: () => `${authorLabel(ev.authorId, members.value)} · ${formatTime(ev.ts)}` })
+              : null,
+          ]) })
+      }
 
-      // ── 右上：轮次状态（el-descriptions 一屏看清）────────────────────
+      const messageArea = h('div', { class: CENTERED }, [
+        !activeId.value
+          ? h(ElEmpty, { description: '还没有会议 —— 点左侧「新会议」开始协作' })
+          : events.value.length === 0
+            ? h(ElEmpty, { description: '还没有事件 —— 在下方输入区发言，/commit 提交后这里出现时间线' })
+            : h(ElTimeline, {}, { default: () => events.value.map(messageRow) }),
+      ])
+
+      // ── 协作面板（el-drawer 默认收起，顶栏按钮按需呼出；数据口径不变）──
       const t = turn.value
-      const turnCard = h(ElCard, { shadow: 'hover' }, {
+      const panelCard = h(ElCard, { shadow: 'hover' }, {
         header: () => [
-          h(ElTag, { size: 'small', type: t ? (STATE_TAG[t.state] ?? 'info') : 'info' }, { default: () => t ? (STATE_LABEL[t.state] ?? t.state) : '无回合' }),
+          h(ElTag, { size: 'small', type: t ? (STATE_TAG[t.state] ?? 'info') : 'info' },
+            { default: () => t ? (STATE_LABEL[t.state] ?? t.state) : '无回合' }),
           ' 协作轮次',
         ],
-        default: () => h(ElDescriptions, { column: 1, border: true, size: 'small' }, {
-          default: () => [
-            h(ElDescriptionsItem, { label: '暂停原因' }, { default: () => t ? (STOP_LABEL[t.stopReason] ?? (t.stopReason || "—")) : '—' }),
-            h(ElDescriptionsItem, { label: '说明' }, { default: () => t?.stopDetail || '—' }),
-            h(ElDescriptionsItem, { label: '协调者调用（本回合）' }, { default: () => String(t?.decisionCalls ?? 0) }),
-            h(ElDescriptionsItem, { label: '本回合已委托' }, { default: () => t && t.delegatedTargets.length ? t.delegatedTargets.join('、') : '（无）' }),
-          ],
-        }),
+        default: () => [
+          h(ElDescriptions, { column: 1, border: true, size: 'small' }, {
+            default: () => [
+              h(ElDescriptionsItem, { label: '暂停原因' }, { default: () => t ? (STOP_LABEL[t.stopReason] ?? (t.stopReason || "—")) : '—' }),
+              h(ElDescriptionsItem, { label: '说明' }, { default: () => t?.stopDetail || '—' }),
+              h(ElDescriptionsItem, { label: '协调者调用（本回合）' }, { default: () => String(t?.decisionCalls ?? 0) }),
+              h(ElDescriptionsItem, { label: '本回合已委托' }, { default: () => t && t.delegatedTargets.length ? t.delegatedTargets.join('、') : '（无）' }),
+            ],
+          }),
+          h(ElDivider, { contentPosition: 'left' }, { default: () => '可 @ 的成员（协调者不可被调用）' }),
+          mentionCandidates().length
+            ? h(ElRow, { gutter: 8 }, {
+                default: () => mentionCandidates().map((m) => h(ElTag, {
+                  key: m.principalId, size: 'small',
+                  type: m.role === 'DRI' ? 'success' : 'primary',
+                }, { default: () => `${m.role}（${m.principalId}）` })),
+              })
+            : h(ElEmpty, { description: '暂无在册成员', imageSize: 60 }),
+        ],
       })
+      const collabDrawer = h(ElDrawer, {
+        modelValue: drawerOpen.value,
+        'onUpdate:modelValue': (v: boolean) => { drawerOpen.value = v },
+        title: '协作面板',
+        size: 420,
+      }, { default: () => panelCard })
 
-      // ── 右下：成员（可 @ 清单，角色配色）─────────────────────────────
-      const memberTag = (m: MemberLite) =>
-        h(ElTag, { key: m.principalId, size: 'small', type: roleTagType(m.role) }, { default: () => `${m.role}（${m.principalId}）` })
-      const ElSpace = resolveComponent('el-space') as unknown as string
-      const membersCard = h(ElCard, { shadow: 'hover' }, {
-        header: () => '可 @ 的成员（协调者不可被调用）',
-        default: () => mentionCandidates().length
-          ? [h(ElSpace, { wrap: true, size: 8 }, { default: () => mentionCandidates().map(memberTag) })]
-          : [h(ElEmpty, { description: '暂无在册成员', imageSize: 60 })],
-      })
-
-      // ── 联想菜单面板（/ 指令带 usage；@ 成员带角色）────────────────────
       // ── 联想浮层（el-popover 虚拟锚定输入框，placement top-start）──────
-      // 菜单行 = 文本按钮：键盘选中项高亮（type primary），点选补全。
+      // 菜单项统一渲染（P2：无特配色、无常亮主色）；高亮只属于键盘选中项。
       const menuRow = (i: number, label: string, hint: string, onClick: () => void) =>
         h('div', { key: `${i}-${label}` }, h(ElButton, {
-          text: true, type: i === activeIdx.value ? 'primary' : 'info', onClick,
+          text: true, ...(i === activeIdx.value ? { type: 'primary' } : {}), onClick,
         }, { default: () => [h('b', label), `　${hint}`] }))
       const menuContent = () => {
         const m = menu.value
@@ -324,78 +444,89 @@ const TeamspacePage = defineComponent({
         width: 560,
       }, { default: menuContent })
 
-      const stagingLine = (e: StagingEntry) => h(ElTag, {
-        key: e.id, size: 'large', type: 'info',
-        closable: e.authorId === authorId.value, // 只有作者能撤自己的条目（服务端 /del 再校验一次）
-        onClose: () => void sendText(`/del ${e.seq}`),
-      }, { default: () => `#${e.seq} ${authorLabel(e.authorId, members.value)}：${e.text}` })
-      const composer = h(ElCard, { shadow: 'hover' }, {
-        header: () => '输入区 —— Enter 发送 / Shift+Enter 换行；/ 指令联想；@ 成员联想',
-        default: () => [
-          suggestionPopover(),
-          h(ElRow, { gutter: 8, align: 'middle' }, {
-            default: () => [
-              h(ElCol, { span: 8 }, {
-                default: () => h(ElSelect, {
-                  modelValue: authorId.value,
-                  'onUpdate:modelValue': (v: string) => { authorId.value = v },
-                  placeholder: '我是谁（调试期自报）',
-                }, {
-                  default: () => members.value.filter((m) => m.role === 'DRI' || m.role === '成员')
-                    .map((m) => h(ElOption, { key: m.principalId, label: `${m.role}（${m.principalId}）`, value: m.principalId })),
-                }),
-              }),
-              h(ElCol, { span: 16 }, {
-                default: () => h(ElRow, { justify: 'end' }, {
-                  default: () => [
-                    h(ElButton, { type: 'success', plain: true, onClick: () => void sendText('/commit') }, { default: () => '/commit 提交暂存' }),
-                    h(ElButton, { type: 'primary', onClick: () => void sendText(draft.value) }, { default: () => '发送' }),
-                  ],
-                }),
-              }),
-            ],
-          }),
-          h(ElInput, {
-            modelValue: draft.value,
-            'onUpdate:modelValue': onDraft,
-            onKeydown,
-            onBlur,
-            ref: (inst) => { inputEl.value = (inst as { textarea?: HTMLElement } | null)?.textarea ?? null },
-            type: 'textarea',
-            rows: 3,
-            placeholder: '输入发言…（/ 指令联想；@ 提及成员；Enter 发送，Shift+Enter 换行）',
-          }),
-          reply.value ? h(ElAlert, {
-            title: reply.value, type: replyOk.value ? 'success' : 'error', closable: true,
-            onClose: () => { reply.value = '' },
-          }) : null,
-          staging.value.length === 0
-            ? h('span', '暂存区为空 —— 普通文本自动入暂存（不触发协调者），/commit 才提交')
-            : [h(ElSpace, { wrap: true, size: 8 }, { default: () => staging.value.map(stagingLine) })],
-        ],
-      })
+      // × 用显式按钮（shared IconBtn）：el-tag 内置 close 是内部 SVG，点击命中
+      // 有歧义且无法标 aria-label（2026-09-29 回炉实测）。
+      // 只有作者能看到 ×（服务端 /del 对非作者仍会再校验一次）。
+      const stagingLine = (e: StagingEntry) => h('span', { key: e.id }, [
+        h(ElTag, { size: 'large', type: 'info' },
+          { default: () => `#${e.seq} ${authorLabel(e.authorId, members.value)}：${e.text}` }),
+        e.authorId === authorId.value
+          ? h(IconBtn, {
+              icon: 'times-full',
+              label: `删除暂存条目 #${e.seq}（等价于 /del ${e.seq}）`,
+              onPress: () => void sendText(`/del ${e.seq}`),
+            })
+          : null,
+      ])
 
-      // 根布局（官方 home/settings 同款：页面自己渲染 k-layout）：
-      //   k-layout（外壳负责顶栏标题/菜单/主体全屏 flex）
-      //   └ div.content-area（占满 main-content：flex column）
-      //      ├ el-scrollbar.content-body（flex:1，内部滚动 —— 时间线再长不撑爆页面）
-      //      │   └ el-row（列宽响应式：宽屏 16/8 双栏，窄屏 xs=24 自动叠单列）
-      //      └ 输入区（滚动区之外，自然固定在底部）
-      // ⚠ 两件实测踩过的坑：①页面根不能用 k-content（max-width 55rem 居中，
-      //   那是设置文档页容器）；②不渲染 k-layout 的话页面直接裸在顶层，
-      //   没有顶栏也不占导航右侧区域。
-      return h(KLayout, { main: 'page-teamspace' }, {
-        default: () => h('div', { class: 'content-area' }, [
-          h(ElScrollbar, { class: 'content-body' }, {
-            default: () => h(ElRow, { gutter: 16 }, {
-              default: () => [
-                h(ElCol, { xs: 24, md: 16 }, { default: () => timelineCard }),
-                h(ElCol, { xs: 24, md: 8 }, { default: () => [turnCard, membersCard] }),
-              ],
+      // ── composer 悬浮卡片（贴底居中，不再通栏）──────────────────────────
+      // 说明书式提示从黄金位置降级为卡片下一行小字（el-text）。
+      // 外层普通 div 作 content-area 的 flex item（占满整行）；k-content 在块级流里
+      // 才能填满至 max-width 并由 margin auto 居中 —— flex item 上的 margin:auto
+      // 会吞掉 stretch 收缩成内容宽（实测踩中）。
+      const composer = h('div', [
+        h('div', { class: CENTERED }, [
+        suggestionPopover(),
+        // k-card（外壳原语，首选）：圆角 8px，背景与阴影由组件自带的语义令牌
+        // （映射外壳 elevated / shadow 档）承担 —— props 零手写（P2 悬浮卡片质感）。
+        h(KCard, null, {
+          default: () => [
+            h(ElInput, {
+              modelValue: draft.value,
+              'onUpdate:modelValue': onDraft,
+              onKeydown,
+              onBlur,
+              ref: (inst) => { inputEl.value = (inst as { textarea?: HTMLTextAreaElement } | null)?.textarea ?? null },
+              type: 'textarea',
+              rows: 3,
+              placeholder: '输入发言…（/ 召唤指令联想；@ 提及成员；Enter 发送，Shift+Enter 换行）',
             }),
-          }),
-          composer,
+            h(ElRow, { justify: 'end' }, {
+              default: () => h(ElButton, { type: 'primary', onClick: () => void sendText(draft.value) },
+                { default: () => '发送' }),
+            }),
+            // 回执轻量化（P2：整行 alert 挤占空间）——行内小标签 + 文本，肉眼可见不变
+            reply.value ? h('span', [
+              h(ElTag, { size: 'small', type: replyOk.value ? 'success' : 'error' },
+                { default: () => (replyOk.value ? '回执' : '出错') }),
+              h('span', ` ${reply.value}`),
+              h(IconBtn, { icon: 'times-full', label: '关闭回执', onPress: () => { reply.value = '' } }),
+            ]) : null,
+            staging.value.length === 0
+              ? h('span', '暂存区为空')
+              : staging.value.map(stagingLine),
+          ],
+        }),
+        h('div', [
+          h(ElText, { size: 'small', type: 'info' },
+            { default: () => '普通文本自动暂存（不触发协调者），/commit 提交暂存' }),
         ]),
+        ]),
+      ])
+
+      // ── 根布局：k-layout（外壳 chrome）+ 三区骨架 ────────────────────────
+      // 左区 = 会话栏槽位视图（sessions 包入驻；缺席时 k-slot 渲染为空，
+      // 页面不 import 该包 —— 入驻 = 纯新增）。中/右 = 中央列。
+      return h(KLayout, { main: 'page-teamspace' }, {
+        header: topbarLeft,
+        menu: topbarRight,
+        default: () => [
+          // 折叠不做动画（第四轮回炉拍板）：过渡是锦上添花，确定性一票否决 ——
+          // 标准件过渡机制存在环境性失效面（仲裁实测零过渡事件 + 折叠后交互
+          // 病态恶化），弃用动画换折叠/展开瞬时可靠、零过渡风险。
+          railOpen.value && hasRail.value
+            ? h('aside', { class: 'page-sidebar' }, [
+                h(KSlot, { name: 'space-teamspace-sidebar', single: true }),
+              ])
+            : null,
+          h('div', { class: 'content-area' }, [
+            h('div', { class: 'content-body' }, [
+              h(ElScrollbar, { ref: scrollbar }, { default: () => messageArea }),
+            ]),
+            composer,
+          ]),
+          collabDrawer,
+        ],
       })
     }
   },

@@ -1,0 +1,17 @@
+{
+  "name": "space-client-ui-sessions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "client-ui：左侧会话栏（新会议 + 按状态分组的会话列表 + 当前身份）。经外壳 k-slot 视图入驻整页，纯新增不改既有页（铁律 4 精神）",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-ui": "*"
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  },
+  "scripts": {
+    "build": "vite build --manifest manifest.json"
+  }
+}

@@ -34,6 +34,7 @@ fi
 
 PAGES=(
   "space-client-ui-teamspace|团队空间"
+  "space-client-ui-sessions|会话栏"
 )
 
 for entry in "${PAGES[@]}"; do

@@ -5,7 +5,7 @@
 // 依赖方向由 scripts/lint-deps.sh 强制（依据 dev-cordis/MODULE-PLAN.md 第 3.7 节 / 断言 ①②）。
 //
 // 词汇（承旧 elements/ui/，P4 2026-09-28 补真）：
-//   Panel{key, slot, title, order} + 槽位常量 right / bottom / composer
+//   Panel{key, slot, title, order} + 槽位常量 left / right / bottom / composer
 //   约定：后端只给 key，前端按 key 找组件，未知 key 降级占位（承旧口径）。
 //
 // 与 webui 页面的关系：webui 的 page/entry 是「整页」单位（菜单项），
@@ -23,10 +23,10 @@ declare module 'cordis' {
 
 // ── 槽位词汇 ──────────────────────────────────────────────────────────────
 
-/** 页内区域槽位（承旧 elements/ui 的槽位常量）。 */
-export type PanelSlot = 'right' | 'bottom' | 'composer'
+/** 页内区域槽位（承旧 elements/ui 的槽位常量；left = 左侧会话栏，2026-09-29 改版新增）。 */
+export type PanelSlot = 'left' | 'right' | 'bottom' | 'composer'
 
-export const PANEL_SLOTS: readonly PanelSlot[] = ['right', 'bottom', 'composer']
+export const PANEL_SLOTS: readonly PanelSlot[] = ['left', 'right', 'bottom', 'composer']
 
 // ── 数据形状 ──────────────────────────────────────────────────────────────
 

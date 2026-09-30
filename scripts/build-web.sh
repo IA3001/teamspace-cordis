@@ -8,7 +8,7 @@ cd "$REPO_ROOT"
 NODE_BIN="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}"
 export PATH="$NODE_BIN:$PATH"
 
-PAGES=(space-client-ui-teamspace)
+PAGES=(space-client-ui-teamspace space-client-ui-sessions)
 
 printf '构建 client-ui 页面包（产物 dist/ 不入库，运行时 devMode:false 只读产物）\n'
 for p in "${PAGES[@]}"; do

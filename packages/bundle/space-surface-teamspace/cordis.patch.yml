@@ -42,3 +42,11 @@
   name: './packages/client-ui/space-client-ui-teamspace/src/index.ts'
   isolate:
     webui: teamspace
+
+# 左侧会话栏（2026-09-29 改版，铁律 4「入驻 = 纯新增」的形状证据）：
+# 不注册页面（不加菜单项），client 侧经 router.slot 挂到整页预留的
+# 'space-teamspace-sidebar' 槽位；停用本行 = 槽位无视图 = 页面左区自然收空。
+- id: client-ui-sessions
+  name: './packages/client-ui/space-client-ui-sessions/src/index.ts'
+  isolate:
+    webui: teamspace

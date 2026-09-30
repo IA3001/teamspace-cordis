@@ -28,6 +28,10 @@ import type { CommandCtx } from 'space-command'
 import { CommandService } from 'space-command'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
 import { apply as stubApply } from '../plugins/agent-coder-stub/index.ts'
+import { LocalWorkdirService } from '../packages/impl/space-workdir-local/src/index.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // ── 断言器 ────────────────────────────────────────────────────────────────
 let failures = 0
@@ -79,6 +83,7 @@ const WHITELIST_PREFIXES = [
   'packages/bundle/space-agent-',
   'plugins/agent-',
   'scripts/verify-agents.ts',
+  'scripts/verify-workdir.ts',
 ]
 /** 扫描范围：业务源码 + 脚本（node_modules/dist/产物不扫）。 */
 const SCAN_ROOTS = ['src', 'plugins', 'packages', 'scripts', 'config']
@@ -137,6 +142,9 @@ async function partA(): Promise<void> {
   const ctx = new Context()
   const agents = new AgentRegistry(ctx) // 构造即 provide（承 ui-registry 同款）
   const commands = new CommandService(ctx)
+  // P6 收尾：/tell 干活路径要领工作区（写文件级 stub）——harness 补临时目录 workdir
+  const tmp = mkdtempSync(join(tmpdir(), 'agents-verify-'))
+  new LocalWorkdirService(ctx, tmp)
   stubApply(ctx) // 报到（agent.coder）+ 注册 /tell —— 与运行时完全同一条路径
 
   const S = 's_a'
@@ -230,6 +238,7 @@ async function partA(): Promise<void> {
   }
   agents.setStatus('agent.coder', 'done')
   agents.setStatus('agent.coder', 'idle') // 还原
+  rmSync(tmp, { recursive: true, force: true })
 }
 
 // ══════════════════════════════════════════════════════════════════════════

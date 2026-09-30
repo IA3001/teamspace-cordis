@@ -19,7 +19,6 @@
 // 不触发的死代码。原始文本进 policy 解析，门禁用桩大脑离线重放全部分支。
 import { Service } from 'cordis'
 import type { Context } from 'cordis'
-import type { Role } from 'space-session'
 import type { PlanPayload } from 'space-staging'
 import type { SessionEvent } from 'space-event'
 
@@ -33,6 +32,13 @@ declare module 'cordis' {
   interface Events {
     /** 回合进入静止（暂停）时恰好一次。订阅：ctx.on('orchestrator/pause', (p) => ...)。 */
     'orchestrator/pause'(this: Context, payload: PausePayload): void
+    /**
+     * 引擎产出了合法委托，交执行链去干活（P6 收尾，2026-09-30）。
+     * 订阅：ctx.on('orchestrator/delegate', (p) => ...) —— 执行方（如
+     * agent-coder-stub）认领自己名下的 target，干完调 ctx.orchestrator
+     * 的收执口回报。引擎本身不执行（职责分家：决策归引擎、执行归执行链）。
+     */
+    'orchestrator/delegate'(this: Context, payload: DelegatePayload): void
   }
 }
 
@@ -87,8 +93,12 @@ export interface PlanRequest {
    * @ 与自然语言冲突时以自然语言为准（承旧 MentionHints 口径）。
    */
   mentionHints: string[]
-  /** 本会话当前可被授权的目标名单（在册目标 agent 角色，来自 policy）。 */
-  targets: readonly Role[]
+  /**
+   * 本会话当前可被授权的目标名单：会议三机器人角色（来自 policy 纯函数）+
+   * 在册 coding agent 的 title（P6 收尾，名册制）。放宽为 string ——
+   * 授权校验归引擎（isAuthorizedTarget），类型不拦（承 Delegation.target 口径）。
+   */
+  targets: readonly string[]
 }
 
 // ── 回合状态机（承旧 Turn / State / Pause）────────────────────────────────
@@ -110,6 +120,8 @@ export type StopReason =
   | 'coordinator_empty'
   /** 同一轮内对同一目标的重复委托被拒。 */
   | 'duplicate_target'
+  /** coding 名册里找不到被委托的目标（引擎-名册不同步，编程错误）。 */
+  | 'coding_target_unknown'
 
 /** 一个回合的状态快照（承旧 Turn，只保留人类授权制下仍在用的字段）。 */
 export interface Turn {
@@ -124,11 +136,25 @@ export interface Turn {
   stopDetail: string
 }
 
-/** 'orchestrator/pause' 的载荷：谁停的、为什么停。 */
+/** 'orchestrator/pause' 的载荷：谁停的、为什么停。stopReason 与 Turn 对齐为
+ *  string（Turn 的空串语义 = 没停；具体取值约定见 StopReason）。 */
 export interface PausePayload {
   sessionId: string
   stopReason: string
   stopDetail: string
+}
+
+/**
+ * 'orchestrator/delegate' 的载荷（P6 收尾）：引擎产出的合法委托。
+ * target 是授权名单里的一项 —— 会议机器人 = 角色（如「会议记录官」），
+ * coding agent = 名册 title 或 id（承 /tell 的双口径解析先例）。
+ */
+export interface DelegatePayload {
+  sessionId: string
+  /** 触发本轮 Plan 的人类事件 id（追溯用）。 */
+  eventId: string
+  target: string
+  instruction: string
 }
 
 /** 一次 Plan 的可断言产物（承旧 StepResult）。 */
@@ -203,6 +229,15 @@ export abstract class OrchestratorService extends Service {
    * （await_human）。没有在途委托时调用 → not_delegating。
    */
   abstract reportFeedback(sessionId: string, target: string, text: string): SessionEvent
+
+  /**
+   * coding agent 收执口（P6 收尾）：委托执行方（agent-coder-stub 等）干完活
+   * 回报结果。与 reportFeedback 同一暂停语义（收到反馈必须停），但落事件时
+   * 按 coding 名册（ctx.agents）解析 authorId —— coding agent 不进会话成员
+   * 名册，reportFeedback 的 member.role 查找对它必然落空（not_delegating），
+   * 这是名册制的刻意分工，不是漏改。没有在途委托 → not_delegating。
+   */
+  abstract reportCodingResult(sessionId: string, target: string, text: string): SessionEvent
 
   /** 回合状态快照（无记录的会话返回默认静止回合）。 */
   abstract turn(sessionId: string): Turn

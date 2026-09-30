@@ -80,3 +80,9 @@
 # （packages/bundle/space-agent-*/，compose 扫描自动发现）。
 - id: agent-registry
   name: './plugins/agent-registry/index.ts'
+
+# ctx.workdir 的本机实现（P6 收尾，2026-09-30）：每 agent 一区
+# （<cwd>/data/workdirs/<agentId>，与 store 的 data/ 同源约定）；
+# claim 先验入驻名单（space-agent 缝），resolve 路径边界判定（execdir 铁则）。
+- id: space-workdir-local
+  name: './packages/impl/space-workdir-local/src/index.ts'

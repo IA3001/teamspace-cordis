@@ -20,6 +20,7 @@ import type { Context } from 'cordis'
 import type { SessionEvent } from 'space-event'
 import { OrchestratorError, OrchestratorService } from 'space-orchestrator'
 import type {
+  DelegatePayload,
   OrchestratorBrain,
   PausePayload,
   PlanPayload,
@@ -31,7 +32,9 @@ import { authorizedTargets, isAuthorizedTarget, parseCoordinatorOutput } from 's
 export const name = 'orchestrator'
 // cordis 严格注入检查：apply 里摸到的每个服务都要声明（漏了会得到
 // "cannot get property without inject"，且只进 5172 日志页，不上控制台）。
-export const inject = ['server', 'session', 'eventLog']
+// agents（P6 收尾）：coding 名册 —— 授权名单 = 会议角色 + 在册 coding agent；
+// workdir/命令路径不经本插件（coder 自己用），不注入。
+export const inject = ['server', 'session', 'eventLog', 'agents']
 
 const now = () => new Date().toISOString()
 
@@ -100,11 +103,25 @@ export class OrchestratorEngine extends OrchestratorService {
     this.turns.set(sessionId, { state: 'chain', decisionCalls: 0, delegatedTargets: [], stopReason: '', stopDetail: '' })
     const t = this.snapshot(sessionId)
 
-    const members = this.ctx.session.listMembers(sessionId, true)
-    const targets = authorizedTargets(members)
+    // 授权名单 = 会议三机器人角色（policy 纯函数）+ 在册 coding agent 名册
+    // （P6 收尾，名册制：coding agent 不进会话成员，开会链路零改动）。
+    // 大脑的 targets 与 isAuthorizedTarget 校验用同一份合并名单。
+    // agents 服务缺席（旧 harness / 纯编排环境）→ 退化为会议名单，不炸。
+    const meetingTargets = authorizedTargets(this.ctx.session.listMembers(sessionId, true))
+    let codingTargets: string[] = []
+    try {
+      codingTargets = this.ctx.agents.list('coding').map((a) => a.descriptor.title)
+    } catch {
+      this.ctx.logger.warn('[orchestrator] agents 服务不可用，授权名单仅含会议角色（无 coding 名册）')
+    }
+    const targets = [...meetingTargets, ...codingTargets]
 
     if (!this.brain) {
-      this.pause(sessionId, 'coordinator_unconfigured', '协调者未配置：本轮暂停，等待人类下一步指示')
+      this.pause(
+        sessionId,
+        'coordinator_unconfigured',
+        '协调者未配置：本轮暂停，等待人类下一步指示（委托回路已就绪，等待大脑接入）',
+      )
       return { case: 'coordinator_error', reply: '', delegation: null, reason: 'coordinator_unconfigured' }
     }
 
@@ -175,6 +192,17 @@ export class OrchestratorEngine extends OrchestratorService {
       sessionId,
       `已收到指令，将委托[${delegate.target}]：${delegate.instruction || event.text}`,
     )
+    // 消费委托（P6 收尾）：把委托交执行链 —— emit 内核事件，订阅方（
+    // agent-coder-stub 等）认领自己名下的 target 真正干活，干完走收执口
+    // 回报（落时间线 + await_human 暂停）。引擎只决策不执行（职责分家）；
+    // 会议机器人本就无执行链，emit 后无人认领即无动作（现状不变，非回退）。
+    const delegated: DelegatePayload = {
+      sessionId,
+      eventId: event.id,
+      target: delegate.target,
+      instruction: delegate.instruction || event.text,
+    }
+    this.ctx.emit('orchestrator/delegate', delegated)
     return { case: 'delegated', reply, delegation: delegate, reason }
   }
 
@@ -204,6 +232,42 @@ export class OrchestratorEngine extends OrchestratorService {
     // 铁律执行点：收到目标反馈后必须暂停 —— 禁止未获新授权自动发起下一次调用。
     // 由编排层在这里调用，不靠协调者自觉（承旧 Engine.Pause 的注释原话）。
     this.pause(sessionId, 'await_human', `${target} 已反馈，本轮暂停，等待人类下一步指示`)
+    return ev
+  }
+
+  /**
+   * coding agent 收执口（P6 收尾）：与 reportFeedback 同一暂停语义，但落事件
+   * 的作者按 **coding 名册**（ctx.agents）解析 —— coding agent 不进会话成员
+   * 名册（拍板），member.role 查找对它必然落空，故不复用 reportFeedback。
+   * 目标解析双口径（承 /tell 先例）：target 可为名册 title 或 id。
+   */
+  reportCodingResult(sessionId: string, target: string, text: string): SessionEvent {
+    const t = this.turns.get(sessionId)
+    if (!t || t.state !== 'chain' || !t.delegatedTargets.includes(target)) {
+      throw new OrchestratorError('not_delegating', `会话 ${sessionId} 没有在途的 ${target} 委托，回执无处可交`)
+    }
+    const agent = this.ctx.agents
+      .list('coding')
+      .find((a) => a.descriptor.title === target || a.descriptor.id === target)
+    if (!agent) {
+      // 引擎授权名单与名册不同步是编程错误（授权时还在、收执时消失）。
+      this.pause(sessionId, 'coding_target_unknown', `coding 名册里找不到 "${target}"，回执无法落库，已暂停`)
+      throw new OrchestratorError('not_delegating', `coding 名册里没有 "${target}"（授权时它还在 —— 引擎与名册不同步）`)
+    }
+    const ev = this.ctx.eventLog.append({
+      id: randomUUID(),
+      sessionId,
+      authorId: agent.descriptor.id,
+      phaseId: null,
+      authorKind: 'agent',
+      kind: 'message',
+      text,
+      mentions: [],
+      toolCalls: [],
+      replyMode: '',
+    })
+    // 铁律执行点：收到反馈必须停 —— 与 reportFeedback 同一字面语义。
+    this.pause(sessionId, 'await_human', `${target} 已交付，本轮暂停，等待人类下一步指示`)
     return ev
   }
 

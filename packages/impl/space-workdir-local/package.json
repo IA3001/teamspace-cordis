@@ -1,0 +1,15 @@
+{
+  "name": "space-workdir-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "impl：space-workdir 缝的本机文件系统后端 —— 每 agent 一区（root=<数据目录>/workdirs/<agentId>），execdir 铁则路径边界判定",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-workdir": "*",
+    "space-agent": "*"
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

@@ -3,19 +3,22 @@
 // 布局（k-layout 外壳 chrome + 外壳共享布局类，零手写样式）：
 //   k-layout（.page-content：薄顶栏 .layout-header + .main-content flex 行）
 //   ├ #header 槽（薄顶栏左上角）：折叠开关 + 会话标题 + 状态徽章
-//   ├ #menu   槽（薄顶栏右上角）：「协作面板」呼出（el-drawer，默认收起）
+//   ├ #menu   槽（薄顶栏右上角）：「协作面板」开关（宽屏常驻 / 窄屏默认折叠，
+//   │   与左栏 railOpen 同款范式；2026-09-30 拍板：遮罩抽屉改非遮罩常驻右列）
 //   └ 默认槽 → .main-content（flex 行）：
 //       ├ aside.page-sidebar（左：会话栏，内容来自 'space-teamspace-sidebar'
 //       │   槽位视图 —— 由 space-client-ui-sessions 包经 router.slot 入驻；
 //       │   该包缺席时 k-slot 渲染为空，整页照常工作 = 纯新增可插拔）
-//       └ div.content-area（中：消息区 + composer）
-//           ├ div.content-body > el-scrollbar > div.k-content
-//           │   （消息列居中限宽 55rem、大留白；人类消息右对齐 el-card 气泡，
-//           │    agent/系统消息左对齐平文 + 角色标签；时间戳默认不显示，
-//           │    悬停消息行内揭示「作者 · 时间」—— 2026-09-30 回炉：弃 el-tooltip
-//           │    传送门（长会话下 popper 弹出不确定），改组件状态驱动的行内揭示，
-//           │    真实鼠标与测试注入两条路径都确定可见）
-//           └ div.k-content > composer 卡片（悬浮卡片化：贴底居中，不再通栏）
+//       ├ div.content-area（中：消息区 + composer）
+//       │   ├ div.content-body > el-scrollbar > div.k-content
+//       │   │   （消息列居中限宽 55rem、大留白；人类消息右对齐 el-card 气泡，
+//       │   │    agent/系统消息左对齐平文 + 角色标签；时间戳默认不显示，
+//       │   │    悬停消息行内揭示「作者 · 时间」—— 2026-09-30 回炉：弃 el-tooltip
+//       │   │    传送门（长会话下 popper 弹出不确定），改组件状态驱动的行内揭示，
+//       │   │    真实鼠标与测试注入两条路径都确定可见）
+//       │   └ div.k-content > composer 卡片（悬浮卡片化：贴底居中，不再通栏）
+//       └ aside.right-sidebar（右：协作面板常驻列 —— 外壳 layout.scss 现成
+//           右列类（与 .page-sidebar 对称），零新样式；面板空值行不渲染）
 //
 // 不可回退的既有交互（原样保留）：普通文本自动暂存 +「已记下 #N」回执、
 // closable el-tag 暂存条目（点 × = /del）、/cur //commit 并入斜杠联想菜单、
@@ -58,7 +61,6 @@ const STOP_LABEL: Record<string, string> = {
   coordinator_error: '协调者调用失败',
   coordinator_empty: '协调者空输出',
   duplicate_target: '同轮重复委托',
-  '': '—',
 }
 /** 会话状态徽章（sessions.status：open/closed）。 */
 const sessionStatus = (s: SessionLite) =>
@@ -100,12 +102,25 @@ const TeamspacePage = defineComponent({
     const activeIdx = ref(0)
     const inputEl = ref(null) as { value: HTMLTextAreaElement | null }
     const commands = ref([]) as { value: CommandLite[] }
-    const drawerOpen = ref(false)
+    /** 协作面板右列开关：宽屏默认常驻、窄视口默认折叠（2026-09-30 拍板：
+     *  遮罩抽屉 → 非遮罩常驻右列，与 railOpen 同款范式保持窄屏可用）。 */
+    const panelOpen = ref(!window.matchMedia('(max-width: 768px)').matches)
     /** 悬停揭示「作者 · 时间」的消息 id —— 必须住 setup 体：render 体内声明
      *  会被每次重渲染重建（4s 轮询即触发），悬停状态随渲染丢弃（第四轮根因）。 */
     const hoveredId = ref('')
     /** 左栏开关：宽屏默认展开、窄视口默认收起（业界统一：开关在中央顶栏左上角）。 */
     const railOpen = ref(!window.matchMedia('(max-width: 768px)').matches)
+    /** composer 提示按需揭示（2026-09-30 拍板）：悬停 / 聚焦输入区才显示操作
+     *  提示行，平时留白 —— 与消息时间戳同款「状态驱动行内揭示」范式（弃
+     *  el-tooltip 传送门，弹出不确定的教训在前），零手写样式。
+     *  P0 回炉（交互代理复测判红）：hover 与 focus 两路径必须拆开成独立状态
+     *  （单 boolean 时 mouseleave 会无条件压掉仍存在的聚焦态 = 复测 D 场景
+     *  实锤）；focus 路径弃 el-input 的 onFocus prop 转发（组件内部实现面），
+     *  改稳定包装 div 上的原生 focusin/focusout（focus 不冒泡但 focusin 冒泡，
+     *  CDP 真实点击/键入/Tab 聚焦都确定到达）。两 ref 住 setup 体跨轮询存续。 */
+    const composerHover = ref(false)
+    const composerFocus = ref(false)
+    const composerHint = computed(() => composerHover.value || composerFocus.value)
     /** 会话栏是否已入驻（sessions 包缺席 → 左区整体不渲染，折叠开关随之隐藏）。 */
     const hasRail = computed(() => (appCtx.client.router.views['space-teamspace-sidebar']?.length ?? 0) > 0)
     const scrollbar = ref<{ setScrollTop: (v: number) => unknown } | null>(null)
@@ -308,7 +323,6 @@ const TeamspacePage = defineComponent({
       const ElScrollbar = resolveComponent('el-scrollbar') as unknown as string
       const ElPopover = resolveComponent('el-popover') as unknown as string
       const KCard = resolveComponent('k-card') as unknown as string
-      const ElDrawer = resolveComponent('el-drawer') as unknown as string
       const ElDivider = resolveComponent('el-divider') as unknown as string
       const ElText = resolveComponent('el-text') as unknown as string
       const ElTimeline = resolveComponent('el-timeline') as unknown as string
@@ -339,8 +353,11 @@ const TeamspacePage = defineComponent({
         turn.value?.state === 'static'
           ? h(ElTag, { key: 'paused', size: 'small', type: 'warning' }, { default: () => '已暂停' })
           : null,
+        // 协作面板开关（2026-09-30 拍板：不再是「呼出遮罩抽屉」，而是折叠 /
+        // 展开常驻右列 —— 与左栏开关同款范式，窄视口默认收起保持可用）。
         h(ElButton, {
-          key: 'panel', text: true, onClick: () => { drawerOpen.value = true },
+          key: 'panel', text: true, type: panelOpen.value ? 'primary' : 'info',
+          onClick: () => { panelOpen.value = !panelOpen.value },
         }, { default: () => '协作面板' }),
       ]
 
@@ -382,8 +399,27 @@ const TeamspacePage = defineComponent({
             : h(ElTimeline, {}, { default: () => events.value.map(messageRow) }),
       ])
 
-      // ── 协作面板（el-drawer 默认收起，顶栏按钮按需呼出；数据口径不变）──
+      // ── 协作面板（2026-09-30 拍板：非遮罩常驻右列，数据口径不变）────────
+      // 外壳现成右列类 .right-sidebar（layout.scss，与 .page-sidebar 对称）承
+      // 接第三列，零新样式。空值行整行不渲染：「暂停原因」只在真有暂停原因时
+      // 显示、「说明」只在有 stopDetail 时显示、「已委托」只在有委托时显示 ——
+      // 停顿时不再满屏横杠。
       const t = turn.value
+      const stopText = t ? (STOP_LABEL[t.stopReason] ?? t.stopReason) : ''
+      const panelRows = [
+        t && stopText && stopText !== '—'
+          ? h(ElDescriptionsItem, { label: '暂停原因' }, { default: () => stopText })
+          : null,
+        t?.stopDetail
+          ? h(ElDescriptionsItem, { label: '说明' }, { default: () => t.stopDetail })
+          : null,
+        t
+          ? h(ElDescriptionsItem, { label: '协调者调用（本回合）' }, { default: () => String(t.decisionCalls) })
+          : null,
+        t && t.delegatedTargets.length
+          ? h(ElDescriptionsItem, { label: '本回合已委托' }, { default: () => t.delegatedTargets.join('、') })
+          : null,
+      ].filter((x) => x !== null)
       const panelCard = h(ElCard, { shadow: 'hover' }, {
         header: () => [
           h(ElTag, { size: 'small', type: t ? (STATE_TAG[t.state] ?? 'info') : 'info' },
@@ -391,14 +427,9 @@ const TeamspacePage = defineComponent({
           ' 协作轮次',
         ],
         default: () => [
-          h(ElDescriptions, { column: 1, border: true, size: 'small' }, {
-            default: () => [
-              h(ElDescriptionsItem, { label: '暂停原因' }, { default: () => t ? (STOP_LABEL[t.stopReason] ?? (t.stopReason || "—")) : '—' }),
-              h(ElDescriptionsItem, { label: '说明' }, { default: () => t?.stopDetail || '—' }),
-              h(ElDescriptionsItem, { label: '协调者调用（本回合）' }, { default: () => String(t?.decisionCalls ?? 0) }),
-              h(ElDescriptionsItem, { label: '本回合已委托' }, { default: () => t && t.delegatedTargets.length ? t.delegatedTargets.join('、') : '（无）' }),
-            ],
-          }),
+          panelRows.length
+            ? h(ElDescriptions, { column: 1, border: true, size: 'small' }, { default: () => panelRows })
+            : h(ElText, { size: 'small', type: 'info' }, { default: () => '本轮无暂停 / 委托详情' }),
           h(ElDivider, { contentPosition: 'left' }, { default: () => '可 @ 的成员（协调者不可被调用）' }),
           mentionCandidates().length
             ? h(ElRow, { gutter: 8 }, {
@@ -410,12 +441,11 @@ const TeamspacePage = defineComponent({
             : h(ElEmpty, { description: '暂无在册成员', imageSize: 60 }),
         ],
       })
-      const collabDrawer = h(ElDrawer, {
-        modelValue: drawerOpen.value,
-        'onUpdate:modelValue': (v: boolean) => { drawerOpen.value = v },
-        title: '协作面板',
-        size: 420,
-      }, { default: () => panelCard })
+      const collabPanel = () => panelOpen.value
+        ? h('aside', { class: 'right-sidebar' }, [
+            h('div', { class: 'page-sidebar-content' }, [panelCard]),
+          ])
+        : null
 
       // ── 联想浮层（el-popover 虚拟锚定输入框，placement top-start）──────
       // 菜单项统一渲染（P2：无特配色、无常亮主色）；高亮只属于键盘选中项。
@@ -461,12 +491,22 @@ const TeamspacePage = defineComponent({
       ])
 
       // ── composer 悬浮卡片（贴底居中，不再通栏）──────────────────────────
-      // 说明书式提示从黄金位置降级为卡片下一行小字（el-text）。
-      // 外层普通 div 作 content-area 的 flex item（占满整行）；k-content 在块级流里
-      // 才能填满至 max-width 并由 margin auto 居中 —— flex item 上的 margin:auto
-      // 会吞掉 stretch 收缩成内容宽（实测踩中）。
+      // 2026-09-30 拍板：说明书式提示与「暂存区为空」占位不再常显 —— 悬停 /
+      // 聚焦输入区才揭示提示行（composerHint 状态驱动，与消息时间戳同款范式），
+      // 平时留白，减少中间区文字噪音。交互契约零改动（自动暂存 /commit/@ 联想/
+      // Shift+Enter 均原样）。
+      // P0 回炉：揭示挂在这层「每轮 patch 必复用、永不重建」的稳定包装 div 上
+      // （根 div 在 composer 定义处一次性创建、被 render 闭包长期持有），
+      // hover/focus 两路各自独立状态；focusin/focusout 是冒泡的原生事件，
+      // 真实鼠标、点击、Tab、键入都确定命中（原生 focus/blur 不冒泡，弃）。
       const composer = h('div', [
-        h('div', { class: CENTERED }, [
+        h('div', {
+          class: CENTERED,
+          onMouseenter: () => { composerHover.value = true },
+          onMouseleave: () => { composerHover.value = false },
+          onFocusin: () => { composerFocus.value = true },
+          onFocusout: () => { composerFocus.value = false },
+        }, [
         suggestionPopover(),
         // k-card（外壳原语，首选）：圆角 8px，背景与阴影由组件自带的语义令牌
         // （映射外壳 elevated / shadow 档）承担 —— props 零手写（P2 悬浮卡片质感）。
@@ -493,21 +533,24 @@ const TeamspacePage = defineComponent({
               h('span', ` ${reply.value}`),
               h(IconBtn, { icon: 'times-full', label: '关闭回执', onPress: () => { reply.value = '' } }),
             ]) : null,
-            staging.value.length === 0
-              ? h('span', '暂存区为空')
-              : staging.value.map(stagingLine),
+            // 暂存条目照常常显（有内容 = 真信息）；「暂存区为空」占位不再刷存在感
+            staging.value.map(stagingLine),
           ],
         }),
-        h('div', [
-          h(ElText, { size: 'small', type: 'info' },
-            { default: () => '普通文本自动暂存（不触发协调者），/commit 提交暂存' }),
-        ]),
+        composerHint.value
+          ? h('div', [
+              h(ElText, { size: 'small', type: 'info' },
+                { default: () => '普通文本自动暂存（不触发协调者），/commit 提交暂存' +
+                  (staging.value.length === 0 ? '；暂存区为空' : '') }),
+            ])
+          : null,
         ]),
       ])
 
       // ── 根布局：k-layout（外壳 chrome）+ 三区骨架 ────────────────────────
       // 左区 = 会话栏槽位视图（sessions 包入驻；缺席时 k-slot 渲染为空，
-      // 页面不 import 该包 —— 入驻 = 纯新增）。中/右 = 中央列。
+      // 页面不 import 该包 —— 入驻 = 纯新增）。中区 = 消息列 + composer。
+      // 右区 = 协作面板常驻列（2026-09-30 拍板：非遮罩，不再盖主区）。
       return h(KLayout, { main: 'page-teamspace' }, {
         header: topbarLeft,
         menu: topbarRight,
@@ -526,7 +569,7 @@ const TeamspacePage = defineComponent({
             ]),
             composer,
           ]),
-          collabDrawer,
+          collabPanel(),
         ],
       })
     }

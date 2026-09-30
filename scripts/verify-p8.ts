@@ -8,7 +8,8 @@
 //     真 brain-stub 插件（apply 原样）+ 真三 stub + 真名册 + 真 prompts：
 //     分支一 @ 提示命中 → 合法 JSON 委托（instruction=人类原话）+ 宣告带
 //     「大脑附言」明示占位；分支二未命中 → 纯文本回复不委托（明示占位）；
-//     文案处处带「占位大脑（非 NLP，等待模型 key）」标记；config.enabled=false
+//     文案处处带【占位】标记（2026-09-30 拍板瘦身：原「占位大脑（非 NLP，等待
+//     模型 key）」长前缀缩为【占位】）；config.enabled=false
 //     → 回 coordinator_unconfigured 安全默认。
 //     **红测**：BRAIN_SABOTAGE=1（brain-stub 内置探针）—— 未命中也吐委托
 //     JSON，分支二断言必红；还原（不设 env）复绿。铁律要求断言「故意改坏
@@ -209,7 +210,7 @@ async function partB(): Promise<void> {
   const evs1 = ctx.eventLog.listBySession(session.id)
   const announce = evs1.find((e) => e.authorId === 'a_coordinator' && e.text.includes('将委托[编码者]'))
   check('B1d 宣告带大脑附言且明示占位（非 NLP）',
-    !!announce && announce.text.includes('大脑附言') && announce.text.includes('占位大脑（非 NLP，等待模型 key）'),
+    !!announce && announce.text.includes('大脑附言') && announce.text.includes('【占位】') && announce.text.includes('非 NLP'),
     announce?.text)
 
   // B2 回执链路闭环：coder 认领 → 工作区落盘（含提示词段）→ 收执 → await_human。
@@ -226,8 +227,8 @@ async function partB(): Promise<void> {
   const ev2 = humanCommit(ctx, session.id, 'u_dri', '大家先看看这份纪要')
   const r2 = await engine.onPlan({ sessionId: session.id, authorId: 'u_dri', event: ev2 })
   check('B3a 未命中 → replied（不委托）', r2?.case === 'replied' && r2.delegation === null, JSON.stringify(r2))
-  check('B3b 回复明示占位大脑（非 NLP，等待模型 key）',
-    typeof r2?.reply === 'string' && r2.reply.includes('占位大脑（非 NLP，等待模型 key）'), r2?.reply)
+  check('B3b 回复明示【占位】标记（2026-09-30 拍板瘦身）',
+    typeof r2?.reply === 'string' && r2.reply.includes('【占位】'), r2?.reply)
   check('B3c 未命中不新增委托宣告（账本计数不变）',
     ctx.eventLog.listBySession(session.id).filter((e) => e.text.includes('将委托[')).length === announcesBefore)
   check('B3d 未命中后暂停等人类（await_human）', engine.turn(session.id).stopReason === 'await_human')
@@ -448,7 +449,7 @@ async function partE(): Promise<void> {
       const ev1 = humanCommit(ctx, s1.id, 'u_dri', '大家先看看这份纪要')
       const r1 = await engine.onPlan({ sessionId: s1.id, authorId: 'u_dri', event: ev1 })
       check('E1 无 key → brain-stub 上线（占位回复；brain-llm 让位不炸不重复）',
-        r1?.case === 'replied' && r1.reply.includes('占位大脑（非 NLP，等待模型 key）'), JSON.stringify(r1))
+        r1?.case === 'replied' && r1.reply.includes('【占位】'), JSON.stringify(r1))
       rmSync(tmp, { recursive: true, force: true })
       db.close()
     }

@@ -9,6 +9,7 @@
     "space-agent": "*",
     "space-agent-runtime": "*",
     "space-command": "*",
+    "space-llm": "*",
     "space-prompt": "*",
     "space-workdir": "*"
   },

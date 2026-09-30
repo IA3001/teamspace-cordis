@@ -23,10 +23,21 @@
 //     （委托「测试者」只有 tester 回执，coder/reviewer 静默）+ /tell 直派
 //     测试者走共享干活路径。⑪ 的白名单静态扫描由 gate 链里 verify:agents
 //     Part C 承担（verify-p8.ts 已进其白名单，同 verify-workdir 待遇）。
+//   Part E（P8 下半场扩容，2026-09-30，进程内 + 进程内 mock OpenAI 兼容服务）：
+//     门禁不依赖真 key —— main() 先清 LLM 三件套（A–D 恒为占位模式），本
+//     Part 自管 env（注入 mock 三件套，finally 还原）：
+//     E1 无 key → 大脑选择确定性（stub 上线、brain-llm 让位、两 apply 不炸）；
+//     E2 有 key（mock）→ brain-llm 上线，合法 JSON 过兜底 0 层逐字直通；
+//     E3 LLM 纯文本 → replied（1 层）、mock 500 → coordinator_error（不猜不重试）；
+//     E4 perform 真模型模式（提示词取用 + artifact 落盘 + 回执【真模型】+model
+//        + CodingReceipt.mode='llm'）；E5 无 key 占位模式（【占位】、绝不冒充）。
+//     **红测**：LLM_SABOTAGE=1（agent-runtime 内置探针）—— 真模型模式谎报
+//     【占位】，E4a 必红；还原（不设 env）复绿（自检记录见文末）。
 //
 // 用法：npm run verify:p8    退出码 0 = 全过；1 = 判红。
 // 留痕：全部通过后记一行 action_log: verify-p8（断言 ⑨；内联直写 ——
 // tsx 下 execFileSync 会踩 Windows shim，承 verify-workdir 实测教训）。
+import { createServer } from 'node:http'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,6 +56,9 @@ import { apply as coderApply } from '../plugins/agent-coder-stub/index.ts'
 import { apply as testerApply } from '../plugins/agent-tester-stub/index.ts'
 import { apply as reviewerApply } from '../plugins/agent-reviewer-stub/index.ts'
 import { apply as brainApply } from '../plugins/brain-stub/index.ts'
+import { apply as brainLlmApply } from '../plugins/brain-llm/index.ts'
+import { OpenAiChatLlm } from '../packages/impl/space-llm-openai/src/index.ts'
+import { LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV } from 'space-llm'
 import { LocalWorkdirService } from '../packages/impl/space-workdir-local/src/index.ts'
 import { createSessionWithRoster } from '../packages/client-ui/space-client-ui-sessions/src/index.ts'
 import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
@@ -171,6 +185,7 @@ async function partB(): Promise<void> {
   new SqlitePromptStore(ctx, db) // promptRef 绑定的内容源（seed 已入）
   new AgentRegistry(ctx)
   new CommandService(ctx)
+  new OpenAiChatLlm(ctx) // ctx.llm（main 已清 key → 占位模式；拓扑与运行时一致）
   new LocalWorkdirService(ctx, tmp)
   const engine = new OrchestratorEngine(ctx)
   // 真插件原样 apply：三 stub 入驻 + 共享干活路径 + 占位大脑注册。
@@ -311,6 +326,7 @@ async function partD(): Promise<void> {
   new SqlitePromptStore(ctx, db)
   new AgentRegistry(ctx)
   new CommandService(ctx)
+  new OpenAiChatLlm(ctx) // ctx.llm（main 已清 key → 占位模式）
   new LocalWorkdirService(ctx, tmp)
   const engine = new OrchestratorEngine(ctx)
   runtimeApply(ctx)
@@ -365,12 +381,191 @@ async function partD(): Promise<void> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// Part E —— LLM 接入（本地 mock OpenAI 兼容服务；门禁不依赖真 key）
+// ══════════════════════════════════════════════════════════════════════════
+async function partE(): Promise<void> {
+  section('Part E：LLM 接入（进程内 mock OpenAI 兼容服务）' + (process.env.LLM_SABOTAGE === '1' ? '【SABOTAGE 模式】' : ''))
+
+  // mock /chat/completions：node:http 进程内起（端口 0 = 随机分配，无子进程
+  // —— 承 verify-workdir 的 Windows shim 教训）；behavior 可切换。
+  const mock: { mode: 'ok-json' | 'ok-artifact' | 'ok-text' | 'http500' } = { mode: 'ok-json' }
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (c: Buffer) => { body += c })
+    req.on('end', () => {
+      void body
+      if (mock.mode === 'http500') {
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'mock boom' } }))
+        return
+      }
+      const content = mock.mode === 'ok-json'
+        ? JSON.stringify({ reply: 'MOCK-协调者回复', reason: 'mock 决策', delegate: { target: '需求分析师', instruction: 'MOCK-分析边界条件' } })
+        : mock.mode === 'ok-artifact'
+          ? 'MOCK-产物正文：登录页方案（分三步走）……'
+          : '我先想想，暂不派单。'
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }))
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const mockPort = (server.address() as { port: number }).port
+
+  // env 自管（确定性）：保存 → 注入/清除 → finally 还原（不留探针残留）。
+  const saved = [LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV].map((k) => [k, process.env[k]] as const)
+  const setEnv = () => {
+    process.env[LLM_API_KEY_ENV] = 'mock-key'
+    process.env[LLM_BASE_URL_ENV] = `http://127.0.0.1:${mockPort}/v1`
+    process.env[LLM_MODEL_ENV] = 'mock-model'
+  }
+  const clearEnv = () => {
+    for (const [k] of saved) delete process.env[k]
+  }
+  try {
+    clearEnv()
+
+    // E1 无 key → 大脑选择确定性：两脑都 apply（组合根顺序 stub 先），只有
+    // stub 注册（让位日志在 5172 可见）；未命中 → 占位回复。
+    {
+      const tmp = mkdtempSync(join(tmpdir(), 'p8-llm-a-'))
+      const db = memoryDb(true)
+      const ctx = new Context()
+      new SqliteSessionStore(ctx, db)
+      new SqliteEventLog(ctx, db)
+      new SqlitePromptStore(ctx, db)
+      new AgentRegistry(ctx)
+      new CommandService(ctx)
+      new OpenAiChatLlm(ctx)
+      new LocalWorkdirService(ctx, tmp)
+      const engine = new OrchestratorEngine(ctx)
+      runtimeApply(ctx)
+      coderApply(ctx)
+      testerApply(ctx)
+      reviewerApply(ctx)
+      brainApply(ctx)    // 组合根顺序：stub 行在前 —— key 缺 → 上线
+      brainLlmApply(ctx) // key 缺 → 让位（不注册、不炸）
+      const s1 = createSessionWithRoster(ctx)
+      const ev1 = humanCommit(ctx, s1.id, 'u_dri', '大家先看看这份纪要')
+      const r1 = await engine.onPlan({ sessionId: s1.id, authorId: 'u_dri', event: ev1 })
+      check('E1 无 key → brain-stub 上线（占位回复；brain-llm 让位不炸不重复）',
+        r1?.case === 'replied' && r1.reply.includes('占位大脑（非 NLP，等待模型 key）'), JSON.stringify(r1))
+      rmSync(tmp, { recursive: true, force: true })
+      db.close()
+    }
+
+    setEnv()
+
+    // E2/E3 有 key（mock base）→ brain-llm 上线；原始输出过三级兜底零改动。
+    {
+      const db = memoryDb(true)
+      const ctx = new Context()
+      new SqliteSessionStore(ctx, db)
+      new SqliteEventLog(ctx, db)
+      new SqlitePromptStore(ctx, db)
+      new AgentRegistry(ctx)
+      new CommandService(ctx)
+      new OpenAiChatLlm(ctx)
+      const engine = new OrchestratorEngine(ctx)
+      brainApply(ctx)    // key 在 → 让位（不注册）
+      brainLlmApply(ctx) // configured → 注册
+      const s = createSessionWithRoster(ctx)
+
+      // E2 兜底 0 层：合法 JSON → delegated，mock 决策逐字透传（原始输出未被动过）。
+      const ev = humanCommit(ctx, s.id, 'u_dri', '@需求分析师 分析边界条件', ['a_analyst'])
+      const r = await engine.onPlan({ sessionId: s.id, authorId: 'u_dri', event: ev })
+      check('E2a brain-llm 合法 JSON → delegated（兜底 0 层直通）',
+        r?.case === 'delegated' && r.delegation?.target === '需求分析师', JSON.stringify(r))
+      check('E2b mock 决策逐字透传（instruction/reply 未被改写）',
+        r?.delegation?.instruction === 'MOCK-分析边界条件' && r.reply === 'MOCK-协调者回复', JSON.stringify(r))
+
+      // E3 兜底 1 层：LLM 纯文本 → replied（三级兜底零改动的直观测点）。
+      mock.mode = 'ok-text'
+      const ev2 = humanCommit(ctx, s.id, 'u_dri', '随便聊聊')
+      const r2 = await engine.onPlan({ sessionId: s.id, authorId: 'u_dri', event: ev2 })
+      check('E3 LLM 纯文本 → replied（三级兜底 1 层路径不变）',
+        r2?.case === 'replied' && r2.delegation === null && r2.reply.includes('我先想想'), JSON.stringify(r2))
+
+      // E3b 调用失败 → coordinator_error 暂停（既有路径零改动；单次不重试不猜）。
+      mock.mode = 'http500'
+      const ev3 = humanCommit(ctx, s.id, 'u_dri', '再来一轮')
+      await engine.onPlan({ sessionId: s.id, authorId: 'u_dri', event: ev3 })
+      const t3 = engine.turn(s.id)
+      check('E3b LLM 调用失败 → coordinator_error 暂停（不猜不重试）',
+        t3.state === 'static' && t3.stopReason === 'coordinator_error', JSON.stringify(t3))
+      db.close()
+    }
+
+    // E4 perform 真模型模式：提示词取用 + artifact 落盘 + 回执诚实标注。
+    {
+      const tmp = mkdtempSync(join(tmpdir(), 'p8-llm-b-'))
+      const db = memoryDb(true)
+      const ctx = new Context()
+      new SqlitePromptStore(ctx, db)
+      new AgentRegistry(ctx)
+      new CommandService(ctx)
+      new LocalWorkdirService(ctx, tmp)
+      new OpenAiChatLlm(ctx)
+      runtimeApply(ctx)
+      coderApply(ctx)
+      mock.mode = 'ok-artifact'
+      const r = await ctx.agentRuntime.perform('agent.coder', 'MOCK-实现登录页')
+      check('E4a 回执诚实标注【真模型】+ model=mock-model、mode=llm（LLM_SABOTAGE=1 时此处红）',
+        r.mode === 'llm' && r.receipt.includes('【真模型】') && r.receipt.includes('model=mock-model'),
+        r.receipt)
+      check('E4b 产物两件：任务文件 + artifact-*.md',
+        r.files.length === 2 && r.files[0]!.startsWith('task-') && r.files[1]!.startsWith('artifact-'),
+        JSON.stringify(r.files))
+      const artifact = readFileSync(join(r.root, r.files[1]!), 'utf8')
+      check('E4c artifact 含 LLM 输出正文（MOCK-产物正文）', artifact.includes('MOCK-产物正文'), artifact.slice(0, 120))
+      check('E4d 任务文件含 promptRef 提示词正文（取自 ctx.prompts，占位先顶着）',
+        readFileSync(join(r.root, r.files[0]!), 'utf8').includes('等待角色 2（编码）原文'))
+      rmSync(tmp, { recursive: true, force: true })
+      db.close()
+    }
+
+    // E5 无 key → perform 占位模式（诚实标注【占位】，绝不冒充真模型）。
+    {
+      clearEnv()
+      const tmp = mkdtempSync(join(tmpdir(), 'p8-llm-c-'))
+      const db = memoryDb(true)
+      const ctx = new Context()
+      new SqlitePromptStore(ctx, db)
+      new AgentRegistry(ctx)
+      new CommandService(ctx)
+      new LocalWorkdirService(ctx, tmp)
+      new OpenAiChatLlm(ctx)
+      runtimeApply(ctx)
+      coderApply(ctx)
+      const r = await ctx.agentRuntime.perform('agent.coder', 'MOCK-占位任务')
+      check('E5 无 LLM → 占位模式诚实标注（mode=stub、含【占位】、无【真模型】、model=null）',
+        r.mode === 'stub' && r.receipt.includes('【占位】') && !r.receipt.includes('【真模型】') && r.model === null,
+        r.receipt)
+      check('E5b 占位模式仍交付任务文件（机制闭环不回退）',
+        r.files.length === 1 && r.files[0]!.startsWith('task-'))
+      rmSync(tmp, { recursive: true, force: true })
+      db.close()
+    }
+  } finally {
+    server.close()
+    // env 还原（不留探针残留；saved 全为 undefined → 等价于再清一遍）
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 async function main(): Promise<void> {
-  console.log(`verify-p8：P8 机制层验收（提示词 + 占位大脑 + 建会名册 + 双 stub 入驻；断言 ⑬）`)
+  // 门禁确定性（P8 下半场）：不管外层 shell 有没有真 key，A–D 一律占位模式
+  // —— 先清 LLM 三件套；Part E 自管 env（注入 mock 三件套并在 finally 还原）。
+  for (const k of [LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV]) delete process.env[k]
+  console.log(`verify-p8：P8 机制层验收（提示词 + 大脑 + 建会名册 + 双 stub + LLM 接入；断言 ⑬）`)
   await partA()
   await partB()
   await partC()
   await partD()
+  await partE()
   console.log(`\n结果：${passes} 过 / ${failures} 红`)
   if (failures > 0) {
     console.log('✗ verify-p8 判红 —— 改坏了（铁律 2：断言必须能红）')
@@ -403,3 +598,13 @@ await main()
 //   （含 @token 前缀），改为「已领任务：」+「给登录页补冒烟测试」两段包含。
 //   覆盖说明：⑪ 的白名单静态扫描由 gate 链 verify:agents Part C 承担
 //   （verify-p8.ts 已列其白名单），本脚本不重复扫描。
+//
+//   ── P8 下半场红测（2026-09-30 实测）──────────────────────────────────
+//   改坏方式：LLM_SABOTAGE=1 npm run verify:p8（agent-runtime 内置探针：
+//   真模型模式把回执谎报为【占位】、mode 字段谎报 'stub' —— 诚实标注被改坏）。
+//   实测结果：E4a 红（见下），退出码 1；还原（不设 env）复绿全过。
+//   门禁不依赖真 key 的实现：main() 清 LLM 三件套（A–D 恒占位）+ Part E
+//   进程内 mock OpenAI 兼容服务（node:http，端口 0，无子进程）自管 env。
+//   另：verify-orchestrator Part B（对 live 服务端）同轮放宽为「双真大脑
+//   合法终态」（await_human 静止 / 合法委托 chain）—— 用户填 key 后 live
+//   大脑是 brain-llm，两种诚实终态都必须绿（记账在 verify-orchestrator 头注）。

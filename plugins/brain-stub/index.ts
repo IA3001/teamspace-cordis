@@ -9,9 +9,9 @@
 //   分支二（未命中）：纯文本回复（兜底 1 层路径：只回复、不委托、暂停）。
 // 文案处处明示「占位大脑（非 NLP，等待模型 key）」—— 时间线与右栏能一眼
 // 分辨这不是真模型（铁律 2：看见的是真实状态）。
-// 真 LLM 只留接口位：.env 的 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL 本包
-// 只读不打（日志里报状态）；适配器等 key 与原文到位后接入，本包退场 =
-// 用户层停用本行，零改动。
+// P8 下半场（2026-09-30）：真大脑已由 plugins/brain-llm 落地 —— 本包与它
+// **互斥共存**（确定性选择：.env 三件套齐 → 本包让位不注册；不齐 → 本包
+// 上线）。两包永远至多注册一个大脑，duplicate_brain 不可能发生。
 //
 // config（组合根可覆盖）：enabled=false → 不注册大脑，orchestrator 回到
 // coordinator_unconfigured 安全默认（与 P3「未配置大脑」行为一致）。
@@ -20,6 +20,7 @@
 // —— 未命中也吐委托 JSON；断言「未命中不委托」必须判红；还原（不设 env）复绿。
 import type { Context } from 'cordis'
 import type { OrchestratorBrain, PlanRequest } from 'space-orchestrator'
+import { LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV } from 'space-llm'
 
 export const name = 'brain-stub'
 // cordis 严格注入：orchestrator（registerBrain）+ session（成员 id→角色）+
@@ -33,19 +34,31 @@ export interface Config {
 
 const MARK = '占位大脑（非 NLP，等待模型 key）'
 
+/** 大脑选择谓词（P8 下半场，确定性）：.env 三件套齐且 key 非空 = LLM 就绪。
+ *  与 space-llm-openai 的 configured 逐字同源（同一批 env 常量）—— 两脑各判
+ *  一次，谓词相同则结果必然互斥：就绪 → stub 让位；未就绪 → llm 不注册。 */
+function llmReady(): boolean {
+  return Boolean(process.env[LLM_API_KEY_ENV]?.trim() && process.env[LLM_BASE_URL_ENV]?.trim() && process.env[LLM_MODEL_ENV]?.trim())
+}
+
 export function apply(ctx: Context, config: Config = {}) {
   if (config.enabled === false) {
     ctx.logger.warn('[brain-stub] 已由配置停用（enabled=false）—— 协调者保持 coordinator_unconfigured，等待人类指示')
     return
   }
-  // 真 LLM 接口位（只读不打）：key/base/model 有没有配，日志报实情。
-  const hasKey = Boolean(process.env.LLM_API_KEY?.trim())
+  // 大脑选择（确定性 + 启动日志明示，5172 日志页可见）：三件套齐 → 让位
+  // brain-llm；不齐 → 本包上线（诚实占位）。三件套缺一二（比如只填了 key）
+  // 也算不就绪 —— 占位顶上并在日志里说明缺什么，绝不静默冒充真大脑。
+  if (llmReady()) {
+    ctx.logger.warn('[brain-stub] LLM 三件套已齐（%s/%s/%s）—— 占位大脑让位，大脑由 brain-llm 提供（确定性选择：key 在则 llm）',
+      LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV)
+    return
+  }
   ctx.logger.info(
-    '[brain-stub] %s上线；LLM 接口位：LLM_API_KEY=%s、LLM_BASE_URL=%s、LLM_MODEL=%s（真 LLM 适配器未实现，仍走占位决策）',
-    hasKey ? '检测到 LLM_API_KEY —— ' : '',
-    hasKey ? '已配置' : '未配置',
-    process.env.LLM_BASE_URL ?? '(unset)',
-    process.env.LLM_MODEL ?? '(unset)',
+    '[brain-stub] 占位大脑上线（LLM 三件套未齐：LLM_API_KEY=%s、LLM_BASE_URL=%s、LLM_MODEL=%s）—— 回复/回执均诚实标注占位，等待用户填 .env 后重启切换 brain-llm',
+    process.env[LLM_API_KEY_ENV] ? '已填' : '未填',
+    process.env[LLM_BASE_URL_ENV] ?? '(unset)',
+    process.env[LLM_MODEL_ENV] ?? '(unset)',
   )
 
   /**

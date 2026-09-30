@@ -42,6 +42,14 @@ export interface CodingReceipt {
   promptRef: string | null
   /** 提示词标题（promptRef 非 null 时有值）。 */
   promptTitle: string | null
+  /**
+   * 交付模式（P8 下半场，诚实标注的机器口径）：'llm' = 真模型生成（ctx.llm
+   * 在且 .env 三件套齐）；'stub' = 写文件级占位。回执文本与产物文件标注必须
+   * 与本字段一致 —— 绝不冒充（铁律 2：看见的是真实状态）。
+   */
+  mode: 'llm' | 'stub'
+  /** 真模型模式下的模型名（.env LLM_MODEL）；stub 模式 null。 */
+  model: string | null
 }
 
 // ── 服务缝 ────────────────────────────────────────────────────────────────

@@ -74,6 +74,13 @@
   config:
     enabled: true
 
+# 真大脑（P8 下半场，2026-09-30）：与 brain-stub 互斥（确定性选择 —— .env
+# 三件套齐 → 本包注册、stub 让位；不齐 → stub 上线）。原始输出交给既有三级
+# 兜底解析（零改动）；调用失败 → coordinator_error 暂停。config.enabled=false
+# = 回 coordinator_unconfigured 安全默认。
+- id: brain-llm
+  name: './plugins/brain-llm/index.ts'
+
 # ── 只读查询 + 面板注册表（P4）──────────────────────────────────────────
 # 只读口：时间线/成员页的数据源（HTTP 可 curl 观测）；写路径仍然只在
 # staging-commands 的 POST /messages，这里一个写口都不加。
@@ -100,5 +107,11 @@
 # ctx.agentRuntime（P8，2026-09-30）：coding 类共享干活路径的机制行 ——
 # P6 在案记账的升格兑现（从 agent-coder-stub 迁入 perform 与 /tell 直派口）。
 # 此后 coding agent 包收敛为「描述符 + 委托认领」（铁律 4：入驻 = 纯新增）。
+# ctx.llm（P8 下半场，2026-09-30）：OpenAI 兼容单次补全（不重试、60s 超时）。
+# 配置读 .env 三件套（LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）；三件套未齐也照常
+# 提供（configured=false），消费方（brain-llm / agent-runtime）据此走占位模式。
+- id: space-llm-openai
+  name: './packages/impl/space-llm-openai/src/index.ts'
+
 - id: space-agent-runtime
   name: './packages/impl/space-agent-runtime/src/index.ts'

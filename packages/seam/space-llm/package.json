@@ -1,0 +1,11 @@
+{
+  "name": "space-llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.llm —— 单次补全的 LLM 能力缝（OpenAI 兼容词汇 + 结构化错误分类法）。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

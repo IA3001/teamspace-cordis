@@ -1,0 +1,14 @@
+{
+  "name": "space-llm-openai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "impl（space-llm-openai）：ctx.llm 的 OpenAI 兼容实现 —— /chat/completions 单次调用（不重试、60s 超时），配置读 .env 三件套",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-llm": "*"
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

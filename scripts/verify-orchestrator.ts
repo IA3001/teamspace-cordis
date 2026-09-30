@@ -361,9 +361,15 @@ async function partB(): Promise<void> {
   check('B1a /commit 依旧 200（接缝无回归）', b1.status === 200, JSON.stringify(b1.body))
   const t1 = await getTurn()
   check('B1b orchestrator 已接管：回合存在（GET /turn）', t1.status === 200 && typeof t1.body.decisionCalls === 'number', JSON.stringify(t1))
+  // P8 下半场口径（2026-09-30）：live 服务端可能挂占位大脑（无 key）也可能
+  // 挂 brain-llm（用户填了 .env 三件套）—— 两种真大脑的合法回合终态都接受：
+  // 未委托 → await_human 静止；合法委托 → chain 等收执（会议机器人执行链
+  // 后置，委托给会议角色后无执行方是已知形态，人类下一条发言即抢占重开）。
   check(
-    'B1c 占位大脑上线 → 每回合恰好一次调用 + await_human 暂停（P8 起）',
-    t1.body.decisionCalls === 1 && t1.body.stopReason === 'await_human' && t1.body.state === 'static',
+    'B1c 大脑上线 → 每回合恰好一次调用 + 诚实终态（await_human 静止 / 合法委托 chain）',
+    t1.body.decisionCalls === 1 &&
+      ((t1.body.stopReason === 'await_human' && t1.body.state === 'static')
+        || (t1.body.stopReason === '' && t1.body.state === 'chain')),
     JSON.stringify(t1.body),
   )
 
@@ -371,7 +377,11 @@ async function partB(): Promise<void> {
   await post('/add p3-wiring-two')
   await post('/commit')
   const t2 = await getTurn()
-  check('B2 新回合重开（decisionCalls 按回合重新记账）', t2.body.decisionCalls === 1 && t2.body.stopReason === 'await_human', JSON.stringify(t2.body))
+  check('B2 新回合重开（decisionCalls 按回合重新记账，终态同 B1c 双形态）',
+    t2.body.decisionCalls === 1 &&
+      ((t2.body.stopReason === 'await_human' && t2.body.state === 'static')
+        || (t2.body.stopReason === '' && t2.body.state === 'chain')),
+    JSON.stringify(t2.body))
 
   // B3 空 /commit：零事件零信号 → 回合纹丝不动（P2 语义经 orchestrator 仍成立）
   const t2snap = JSON.stringify(t2.body)

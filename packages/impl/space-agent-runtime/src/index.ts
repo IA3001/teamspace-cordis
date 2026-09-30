@@ -1,4 +1,4 @@
-// space-agent-runtime —— space-agent-runtime 缝的本机实现（P8，2026-09-30）。
+// space-agent-runtime —— space-agent-runtime 缝的本机实现（P8 上半场建，下半场接真 LLM）。
 //
 // 职责（P6 在案记账的升格兑现）：coding 类**共享干活路径**从 agent-coder-stub
 // 升格为机制 —— 第二、三个 coding agent（agent-tester-stub / agent-reviewer-stub）
@@ -6,13 +6,21 @@
 //   perform：idle→working（正忙即拒）→ 领工作区（ctx.workdir.claim）→ 任务文件
 //   落盘（经 ctx.workdir.resolve 路径校验，execdir 铁则）→ promptRef 绑定的
 //   提示词随任务落盘（ctx.prompts，缺席/未预置降级不炸）→ working→done→idle
-//   （状态机走满一圈）→ 回执（含【工作区】【产物清单】，有提示词时含【提示词】）。
+//   （状态机走满一圈）→ 回执。
+// 两种交付模式（P8 下半场，2026-09-30，诚实标注绝不冒充 —— 铁律 2）：
+//   · 真模型（ctx.llm 在且 .env 三件套齐）：提示词 + 指令 → 单次 LLM 调用
+//     （不重试不猜）→ 产物落盘 artifact-<时间>.md → 回执标【真模型】+model；
+//   · 占位（其余一切情况）：保持 stub 行为 → 回执标【占位】。
+//   判定是确定性的（configured 谓词现算），两种模式都由 CodingReceipt.mode
+//   机器可断言；LLM 调用失败 → LlmError 原样上抛（外层 catch 状态回 idle），
+//   5172 日志页可见（铁律 2）。
 // 同时承接 /tell 直派口（从 coder-stub 迁入 —— 直派本就与「编码者」无关，
 // 任何已入驻 agent 都可被直派）。
 //
 // 依赖方向（lint:deps 断言①）：impl 只准依赖 seams —— 本包依赖
 // space-agent-runtime（契约）+ space-agent（名册/状态机）+ space-workdir
-// （领地与路径边界）+ space-prompt（提示词内容）+ space-command（/tell 词汇）。
+// （领地与路径边界）+ space-prompt（提示词内容）+ space-command（/tell 词汇）
+// + space-llm（真模型能力，经 ctx 注入消费）。
 import { writeFile } from 'node:fs/promises'
 import type { Context } from 'cordis'
 import { AgentError } from 'space-agent'
@@ -20,6 +28,17 @@ import { AgentRuntimeService } from 'space-agent-runtime'
 import type { CodingReceipt } from 'space-agent-runtime'
 import { CommandError } from 'space-command'
 import type { CommandCtx } from 'space-command'
+import { LLM_MODEL_ENV } from 'space-llm'
+import type { LlmService } from 'space-llm'
+
+/** ctx.llm 缺席（裸 harness）或代理异常 → null（占位模式）。 */
+function llmOrNull(ctx: Context): LlmService | null {
+  try {
+    return ctx.llm ?? null
+  } catch {
+    return null
+  }
+}
 
 export class AgentRuntime extends AgentRuntimeService {
   async perform(agentId: string, task: string): Promise<CodingReceipt> {
@@ -37,7 +56,8 @@ export class AgentRuntime extends AgentRuntimeService {
     }
     try {
       const handle = await this.ctx.workdir.claim(agentId)
-      const filename = `task-${new Date().toISOString().replace(/[:.]/g, '-')}.md`
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const filename = `task-${stamp}.md`
       const filepath = this.ctx.workdir.resolve(agentId, filename) // execdir 铁则：逃出工作区即炸
       // 提示词段（P8，待定 10 形态）：promptRef 绑定的**内容**随任务落盘 ——
       // 引用（AgentDescriptor.promptRef）与内容（prompt_templates）分离，
@@ -59,11 +79,50 @@ export class AgentRuntime extends AgentRuntimeService {
           promptBody = null
         }
       }
+
+      // ── 模式判定（确定性）：ctx.llm 在且 configured（.env 三件套齐）= 真模型 ──
+      const llm = llmOrNull(this.ctx)
+      const llmReady = Boolean(llm && llm.configured)
+      const model = llmReady ? process.env[LLM_MODEL_ENV]?.trim() ?? '(unset)' : null
+
+      const files: string[] = [filename]
+      if (llm && llmReady) {
+        // 真模型模式：promptRef 提示词（未绑定/未预置 → 通用兜底）+ 指令 →
+        // 单次调用 → 产物 artifact-<时间>.md 落盘。LlmError 原样上抛
+        // （外层 catch 状态回 idle；委托链日志 / 5172 日志页可见）。
+        const system = promptBody ??
+          '你是团队协作系统的 coding agent。按指令完成工作，用 Markdown 输出可直接落库的交付内容。'
+        const answer = await llm.chat([
+          { role: 'system', content: system },
+          { role: 'user', content: `任务：${task}` },
+        ])
+        const artifactName = `artifact-${stamp}.md`
+        await writeFile(
+          this.ctx.workdir.resolve(agentId, artifactName),
+          [
+            `# 产物（${title}）`,
+            '',
+            `- 模型：${model}`,
+            `- 提示词：${promptRef ?? '(未绑定)'}（当前为占位正文，等角色原文 upsert 替换）`,
+            `- 时间：${new Date().toISOString()}`,
+            '',
+            '## LLM 输出',
+            '',
+            answer,
+            '',
+          ].join('\n'),
+          'utf8',
+        )
+        files.push(artifactName)
+      }
+
       const lines: string[] = [
         `# 任务（${title}）`,
         '',
         `- 领取时间：${new Date().toISOString()}`,
-        '- 来源：stub（机制闭环，未接真模型）',
+        llmReady
+          ? '- 来源：真模型（LLM 生成产物，另见 artifact 文件）'
+          : '- 来源：stub（机制闭环，未接真模型）',
         '',
         '## 指令',
         '',
@@ -84,28 +143,40 @@ export class AgentRuntime extends AgentRuntimeService {
       lines.push(
         '## 产物说明',
         '',
-        '本文件即本轮交付物（写文件级 stub）：证明「委托 → 领工作区 → 落盘」',
-        '全链路可观测。真模型接入后此处替换为真实产物。',
+        llmReady
+          ? '交付物 = 本任务文件 + artifact 文件（LLM 输出全文）。'
+          : '本文件即本轮交付物（写文件级 stub）：证明「委托 → 领工作区 → 落盘」\n'
+            + '全链路可观测。配置 LLM 三件套后此步由真模型产物替代。',
         '',
       )
       await writeFile(filepath, lines.join('\n'), 'utf8')
       this.ctx.agents.setStatus(agentId, 'done')
       this.ctx.agents.setStatus(agentId, 'idle')
+
+      // ── 诚实标注（绝不冒充）：真模型=【真模型】+model；占位=【占位】──────
+      // ⚠ LLM_SABOTAGE=1（verify-p8 红测探针，断言 ⑬）：真模型模式谎报【占位】
+      // —— 诚实标注被改坏，E4 必红；还原（不设 env）复绿。
+      const lying = llmReady && process.env.LLM_SABOTAGE === '1'
+      const mode: CodingReceipt['mode'] = llmReady && !lying ? 'llm' : 'stub'
       const receipt =
         `[@${title}] 已领任务：${task}\n` +
-        `回执：stub 已交付（写文件级 stub，未接真模型）\n` +
+        (llmReady
+          ? `回执：【${lying ? '占位' : '真模型'}】LLM 已交付（model=${model}）\n`
+          : `回执：【占位】写文件级 stub（未接真模型）\n`) +
         (promptTitle ? `【提示词】${promptTitle}（ref=${snap.descriptor.promptRef}）\n` : '') +
         `【工作区】${handle.root}\n` +
-        `【产物清单】${filename}`
+        `【产物清单】${files.join('、')}`
       return {
         agentId,
         title,
         task,
         root: handle.root,
-        files: [filename],
+        files,
         receipt,
         promptRef: promptBody ? promptRef : null,
         promptTitle,
+        mode,
+        model,
       }
     } catch (e) {
       // 干活中途失败：状态回 idle（任务作废），错误原样上抛给调用方处置。
@@ -117,8 +188,8 @@ export class AgentRuntime extends AgentRuntimeService {
 
 export const name = 'space-agent-runtime'
 // cordis 严格注入：agents（名册/状态机）+ workdir（领地落盘）+ commands（/tell）
-// + prompts（提示词内容）。prompts 由 space-store-sqlite 提供（组合根常驻）。
-export const inject = ['agents', 'workdir', 'commands', 'prompts']
+// + prompts（提示词内容）+ llm（真模型能力，P8 下半场）。
+export const inject = ['agents', 'workdir', 'commands', 'prompts', 'llm']
 
 export function apply(ctx: Context) {
   const runtime = new AgentRuntime(ctx)

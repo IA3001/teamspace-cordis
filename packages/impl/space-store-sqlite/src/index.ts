@@ -78,9 +78,16 @@ declare module '@cordisjs/plugin-database' {
       mentions: string
       created_at: string
     }
+    prompt_templates: {
+      ref: string
+      title: string
+      body: string
+      updated_at: string
+    }
   }
 }
 import { SqliteEventLog } from './eventlog.ts'
+import { SqlitePromptStore } from './prompt.ts'
 import { SqliteStagingStore } from './staging.ts'
 import { currentVersion, expectedVersion } from './loader.ts'
 import { SqliteSessionStore } from './session.ts'
@@ -180,15 +187,25 @@ export function apply(ctx: Context, config: Config = {}) {
     created_at: { type: 'string', nullable: false },
   }, { primary: 'id' })
 
+  // 提示词模板（P8）：与 0006_prompt_templates 逐列对齐（ref 主键）。
+  ctx.database.extend('prompt_templates', {
+    ref: { type: 'string', nullable: false },
+    title: { type: 'string', nullable: false },
+    body: { type: 'string', nullable: false },
+    updated_at: { type: 'string', nullable: false },
+  }, { primary: 'ref' })
+
   // ── 4. 两个缝的真正实现 ───────────────────────────────────────────────────
   new SqliteSessionStore(ctx, db) // 提供 ctx.session
   const eventLog = new SqliteEventLog(ctx, db) // 提供 ctx.eventLog
   // staging 的 commit 要落人类发言事件（跨缝组合在同一 impl 内完成，
   // 契约见 seam/space-staging 的 commit），所以把 eventLog 递给它。
   new SqliteStagingStore(ctx, db, eventLog) // 提供 ctx.staging
+  // 提示词模板（P8）：内容资产（get/upsert/list），DDL 唯一出处 migrations/0006。
+  new SqlitePromptStore(ctx, db) // 提供 ctx.prompts
 
   console.log(
-    `[${name}] 就绪：${path}（schema v${current}，业务表 sessions / session_members / events / staging_entries + 留痕表 action_log）`,
+    `[${name}] 就绪：${path}（schema v${current}，业务表 sessions / session_members / events / staging_entries / prompt_templates + 留痕表 action_log）`,
   )
 
   // 清理：cordis v4 惯用法 —— apply 返回函数即 disposer（卸载/停止时关库连接）。

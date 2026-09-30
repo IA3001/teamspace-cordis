@@ -1,0 +1,11 @@
+{
+  "name": "space-prompt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：提示词模板缝（get/list/upsert）。内容资产独立成缝 —— 防杂物袋（承待定 8 判据）：agent 缝管名单与生命周期，提示词是可独立 CRUD、可被非 agent 消费者引用的内容",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

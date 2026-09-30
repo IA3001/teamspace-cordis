@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "impl：ctx.session / ctx.eventLog / ctx.staging 的 sqlite 后端 —— 迁移链（DDL 唯一出处）+ seed/reset + model 注册（5172 数据库页展示）",
+  "description": "impl：ctx.session / ctx.eventLog / ctx.staging / ctx.prompts 的 sqlite 后端 —— 迁移链（DDL 唯一出处）+ seed/reset + model 注册（5172 数据库页展示）",
   "main": "src/index.ts",
   "dependencies": {
     "space-event": "*",
+    "space-prompt": "*",
     "space-session": "*",
     "space-staging": "*"
   },

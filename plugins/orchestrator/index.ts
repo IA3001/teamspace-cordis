@@ -188,9 +188,13 @@ export class OrchestratorEngine extends OrchestratorService {
 
     // 合法委托：先宣告（调用前必须输出），后记账。保持 chain 等目标反馈。
     t.delegatedTargets.push(delegate.target)
+    // 宣告 + 大脑附言（P8）：大脑 reply 非空时随宣告落时间线 —— 占位大脑的
+    // 「非 NLP」标记借此在委托分支可见（回复分支本就单独落事件）。
+    // verify-orchestrator A5b 用 startsWith 前缀口径，附言追加不破坏断言。
     this.sayCoordinator(
       sessionId,
-      `已收到指令，将委托[${delegate.target}]：${delegate.instruction || event.text}`,
+      `已收到指令，将委托[${delegate.target}]：${delegate.instruction || event.text}` +
+        (reply ? `\n（大脑附言：${reply}）` : ''),
     )
     // 消费委托（P6 收尾）：把委托交执行链 —— emit 内核事件，订阅方（
     // agent-coder-stub 等）认领自己名下的 target 真正干活，干完走收执口

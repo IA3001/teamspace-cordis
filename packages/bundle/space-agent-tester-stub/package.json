@@ -1,0 +1,11 @@
+{
+  "name": "space-agent-tester-stub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "bundle 层：第二个 Coding Agent（测试者 stub）的自带 patch 一行 —— 入驻 = 纯新增（铁律 4 / 断言 ⑪）。不写代码，只带 cordis.patch.yml。",
+  "cordis": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

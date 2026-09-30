@@ -349,9 +349,12 @@ async function partB(): Promise<void> {
   check('B0 后端可达（/healthz）', alive, `连不上 ${BASE} —— 先 npm run start（verify 与 check:console 同前提）`)
   if (!alive) return
 
-  // B1 /commit → 'staging/plan' → orchestrator 接管（服务端无大脑 → 暂停）。
-  // 服务端没注册大脑是刻意的：unconfigured 暂停本身就是「接管成功」的观测面 ——
-  // 若 orchestrator 没挂上，/commit 之后根本没有回合可言（P2 时点行为）。
+  // B1 /commit → 'staging/plan' → orchestrator 接管。
+  // P8 口径修订（2026-09-30）：服务端现已注册**占位大脑**（plugins/brain-stub，
+  // 组合根常驻）—— /commit 触发恰好一次大脑调用；本轮无 @ 命中 → 分支二纯文本
+  // 回复 → await_human 暂停。「未配置大脑 → coordinator_unconfigured」的承旧
+  // 口径改由两处继续承担：Part A（进程内真引擎无大脑）+ verify-p8 B4（brain-stub
+  // config.enabled=false 的组合根关断路径）—— 保护力不丢，落点搬家。
   await post('/clear confirm')
   await post('/add p3-wiring-one')
   const b1 = await post('/commit')
@@ -359,16 +362,16 @@ async function partB(): Promise<void> {
   const t1 = await getTurn()
   check('B1b orchestrator 已接管：回合存在（GET /turn）', t1.status === 200 && typeof t1.body.decisionCalls === 'number', JSON.stringify(t1))
   check(
-    'B1c 未配置大脑 → coordinator_unconfigured 暂停 + 零调用（承旧口径）',
-    t1.body.decisionCalls === 0 && t1.body.stopReason === 'coordinator_unconfigured' && t1.body.state === 'static',
+    'B1c 占位大脑上线 → 每回合恰好一次调用 + await_human 暂停（P8 起）',
+    t1.body.decisionCalls === 1 && t1.body.stopReason === 'await_human' && t1.body.state === 'static',
     JSON.stringify(t1.body),
   )
 
-  // B2 第二次提交：新回合重开（无大脑路径下同样计 0 —— 每回合记账重开的可观测面）
+  // B2 第二次提交：新回合重开（每回合记账重开 —— P8 下每回合各计 1 次调用）
   await post('/add p3-wiring-two')
   await post('/commit')
   const t2 = await getTurn()
-  check('B2 新回合重开（decisionCalls 按回合重新记账）', t2.body.decisionCalls === 0 && t2.body.stopReason === 'coordinator_unconfigured', JSON.stringify(t2.body))
+  check('B2 新回合重开（decisionCalls 按回合重新记账）', t2.body.decisionCalls === 1 && t2.body.stopReason === 'await_human', JSON.stringify(t2.body))
 
   // B3 空 /commit：零事件零信号 → 回合纹丝不动（P2 语义经 orchestrator 仍成立）
   const t2snap = JSON.stringify(t2.body)

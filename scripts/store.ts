@@ -106,7 +106,7 @@ function cmdDown(): number {
   return 0
 }
 
-const COUNT_TABLES = ['sessions', 'session_members', 'events', 'action_log']
+const COUNT_TABLES = ['sessions', 'session_members', 'events', 'staging_entries', 'prompt_templates', 'action_log']
 
 function rowCount(db: DatabaseSync): number {
   let n = 0

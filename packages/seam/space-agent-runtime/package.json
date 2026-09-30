@@ -1,0 +1,11 @@
+{
+  "name": "space-agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.agentRuntime —— coding 类共享干活路径（领工作区 → 任务落盘 → 状态机走满 → 回执）。零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

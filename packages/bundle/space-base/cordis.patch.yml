@@ -64,6 +64,16 @@
 - id: orchestrator
   name: './plugins/orchestrator/index.ts'
 
+# 占位大脑（P8，2026-09-30）：第一个真实挂在 registerBrain 上的 OrchestratorBrain，
+# 让委托回路端到端可观测。**非 NLP**：@ 提示命中授权名册 → 合法 JSON 委托
+#（instruction=人类原话），否则纯文本回复；文案处处明示占位。config.enabled=false
+# （用户层覆盖）= 回到 coordinator_unconfigured 安全默认。真 LLM 只留接口位
+#（.env 的 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL，本包只读不打）。
+- id: brain-stub
+  name: './plugins/brain-stub/index.ts'
+  config:
+    enabled: true
+
 # ── 只读查询 + 面板注册表（P4）──────────────────────────────────────────
 # 只读口：时间线/成员页的数据源（HTTP 可 curl 观测）；写路径仍然只在
 # staging-commands 的 POST /messages，这里一个写口都不加。
@@ -86,3 +96,9 @@
 # claim 先验入驻名单（space-agent 缝），resolve 路径边界判定（execdir 铁则）。
 - id: space-workdir-local
   name: './packages/impl/space-workdir-local/src/index.ts'
+
+# ctx.agentRuntime（P8，2026-09-30）：coding 类共享干活路径的机制行 ——
+# P6 在案记账的升格兑现（从 agent-coder-stub 迁入 perform 与 /tell 直派口）。
+# 此后 coding agent 包收敛为「描述符 + 委托认领」（铁律 4：入驻 = 纯新增）。
+- id: space-agent-runtime
+  name: './packages/impl/space-agent-runtime/src/index.ts'

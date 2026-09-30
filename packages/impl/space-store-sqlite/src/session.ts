@@ -122,9 +122,9 @@ export class SqliteSessionStore extends SessionService {
         this.db
           .prepare(
             `INSERT INTO session_members(session_id, principal_id, role, status, joined_at, left_at, duty)
-             VALUES (?, ?, ?, 'active', ?, NULL, '')`,
+             VALUES (?, ?, ?, 'active', ?, NULL, ?)`,
           )
-          .run(input.sessionId, input.principalId, role, now())
+          .run(input.sessionId, input.principalId, role, now(), input.duty ?? '')
       } catch (e) {
         mapConstraintError(e)
       }
@@ -143,10 +143,10 @@ export class SqliteSessionStore extends SessionService {
         this.db
           .prepare(
             `UPDATE session_members
-             SET status = 'active', role = ?, joined_at = ?, left_at = NULL
+             SET status = 'active', role = ?, joined_at = ?, left_at = NULL, duty = COALESCE(?, duty)
              WHERE session_id = ? AND principal_id = ?`,
           )
-          .run(role, now(), input.sessionId, input.principalId)
+          .run(role, now(), input.duty ?? null, input.sessionId, input.principalId)
       } catch (e) {
         mapConstraintError(e)
       }

@@ -30,6 +30,7 @@ import { Context } from 'cordis'
 import { WorkdirError } from 'space-workdir'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
 import { apply as stubApply } from '../plugins/agent-coder-stub/index.ts'
+import { apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
 import { LocalWorkdirService } from '../packages/impl/space-workdir-local/src/index.ts'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
@@ -173,6 +174,7 @@ async function partB(): Promise<void> {
   const engine = new OrchestratorEngine(ctx) // ctx.orchestrator
 
   // coder 入驻 + 订阅委托（真 stub 插件 apply —— 与运行时同一条路径）
+  runtimeApply(ctx) // P8 升格：共享干活路径（委托处理器走 ctx.agentRuntime）
   stubApply(ctx)
 
   // scripted brain（承 verify-orchestrator 先例）：可编程的"模型"

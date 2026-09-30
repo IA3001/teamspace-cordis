@@ -28,6 +28,7 @@ import type { CommandCtx } from 'space-command'
 import { CommandService } from 'space-command'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
 import { apply as stubApply } from '../plugins/agent-coder-stub/index.ts'
+import { apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
 import { LocalWorkdirService } from '../packages/impl/space-workdir-local/src/index.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -84,6 +85,9 @@ const WHITELIST_PREFIXES = [
   'plugins/agent-',
   'scripts/verify-agents.ts',
   'scripts/verify-workdir.ts',
+  // P8（2026-09-30）：第十三门禁验证脚本与 verify-workdir 同待遇（其 Part D
+  // 要用 agent id 字面量注册三 stub 做入驻回归）。
+  'scripts/verify-p8.ts',
 ]
 /** 扫描范围：业务源码 + 脚本（node_modules/dist/产物不扫）。 */
 const SCAN_ROOTS = ['src', 'plugins', 'packages', 'scripts', 'config']
@@ -145,7 +149,8 @@ async function partA(): Promise<void> {
   // P6 收尾：/tell 干活路径要领工作区（写文件级 stub）——harness 补临时目录 workdir
   const tmp = mkdtempSync(join(tmpdir(), 'agents-verify-'))
   new LocalWorkdirService(ctx, tmp)
-  stubApply(ctx) // 报到（agent.coder）+ 注册 /tell —— 与运行时完全同一条路径
+  runtimeApply(ctx) // P8 升格：共享干活路径（ctx.agentRuntime）+ /tell 直派口在机制包
+  stubApply(ctx) // 报到（agent.coder）—— 与运行时完全同一条路径
 
   const S = 's_a'
   const U = 'u_dri'

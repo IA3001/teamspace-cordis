@@ -253,17 +253,27 @@ async function partB(): Promise<void> {
   check('B3c confirm 才真清', String(b3b.body.reply ?? '').startsWith('已清空') && (await getStaging()).length === 0, JSON.stringify(b3b.body))
 
   // B4 /commit：合并成单条人类发言事件 + 清空暂存
+  // P8 口径修订（2026-09-30）：占位大脑上线后，/commit 还会触发恰好一次
+  // 大脑调用 —— 未命中分支的协调者回复按 P3+ 设计落一条 a_coordinator 事件
+  // （与 verify-orchestrator A4e 同源口径）。因此断言收紧为：
+  //   ① human 事件恰好 +1（/commit 的本职，防重复落库的保护力保留）；
+  //   ② 总事件增量在 [1,2]（协调者回复至多随行一条，不得更多）；
+  //   ③ 合并文本断言对准**最新的人类事件**（协调者回复在其后，不算数）。
   await post('/add b4-one')
   await post('/add b4-two')
   const eb = eventsCount(db)
+  const humanCount = (d: { prepare: Function }) =>
+    (d.prepare(`SELECT count(*) AS n FROM events WHERE session_id = ? AND author_kind = 'human'`).get(S) as { n: number }).n
+  const hb = humanCount(db)
   const b4 = await post('/commit')
   const ea = eventsCount(db)
   check('B4a 回执「已提交 2 条」', b4.status === 200 && String(b4.body.reply ?? '').includes('已提交 2 条'), JSON.stringify(b4.body))
-  check('B4b events 恰好多 1 条', ea === eb + 1, `${eb} → ${ea}`)
-  const last = db
-    .prepare(`SELECT author_kind, kind, text FROM events WHERE session_id = ? ORDER BY seq DESC LIMIT 1`)
+  check('B4b human 事件恰好多 1 条（协调者回复至多随行 1 条）',
+    humanCount(db) === hb + 1 && ea - eb >= 1 && ea - eb <= 2, `human ${hb} → ${humanCount(db)}；total ${eb} → ${ea}`)
+  const lastHuman = db
+    .prepare(`SELECT author_kind, kind, text FROM events WHERE session_id = ? AND author_kind = 'human' ORDER BY seq DESC LIMIT 1`)
     .get(S) as { author_kind: string; kind: string; text: string }
-  check('B4c 合并文本 = 两行拼接、human/message', last.text === 'b4-one\nb4-two' && last.author_kind === 'human' && last.kind === 'message', JSON.stringify(last))
+  check('B4c 合并文本 = 两行拼接、human/message', lastHuman.text === 'b4-one\nb4-two' && lastHuman.author_kind === 'human' && lastHuman.kind === 'message', JSON.stringify(lastHuman))
   check('B4d 提交后暂存区清空', (await getStaging()).length === 0)
 
   // B5 空提交：只回执，不落事件

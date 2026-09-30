@@ -29,7 +29,7 @@ import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, re
 import { useRpc, useContext, useRoute, useRouter } from '@cordisjs/client'
 import EventItem from 'space-client-ui-shared/client/EventItem.ts'
 import IconBtn from 'space-client-ui-shared/client/IconBtn.ts'
-import { authorLabel, formatTime } from 'space-client-ui-shared/client/labels.ts'
+import { authorLabel, formatTime, memberLabel } from 'space-client-ui-shared/client/labels.ts'
 import type { EventLite, MemberLite } from 'space-client-ui-shared/client/labels.ts'
 
 interface SessionLite { id: string; title: string; status: string }
@@ -140,7 +140,8 @@ const TeamspacePage = defineComponent({
     }
     const slashItems = (q: string) => commands.value.filter((c) => c.name.startsWith(q))
     const mentionItems = (q: string) => mentionCandidates()
-      .filter((m) => m.principalId.toLowerCase().includes(q) || m.role.toLowerCase().includes(q))
+      .filter((m) => m.principalId.toLowerCase().includes(q) || m.role.toLowerCase().includes(q) ||
+        (m.duty ?? '').toLowerCase().includes(q))
 
     const parseMentions = (): string[] => {
       const ids = mentionCandidates().map((m) => m.principalId)
@@ -404,7 +405,7 @@ const TeamspacePage = defineComponent({
                 default: () => mentionCandidates().map((m) => h(ElTag, {
                   key: m.principalId, size: 'small',
                   type: m.role === 'DRI' ? 'success' : 'primary',
-                }, { default: () => `${m.role}（${m.principalId}）` })),
+                }, { default: () => memberLabel(m) })),
               })
             : h(ElEmpty, { description: '暂无在册成员', imageSize: 60 }),
         ],
@@ -434,7 +435,7 @@ const TeamspacePage = defineComponent({
         const items = mentionItems(m.query)
         return items.length === 0
           ? [h('div', '（没有匹配的成员）')]
-          : items.map((mm, i) => menuRow(i, `${mm.role}（${mm.principalId}）`, '插入提及', () => insertMention(mm.principalId)))
+          : items.map((mm, i) => menuRow(i, memberLabel(mm), '插入提及', () => insertMention(mm.principalId)))
       }
       const suggestionPopover = () => h(ElPopover, {
         visible: menu.value !== null,

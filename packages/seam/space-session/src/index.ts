@@ -109,6 +109,12 @@ export interface JoinInput {
   principalId: string
   /** 缺省 '成员'。 */
   role?: Role
+  /**
+   * 成员分工展示名（P8，2026-09-30）：coding agent 入会时 = 名册 title ——
+   * 否则三个 coding agent 在成员表里都是「成员」，人分不清谁是谁；
+   * 缺省空串；重新激活（曾 left）时不传则保留旧值不清洗。
+   */
+  duty?: string
 }
 
 // ── 错误分类法（规律 3：实现与策略不得自造错误串，只能抛这里的错误码）──────

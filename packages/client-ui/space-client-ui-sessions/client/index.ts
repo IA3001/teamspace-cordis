@@ -1,8 +1,9 @@
-// 左侧会话栏（客户端）—— 2026-09-29 改版的新增区。
+// 左侧会话栏（客户端）—— 2026-09-29 改版的新增区；P8 起新会议带角色选择。
 //
-// 结构（用户拍板）：置顶「新会议」主动作 → 会话列表按状态分组（进行中 /
-// 已结束，数据来自 session.status）→ 底部当前身份（DRI）。窄视口默认收起
-// 的开关在中央顶栏（页面侧持有），本组件只负责内容。
+// 结构（用户拍板）：置顶「新会议」主动作（P8：按钮下方一行 coding 角色多选，
+// el-select multiple 标准件，缺省不选 = 只开纯会议名册）→ 会话列表按状态分组
+// （进行中 / 已结束，数据来自 session.status）→ 底部当前身份（DRI）。窄视口
+// 默认收起的开关在中央顶栏（页面侧持有），本组件只负责内容。
 //
 // 选中态走 URL：?session=<id>（useRouter.replace 写、useRoute 读）——页面与
 // 本组件分属两个 entry（各自的 Vite 产物、各自的空间），URL 是唯一不需要
@@ -28,6 +29,12 @@ interface MemberRow {
   role: string
 }
 
+/** coding 名册条目（新会议「附加角色」多选的数据源）。 */
+interface RosterRow {
+  id: string
+  title: string
+}
+
 /** 最近更新在前（同组内排序）。 */
 const byUpdatedDesc = (a: SessionRow, b: SessionRow) => b.updatedAt.localeCompare(a.updatedAt)
 
@@ -37,13 +44,16 @@ const SessionsRail = defineComponent({
     const rpc = useRpc<{
       sessions(): Promise<SessionRow[]>
       members(sessionId: string): Promise<MemberRow[] | null>
-      create(): Promise<SessionRow>
+      codingRoster(): Promise<RosterRow[]>
+      create(selectedIds: string[]): Promise<SessionRow>
     }>()
     const router = useRouter()
     const route = useRoute()
 
     const sessions = ref([]) as { value: SessionRow[] }
     const members = ref([]) as { value: MemberRow[] }
+    const roster = ref([]) as { value: RosterRow[] }
+    const selected = ref([]) as { value: string[] }
     const creating = ref(false)
     const error = ref('')
     let timer: ReturnType<typeof setInterval> | undefined
@@ -71,6 +81,15 @@ const SessionsRail = defineComponent({
       }
     }
 
+    /** coding 名册只拉一次（stub 名册静态；插件启停后刷新页面即新）。 */
+    async function loadRoster() {
+      try {
+        roster.value = await rpc.value.codingRoster()
+      } catch {
+        roster.value = [] // 名册取不到 = 不展示多选（纯会议照常可开）
+      }
+    }
+
     function select(id: string) {
       void router.replace({ query: { session: id } })
     }
@@ -78,7 +97,8 @@ const SessionsRail = defineComponent({
     async function create() {
       creating.value = true
       try {
-        const s = await rpc.value.create()
+        const s = await rpc.value.create([...selected.value])
+        selected.value = []
         await load()
         select(s.id)
       } catch (e) {
@@ -90,6 +110,7 @@ const SessionsRail = defineComponent({
 
     onMounted(() => {
       void load()
+      void loadRoster()
       timer = setInterval(() => void load(), 5000)
     })
     onUnmounted(() => clearInterval(timer))
@@ -102,6 +123,8 @@ const SessionsRail = defineComponent({
       const ElSpace = resolveComponent('el-space') as unknown as string
       const ElText = resolveComponent('el-text') as unknown as string
       const ElTag = resolveComponent('el-tag') as unknown as string
+      const ElSelect = resolveComponent('el-select') as unknown as string
+      const ElOption = resolveComponent('el-option') as unknown as string
 
       /** 会话条目：文本按钮，选中高亮（active 由 URL 派生）。 */
       const sessionItem = (s: SessionRow) => h(ElButton, {
@@ -127,17 +150,35 @@ const SessionsRail = defineComponent({
         ]
       }
 
-      return [
-        error.value
-          ? h(ElAlert, { title: error.value, type: 'error', closable: true, onClose: () => { error.value = '' } })
-          : null,
-        h('div', { class: 'page-sidebar-header' }, [
+      /** 新会议主动作（P8）：按钮 + coding 角色多选（名册为空则不展示多选）。 */
+      const header = () => h(ElSpace, { direction: 'vertical', fill: true }, {
+        default: () => [
           h(ElButton, {
             type: 'primary',
             disabled: creating.value,
             onClick: () => void create(),
           }, { default: () => creating.value ? '创建中…' : '新会议' }),
-        ]),
+          ...(roster.value.length ? [h(ElSelect, {
+            multiple: true,
+            collapseTags: true,
+            collapseTagsTooltip: true,
+            clearable: true,
+            placeholder: '附加 coding 角色（可多选）',
+            modelValue: selected.value,
+            'onUpdate:modelValue': (v: string[]) => { selected.value = v },
+          }, { default: () => roster.value.map((a) => h(ElOption, {
+            key: a.id,
+            label: a.title,
+            value: a.id,
+          })) })] : []),
+        ],
+      })
+
+      return [
+        error.value
+          ? h(ElAlert, { title: error.value, type: 'error', closable: true, onClose: () => { error.value = '' } })
+          : null,
+        h('div', { class: 'page-sidebar-header' }, [header()]),
         h('div', { class: 'page-sidebar-content' }, content()),
         h('div', [
           h(ElDivider),

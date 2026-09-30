@@ -2,17 +2,24 @@
 //
 // 这里只有「值 → 人话」的纯函数，零组件、零样式、零令牌。
 
-/** 成员的客户端视图（只要显示需要的两列）。 */
+/** 成员的客户端视图（只要显示需要的列；duty = 分工展示名，缺省空）。 */
 export interface MemberLite {
   principalId: string
   role: string
+  duty?: string
 }
 
-/** authorId → 「角色（id）」；null = 系统事件；成员表缺人时降级为裸 id。 */
+/** 成员 → 「显示名（id）」：有分工展示名用分工（P8：coding agent 入会时
+ *  duty = 名册 title，否则三个 coding agent 在表里都是「成员」分不清），无则用角色。 */
+export function memberLabel(m: MemberLite): string {
+  return `${m.duty?.trim() ? m.duty : m.role}（${m.principalId}）`
+}
+
+/** authorId → 「显示名（id）」；null = 系统事件；成员表缺人时降级为裸 id。 */
 export function authorLabel(authorId: string | null, members: readonly MemberLite[]): string {
   if (!authorId) return '系统'
   const m = members.find((x) => x.principalId === authorId)
-  return m ? `${m.role}（${authorId}）` : authorId
+  return m ? memberLabel(m) : authorId
 }
 
 /** ISO 时间戳 → HH:MM:SS（本地时区；解析不了就原样给）。 */

@@ -1,7 +1,8 @@
 // ctx.eventLog 的 sqlite 实现。语义契约见 seam/space-event 类注释。
 import type { DatabaseSync } from 'node:sqlite'
 import { EventLogError, EventLogService, validateEvent } from 'space-event'
-import type { EventInput, SessionEvent, ToolCall } from 'space-event'
+import type { EventInput, ReactSummary, SessionEvent, ToolCall } from 'space-event'
+import { reactToEvent, reactionsForEvents, unreactFromEvent } from './reactions.ts'
 
 type Row = Record<string, unknown>
 
@@ -28,6 +29,7 @@ function toEvent(r: Row): SessionEvent {
     mentions: parse(r.mentions, []) as string[],
     toolCalls: parse(r.tool_calls, []) as ToolCall[],
     replyMode: (r.reply_mode as string) ?? '',
+    replyTo: (r.reply_to as string | null) ?? null,
     voided: Number(r.voided) === 1,
     voidedBy: (r.voided_by as string | null) ?? null,
     voidedAt: (r.voided_at as string | null) ?? null,
@@ -62,8 +64,8 @@ export class SqliteEventLog extends EventLogService {
     try {
       this.db
         .prepare(
-          `INSERT INTO events(id, session_id, seq, phase_id, ts, author_id, author_kind, kind, text, mentions, tool_calls, reply_mode, voided)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          `INSERT INTO events(id, session_id, seq, phase_id, ts, author_id, author_kind, kind, text, mentions, tool_calls, reply_mode, reply_to, voided)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
         )
         .run(
           input.id,
@@ -78,6 +80,7 @@ export class SqliteEventLog extends EventLogService {
           JSON.stringify(input.mentions ?? []),
           JSON.stringify(input.toolCalls ?? []),
           input.replyMode ?? '',
+          input.replyTo ?? null,
         )
     } catch (e) {
       const msg = String((e as Error).message)
@@ -90,7 +93,12 @@ export class SqliteEventLog extends EventLogService {
       }
       throw e
     }
-    return this.getRaw(input.id)!
+    // IM 化（2026-09-30）：任何事件落库后恰好一次广播信号 —— 实时推送
+    // （plugins/space-push）与 AI 回流（orchestrator）共用同一条信号源。
+    // 信号与落库绑死在同一方法 = 结构化 exactly-once（承 staging.commit 惯例）。
+    const event = this.getRaw(input.id)!
+    this.ctx.emit('space/event-appended', { event })
+    return event
   }
 
   void(id: string, by: string, reason: string): number {
@@ -144,6 +152,20 @@ export class SqliteEventLog extends EventLogService {
         )
         .all(sessionId, `%${escaped}%`) as Row[]
     ).map(toEvent)
+  }
+
+  // ── 表情回应（IM 化 2026-10-01）：SQL 细节在 reactions.ts，这里只组合 ────
+
+  async react(eventId: string, userId: string, emoji: string): Promise<ReactSummary[]> {
+    return reactToEvent(this.db, eventId, userId, emoji)
+  }
+
+  async unreact(eventId: string, userId: string, emoji: string): Promise<ReactSummary[]> {
+    return unreactFromEvent(this.db, eventId, userId, emoji)
+  }
+
+  async reactions(eventIds: string[]): Promise<Record<string, ReactSummary[]>> {
+    return reactionsForEvents(this.db, eventIds)
   }
 
   private nextSeq(sessionId: string): number {

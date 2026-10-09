@@ -1,41 +1,41 @@
-// 团队空间整页（客户端）—— 2026-09-29 三区骨架改版（用户拍板方案落地）。
+// 团队空间整页（客户端）—— IM 化改造（2026-09-30，用户拍板）。
 //
 // 布局（k-layout 外壳 chrome + 外壳共享布局类，零手写样式）：
 //   k-layout（.page-content：薄顶栏 .layout-header + .main-content flex 行）
-//   ├ #header 槽（薄顶栏左上角）：折叠开关 + 会话标题 + 状态徽章
-//   ├ #menu   槽（薄顶栏右上角）：「协作面板」开关（宽屏常驻 / 窄屏默认折叠，
-//   │   与左栏 railOpen 同款范式；2026-09-30 拍板：遮罩抽屉改非遮罩常驻右列）
+//   ├ #header 槽：折叠开关 + 会话标题 + 状态徽章
+//   ├ #menu   槽：「协作面板」开关（宽屏常驻 / 窄屏默认折叠）
 //   └ 默认槽 → .main-content（flex 行）：
-//       ├ aside.page-sidebar（左：会话栏，内容来自 'space-teamspace-sidebar'
-//       │   槽位视图 —— 由 space-client-ui-sessions 包经 router.slot 入驻；
-//       │   该包缺席时 k-slot 渲染为空，整页照常工作 = 纯新增可插拔）
+//       ├ aside.page-sidebar（左：会话栏，由 space-client-ui-sessions 经槽位入驻）
 //       ├ div.content-area（中：消息区 + composer）
-//       │   ├ div.content-body > el-scrollbar > div.k-content
-//       │   │   （消息列居中限宽 55rem、大留白；人类消息右对齐 el-card 气泡，
-//       │   │    agent/系统消息左对齐平文 + 角色标签；时间戳默认不显示，
-//       │   │    悬停消息行内揭示「作者 · 时间」—— 2026-09-30 回炉：弃 el-tooltip
-//       │   │    传送门（长会话下 popper 弹出不确定），改组件状态驱动的行内揭示，
-//       │   │    真实鼠标与测试注入两条路径都确定可见）
-//       │   └ div.k-content > composer 卡片（悬浮卡片化：贴底居中，不再通栏）
-//       └ aside.right-sidebar（右：协作面板常驻列 —— 外壳 layout.scss 现成
-//           右列类（与 .page-sidebar 对称），零新样式；面板空值行不渲染）
+//       └ aside.right-sidebar（右：协作面板常驻列）
 //
-// 不可回退的既有交互（原样保留）：普通文本自动暂存 +「已记下 #N」回执、
-// closable el-tag 暂存条目（点 × = /del）、/cur //commit 并入斜杠联想菜单、
-// @ 联想浮层（el-popover virtual-triggering）与完整键盘导航（↑↓/Enter/Tab/
-// Esc/Shift+Enter/菜单关时 Enter 直发）、右面板数据口径（轮次状态/暂停原因/
-// 调用次数/本回合已委托 + 可@成员）、发送走 handleInbound 与 HTTP 入站同路径。
+// IM 化交互（本次改造）：
+//   · 实时推送：ctx.client.socket 监听 'space:event'，新事件增量合并进时间线；
+//     4s 轮询删除（断线重连后一次全量刷新兜底）。
+//   · 滚动跟随：只有贴近底部（<80px）才自动跟随；偏离时显示「回到最新」悬浮按钮。
+//   · 发送即上屏：乐观插入（本地临时事件 → 服务端确认后按 id 对齐/去重）；
+//     发送中按钮 loading、Enter 直发被拦（防连发）。
+//   · 身份：me() 从 token 解析真实登录用户（DRI 硬编码已删除）。
+//   · 已结束会话：composer 禁用。
+//   · 空输入 Enter 静默忽略；成功回执 3s 自动消隐（错误常显可手动关）。
+//   · token 统一 localStorage 'space_token'（/login 页写入）；无效时跳 /login。
 //
-// 会话选中态走 URL（?session=<id>）：会话栏（独立 entry）与本页经外壳 router
-// 单例同步，无跨包共享状态。
+// 既有交互（原样保留）：斜杠指令联想（现注册：/todo /tell /summary /code 等，
+//   暂存指令族已于 2026-10-02 注销）、
+// @ 联想浮层与完整键盘导航（↑↓/Enter/Tab/Esc/Shift+Enter）、右面板数据口径、
+// closable el-tag 暂存条目（仅非空时显示）。
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, resolveComponent, watch } from 'vue'
 import { useRpc, useContext, useRoute, useRouter } from '@cordisjs/client'
 import EventItem from 'space-client-ui-shared/client/EventItem.ts'
+import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
+import { ICONS } from 'space-client-ui-shared/client/console.ts'
+import 'space-client-ui-shared/client/im.css'
+import { renderMarkdown } from 'space-client-ui-shared/client/md.ts'
 import IconBtn from 'space-client-ui-shared/client/IconBtn.ts'
 import { authorLabel, formatTime, memberLabel } from 'space-client-ui-shared/client/labels.ts'
 import type { EventLite, MemberLite } from 'space-client-ui-shared/client/labels.ts'
 
-interface SessionLite { id: string; title: string; status: string }
+interface SessionLite { id: string; title: string; status: string; updatedAt?: string }
 interface StagingEntry { id: string; seq: number; text: string; authorId: string }
 interface TurnLite {
   state: string
@@ -43,9 +43,25 @@ interface TurnLite {
   delegatedTargets: string[]
   stopReason: string
   stopDetail: string
+  autonomousActions?: number
 }
-type SendResult = { reply: string } | { error: string; detail: string }
+type SendResult = { reply?: string; event?: EventLite } | { error: string; detail: string }
+/**
+ * 本地事件视图：在 shared 的 EventLite 之上补撤回字段（shared 不动，避免跨包冲突；
+ * sqlite eventLog 的 toEvent 已带 voided，服务端返回的对象天然多这个字段，加 (?) 即对齐）。
+ */
+type TEvent = EventLite & { voided?: boolean }
+/** 表情回应汇总（本地镜像 seam space-event 的 ReactSummary，shared 不动照 voided 惯例）。 */
+interface ReactSummaryLite { emoji: string; count: number; users: string[] }
+type ReactResult = ReactSummaryLite[] | { error: string }
+/** 回应面板固定五选（不用 popover：直接展开一排，避免传送门不确定性）。 */
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎯', '❓'] as const
+interface MeLite { id: string; username: string; displayName: string }
 interface CommandLite { name: string; usage: string; minArgs: number; maxArgs: number }
+/** AI 成员工作状态（agents RPC 的客户端视图）。 */
+interface AgentView { id: string; title: string; status: string; capabilities?: string[] }
+/** 团队待办（todos RPC 的客户端视图；序号由渲染时按 createdAt 升序编，不持久化）。 */
+interface TodoView { id: string; done: boolean; text: string; createdAt: string }
 /** 联想菜单：null = 关闭；否则 slash（指令联想）或 mention（成员联想）。 */
 type Menu = { kind: 'slash'; query: string } | { kind: 'mention'; query: string } | null
 
@@ -56,34 +72,164 @@ const STATE_LABEL: Record<string, string> = {
 const STATE_TAG: Record<string, string> = { chain: 'warning', static: 'info' }
 const STOP_LABEL: Record<string, string> = {
   await_human: '等待人类下一步指示',
+  completed: '回合完成',
+  budget_exhausted: '自治预算已用完，等待人类',
   invalid_target: '委托目标不在授权名单',
   coordinator_unconfigured: '协调者未配置',
   coordinator_error: '协调者调用失败',
   coordinator_empty: '协调者空输出',
   duplicate_target: '同轮重复委托',
 }
-/** 会话状态徽章（sessions.status：open/closed）。 */
 const sessionStatus = (s: SessionLite) =>
   ({ label: s.status === 'closed' ? '已结束' : '进行中', tag: s.status === 'closed' ? 'info' : 'success' })
 
 /** 可被 @ 的角色（目标 agent + 人类）——协调者不在清单。 */
-const MENTION_ROLES = new Set(['会议记录官', '挑战者', '需求分析师', 'DRI', '成员'])
+const MENTION_ROLES = new Set(['会议记录官', '挑战者', '需求分析师', 'DRI', '成员', '群主', '管理员'])
 
-/** 中间消息列与 composer 共用的居中限宽容器：外壳 k-content 的现成类
- *  （max-width 55rem + margin auto + 响应式内边距，即「业界 ~720px 观感」）。 */
+/** 消息文本里的 @提及 切片：at=true 的段渲染成 el-tag。 */
+export function splitMentions(text: string): Array<{ t: string; at: boolean }> {
+  const out: Array<{ t: string; at: boolean }> = []
+  const re = /@[^\s@]+/g
+  let last = 0
+  for (const m of text.matchAll(re)) {
+    const i = m.index ?? 0
+    if (i > last) out.push({ t: text.slice(last, i), at: false })
+    out.push({ t: m[0], at: true })
+    last = i + m[0].length
+  }
+  if (last < text.length) out.push({ t: text.slice(last), at: false })
+  return out
+}
+
+/** 按查询词大小写不敏感切分文本：hit=true 的段 = 命中（搜索结果渲染成 warning tag）。
+ *  空 query（trim 后）不切分，整段原样返回。 */
+export function splitHighlight(text: string, query: string): Array<{ t: string; hit: boolean }> {
+  const q = query.trim()
+  if (!q) return [{ t: text, hit: false }]
+  const out: Array<{ t: string; hit: boolean }> = []
+  const lower = text.toLowerCase()
+  const lq = q.toLowerCase()
+  let last = 0
+  for (let i = lower.indexOf(lq); i >= 0; i = lower.indexOf(lq, last)) {
+    if (i > last) out.push({ t: text.slice(last, i), hit: false })
+    out.push({ t: text.slice(i, i + q.length), hit: true })
+    last = i + q.length
+  }
+  if (last < text.length) out.push({ t: text.slice(last), hit: false })
+  return out
+}
+
+// ── 文件消息（最小可行版，2026-10-01）──────────────────────────────────
+// 上传成功后前端把下载路径拼进消息文本（[文件] 开头），不进事件新列。
+// 判断/拆分辅助与渲染共用（人类气泡 + 搜索结果都走 renderText）。
+export function isFileMessage(text: string): boolean {
+  return text.startsWith('[文件]')
+}
+/** [文件] 名 (大小KB)\n<url> → { title, url }；不是文件消息或格式不全 → null。 */
+export function splitFileMessage(text: string): { title: string; url: string } | null {
+  if (!isFileMessage(text)) return null
+  const nl = text.indexOf('\n')
+  if (nl < 0) return null
+  const url = text.slice(nl + 1).trim()
+  if (!url || url.includes('\n')) return null
+  return { title: text.slice(0, nl).trim(), url }
+}
+/** 下载 url 的扩展名是不是图片（→ 用 el-image 展示而非 el-link）。 */
+const IMAGE_RE = /\.(png|jpe?g|gif|webp)$/i
+
+// ── 服务流程系统事件（flow-commands 落的三类 ⚙ 文本）────────────────────
+// 启动：`⚙ 服务流程 [code] 启动：实现登录页（步骤：编码者 → 测试者 → 代码审查者）`
+// 推进：`⚙ 流程推进（2/3）：交给「测试者」`
+// 完成：`⚙ 服务流程 [code] 完成（编码者 → 测试者 → 代码审查者）`
+/** 解析后的流程视图：current = el-steps 的 active（已完成步数）。 */
+export interface FlowEventView {
+  kind: 'start' | 'advance' | 'done'
+  flowName: string
+  task?: string
+  steps: string[]
+  current: number
+}
+/** 解析一条系统事件文本；非 ⚙ 开头或形状不符 → null（走原渲染）。
+ *  推进行没有流程名/steps —— 用 ctx（时间线顺序遍历维护的最近一条启动/完成行）补齐。 */
+export function parseFlowEvent(
+  text: string,
+  ctx?: { flowName?: string; steps?: string[] },
+): FlowEventView | null {
+  if (!text.startsWith('⚙')) return null
+  const splitSteps = (s: string) => s.split(' → ').map((x) => x.trim()).filter(Boolean)
+  // 启动行：current=0（第一步进行中，el-steps active 语义 = 已完成数）。
+  let m = /⚙\s*服务流程\s*\[([^\]]+)\]\s*启动：(.+?)（步骤：(.+?)）/.exec(text)
+  if (m) {
+    const steps = splitSteps(m[3]!)
+    if (!steps.length) return null
+    return { kind: 'start', flowName: m[1]!, task: m[2]!.trim(), steps, current: 0 }
+  }
+  // 完成行：current = steps.length（全部完成）。
+  m = /⚙\s*服务流程\s*\[([^\]]+)\]\s*完成（(.+?)）/.exec(text)
+  if (m) {
+    const steps = splitSteps(m[2]!)
+    if (!steps.length) return null
+    return { kind: 'done', flowName: m[1]!, steps, current: steps.length }
+  }
+  // 推进行：n/total → active = n-1（前 n-1 步完成、第 n 步进行中）；steps 取上文最近启动行。
+  m = /⚙\s*流程推进（(\d+)\/(\d+)）：交给「(.+?)」/.exec(text)
+  if (m) {
+    if (!ctx?.flowName || !ctx.steps?.length) return null
+    const n = Number(m[1])
+    return {
+      kind: 'advance', flowName: ctx.flowName, steps: ctx.steps, current: n - 1,
+      task: `交给「${m[3]}」（第 ${m[1]}/${m[2]} 步）`,
+    }
+  }
+  return null
+}
+
+/** 分隔线日期文案：今天显示「今天」，否则「MM月DD日」。 */
+export function dayLabel(ts: string): string {
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  const now = new Date()
+  const sameDay = d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  return sameDay ? '今天' : `${d.getMonth() + 1}月${d.getDate()}日`
+}
+
+/** 自治预算分母：与 bundle patch 的 autonomyBudget 对齐（turn 上没有时用这个常量）。 */
+const AUTONOMY_BUDGET = 8
 const CENTERED = 'k-content'
+/** 登录 token 的 localStorage 键（/login 页与各 RPC 共用）。 */
+const TOKEN_KEY = 'space_token'
+/** 后端 HTTP 基址（撤回/上传走 HTTP，与页面宿主 5174 不同端口）：懒取一次。 */
+let apiBase = ''
+function getApiBase(): string {
+  return apiBase || `${location.protocol}//${location.hostname}:8080`
+}
+
+const getToken = () => localStorage.getItem(TOKEN_KEY) ?? ''
+const isUnauth = (r: unknown) => typeof r === 'object' && r !== null && (r as { error?: string }).error === 'unauthorized'
 
 const TeamspacePage = defineComponent({
   name: 'SpaceTeamspace',
   setup() {
     const rpc = useRpc<{
-      sessions(): Promise<SessionLite[]>
-      commands(): Promise<CommandLite[]>
-      events(sessionId: string): Promise<EventLite[] | null>
-      members(sessionId: string): Promise<MemberLite[] | null>
-      staging(sessionId: string): Promise<StagingEntry[] | null>
-      turn(sessionId: string): Promise<TurnLite>
-      send(sessionId: string, authorId: string, text: string, mentions?: string[]): Promise<SendResult>
+      me(token: string): Promise<MeLite | null>
+      sessions(token: string): Promise<SessionLite[]>
+      commands(token: string): Promise<CommandLite[]>
+      events(token: string, sessionId: string): Promise<EventLite[] | null>
+      search(token: string, sessionId: string, query: string): Promise<EventLite[] | null>
+      members(token: string, sessionId: string): Promise<MemberLite[] | null>
+      staging(token: string, sessionId: string): Promise<StagingEntry[] | null>
+      turn(token: string, sessionId: string): Promise<TurnLite | null>
+      memories(token: string, sessionId: string): Promise<Array<{ text: string }> | null>
+      todos(token: string, sessionId: string): Promise<TodoView[] | null>
+      agents(token: string): Promise<AgentView[] | null>
+      apiPort(token: string): Promise<number | null>
+      humans(token: string): Promise<Array<{ id: string; username: string; displayName: string }> | null>
+      send(token: string, sessionId: string, text: string, mentions?: string[], replyTo?: string | null): Promise<SendResult>
+      typing(token: string, sessionId: string, name: string): Promise<void>
+      react(token: string, sessionId: string, eventId: string, emoji: string): Promise<ReactResult>
+      unreact(token: string, sessionId: string, eventId: string, emoji: string): Promise<ReactResult>
+      reactions(token: string, sessionId: string): Promise<Record<string, ReactSummaryLite[]> | { error: string } | null>
     }>()
     const appCtx = useContext()
     const router = useRouter()
@@ -91,55 +237,73 @@ const TeamspacePage = defineComponent({
 
     const sessions = ref([]) as { value: SessionLite[] }
     const members = ref([]) as { value: MemberLite[] }
-    const events = ref([]) as { value: EventLite[] }
+    const events = ref([]) as { value: TEvent[] }
     const staging = ref([]) as { value: StagingEntry[] }
     const turn = ref(null) as { value: TurnLite | null }
     const activeId = ref('')
     const draft = ref('')
     const reply = ref('')
     const replyOk = ref(true)
+    const sending = ref(false)
+    const me = ref(null) as { value: MeLite | null }
     const menu = ref(null) as { value: Menu }
     const activeIdx = ref(0)
     const inputEl = ref(null) as { value: HTMLTextAreaElement | null }
     const commands = ref([]) as { value: CommandLite[] }
-    /** 协作面板右列开关：宽屏默认常驻、窄视口默认折叠（2026-09-30 拍板：
-     *  遮罩抽屉 → 非遮罩常驻右列，与 railOpen 同款范式保持窄屏可用）。 */
+    /** AI 成员工作状态（agents RPC；随每次 load 刷新）。 */
+    const agents = ref([]) as { value: AgentView[] }
+    const humans = ref([]) as { value: Array<{ id: string; username: string; displayName: string }> }
+    /** 本会话 AI 沉淀记忆（memories RPC；随每次 load 刷新）。 */
+    const memories = ref([]) as { value: Array<{ text: string }> }
+    /** 团队待办（todos RPC；随每次 load 刷新，只读展示 —— 写路径只有 /todo 指令）。 */
+    const todos = ref([]) as { value: TodoView[] }
+    /** 引用回复（悬停消息点「引用」设置；发送时在文本前拼引用行，服务端原样落库）。 */
+    const replyTo = ref(null) as { value: { author: string; summary: string; seq: number; id: string } | null }
+    // ── 表情回应（IM 化 2026-10-01）────────────────────────────────────
+    /** 全会话事件回应汇总（eventId → 汇总；随 load 拉取，react/unreact 就地更新）。 */
+    const reactions = ref({}) as { value: Record<string, ReactSummaryLite[]> }
+    /** 回应面板展开的消息 id（点「回应」切换；点别处/切会话不强制收起，简单直给）。 */
+    const reactPickerId = ref('')
+    // ── 搜索状态（null = 时间线模式；数组 = 命中列表模式）────────────────
+    const searchQuery = ref('')
+    const searchResults = ref(null) as { value: TEvent[] | null }
+    /** 空会话引导 chips：角色 → 引导文案（@名 用成员表里真实存在的第一个对应角色）。 */
+    const CHIP_ROLES: Array<[string, string]> = [
+      ['需求分析师', '分析一下当前需求'],
+      ['挑战者', '挑刺这个方案'],
+      ['会议记录官', '记一下要点'],
+    ]
     const panelOpen = ref(!window.matchMedia('(max-width: 768px)').matches)
-    /** 悬停揭示「作者 · 时间」的消息 id —— 必须住 setup 体：render 体内声明
-     *  会被每次重渲染重建（4s 轮询即触发），悬停状态随渲染丢弃（第四轮根因）。 */
-    const hoveredId = ref('')
-    /** 左栏开关：宽屏默认展开、窄视口默认收起（业界统一：开关在中央顶栏左上角）。 */
     const railOpen = ref(!window.matchMedia('(max-width: 768px)').matches)
-    /** composer 提示按需揭示（2026-09-30 拍板）：悬停 / 聚焦输入区才显示操作
-     *  提示行，平时留白 —— 与消息时间戳同款「状态驱动行内揭示」范式（弃
-     *  el-tooltip 传送门，弹出不确定的教训在前），零手写样式。
-     *  P0 回炉（交互代理复测判红）：hover 与 focus 两路径必须拆开成独立状态
-     *  （单 boolean 时 mouseleave 会无条件压掉仍存在的聚焦态 = 复测 D 场景
-     *  实锤）；focus 路径弃 el-input 的 onFocus prop 转发（组件内部实现面），
-     *  改稳定包装 div 上的原生 focusin/focusout（focus 不冒泡但 focusin 冒泡，
-     *  CDP 真实点击/键入/Tab 聚焦都确定到达）。两 ref 住 setup 体跨轮询存续。 */
-    const composerHover = ref(false)
-    const composerFocus = ref(false)
-    const composerHint = computed(() => composerHover.value || composerFocus.value)
-    /** 会话栏是否已入驻（sessions 包缺席 → 左区整体不渲染，折叠开关随之隐藏）。 */
+    /** 「回到最新」按钮：偏离底部（>80px）且有时间线内容时显示。 */
+    const nearBottom = ref(true)
     const hasRail = computed(() => (appCtx.client.router.views['space-teamspace-sidebar']?.length ?? 0) > 0)
     const scrollbar = ref<{ setScrollTop: (v: number) => unknown } | null>(null)
-    let timer: ReturnType<typeof setInterval> | undefined
+    let replyTimer: ReturnType<typeof setTimeout> | undefined
+    let socket: WebSocket | undefined
+    let replySeq = 0 // 乐观事件本地 id 序号
 
     const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
-    /** 发送身份：所选会话的 DRI（成员表缺 DRI 时降级为调试期约定身份 u_dri）。 */
-    const authorId = computed(() =>
-      members.value.find((m) => m.role === 'DRI')?.principalId ?? 'u_dri')
+    const closed = computed(() => activeSession.value?.status === 'closed')
 
     const mentionCandidates = () => members.value.filter((m) => MENTION_ROLES.has(m.role))
 
+    // ── @所有人：合成候选（不在成员表里，哨兵 id = __all__）─────────────
+    // 当 @token 匹配 all/所有人/everyone 时菜单多出「@所有人」一项，选中插入 '@所有人 '；
+    // 发送时 parseMentions 把它归一成 '__all__'，服务端展开为全体在册成员。
+    const ALL_TOKENS = new Set(['all', '所有人', 'everyone'])
+    const ALL_MEMBER: MemberLite & { isAll?: boolean } = { principalId: '__all__', role: '所有人', isAll: true }
+    const mentionItems = (q: string) => {
+      const base = mentionCandidates()
+        .filter((m) => m.principalId.toLowerCase().includes(q) || m.role.toLowerCase().includes(q) ||
+          (m.duty ?? '').toLowerCase().includes(q))
+      // 「所有人」合成候选放在真实成员之前（显式召唤全体是高频动作）。
+      return ALL_TOKENS.has(q) ? [ALL_MEMBER as MemberLite, ...base] : base
+    }
+
     // ── 联想菜单（业界惯例：输入 / 或 @ 时按当前 token 实时过滤）─────────
-    //  / 联想：行首（或换行后）的 "/token" —— token 与指令名前缀匹配
-    //  @ 联想：结尾的 "@token" —— token 与成员 id / 角色名子串匹配
     const slashRe = /(?:^|\n)\/([a-z]*)$/i
     const mentionRe = /@([\w\u4e00-\u9fa5-]*)$/
-    // 空匹配（如「@第一行」无人可匹配）一律视为菜单关闭 —— 空浮层是竞态温床：
-    // 用户以为存在选中态，Enter 却落进直发分支把原文发出（2026-09-29 回炉实测）。
     function deriveMenu(text: string): Menu {
       const slash = slashRe.exec(text)
       if (slash) {
@@ -154,38 +318,258 @@ const TeamspacePage = defineComponent({
       return null
     }
     const slashItems = (q: string) => commands.value.filter((c) => c.name.startsWith(q))
-    const mentionItems = (q: string) => mentionCandidates()
-      .filter((m) => m.principalId.toLowerCase().includes(q) || m.role.toLowerCase().includes(q) ||
-        (m.duty ?? '').toLowerCase().includes(q))
 
+    // @token 解析（2026-10-05 放宽）：@id 之外也认**角色/分工显示名**
+    //（「@需求分析师」「@编码者」）—— 用户不该需要背内部 id。命中别名归一
+    // 成员 id；打不出菜单的场景（粘贴、输入法直上）也能触发 AI。
     const parseMentions = (): string[] => {
-      const ids = mentionCandidates().map((m) => m.principalId)
-      return [...new Set((draft.value.match(/@([^\s@]+)/g) ?? [])
-        .map((t) => t.slice(1))
-        .filter((t) => ids.includes(t)))]
+      const cands = mentionCandidates()
+      const aliasMap = new Map<string, string>()
+      for (const m of cands) {
+        for (const alias of [m.principalId, m.role, m.duty ?? '']) {
+          const a = alias.trim().toLowerCase()
+          if (a) aliasMap.set(a, m.principalId)
+        }
+      }
+      const stripPunc = (t: string) => t.replace(/[，。！？、；：）】」」'"'\.,!?;:\)]+$/u, '')
+      const picked = [...new Set((draft.value.match(/@([^\s@]+)/g) ?? [])
+        .map((t) => stripPunc(t.slice(1)).toLowerCase())
+        .map((t) => aliasMap.get(t))
+        .filter((t): t is string => Boolean(t)))]
+      // @所有人 → 哨兵 '__all__'（服务端 handleInbound 展开为全体在册成员 id）。
+      if (/@(所有人|all|everyone)(?=\s|$)/i.test(draft.value)) picked.push('__all__')
+      return picked
+    }
+
+    function unauthed() {
+      replyOk.value = false
+      reply.value = '请先登录'
+      void router.push('/login')
+    }
+
+    // ── 搜索（时间线 ⇄ 命中列表两种渲染模式）────────────────────────────
+    async function doSearch() {
+      if (!activeId.value || !searchQuery.value.trim()) return
+      try {
+        const res = await rpc.value.search(getToken(), activeId.value, searchQuery.value.trim())
+        if (isUnauth(res)) return unauthed()
+        searchResults.value = res ?? []
+      } catch (e) {
+        showReply(`搜索失败：${String((e as Error).message ?? e)}`, false)
+      }
+    }
+    /** 清除搜索：恢复全量时间线。 */
+    function clearSearch() {
+      searchResults.value = null
+      searchQuery.value = ''
+    }
+
+    // ── 消息撤回（作者自撤）：调服务端 recall 路由，成功后本地乐观置 voided ─
+    async function recallEvent(ev: TEvent) {
+      if (!activeId.value) return
+      try {
+        const res = await fetch(`${getApiBase()}/api/sessions/${activeId.value}/events/${ev.id}/recall`, {
+          method: 'POST',
+          credentials: 'same-origin', // cookie 鉴权（space_token）
+          headers: { authorization: `Bearer ${getToken()}` }, // 跨端口 fetch：Bearer 与 cookie 双通道
+        })
+        if (res.status === 401) return unauthed()
+        if (!res.ok) {
+          const body = await res.json().catch(() => null as { error?: string; detail?: string } | null)
+          showReply(`撤回失败（${body?.error ?? res.status}）：${body?.detail ?? ''}`, false)
+          return
+        }
+        // 乐观更新：本地直接标记 voided（socket 推送 / 全量刷新带回的 voided 字段与之自然一致）。
+        events.value = events.value.map((e) => (e.id === ev.id ? { ...e, voided: true } : e))
+        showReply('已撤回', true)
+      } catch (e) {
+        showReply(`撤回失败：${String((e as Error).message ?? e)}`, false)
+      }
+    }
+
+    // ── 导出 Markdown（纯前端本地，无 RPC）：当前时间线 events → .md 下载 ──
+    function exportMarkdown() {
+      if (!events.value.length) return
+      const title = activeSession.value?.title ?? '团队空间'
+      const lines: string[] = [`## 会话 ${title}`, '']
+      for (const ev of events.value) {
+        const time = (ev.ts ?? '').slice(11, 19) // ISO 的 HH:MM:SS 段
+        const author = authorLabel(ev.authorId, members.value)
+        if (ev.kind === 'message') lines.push(`- [${time}] **${author}** ${ev.text}`)
+        else lines.push(`- [${time}] *${ev.text}*`) // system 事件斜体
+      }
+      try {
+        const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${title}.md`
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch { /* 导出失败静默忽略 */ }
+    }
+
+    /** 纪要导出（A6，2026-10-06）：按回合折叠（人类发言开回合，其后的
+     *  AI/系统内容归属该回合），产出 Word 可直接打开的 .doc（HTML 载体，
+     *  无需后端）。脱离原文的占位/系统噪声行只保留服务流程的关键行。 */
+    function exportMinutes() {
+      if (!events.value.length) return
+      const title = activeSession.value?.title ?? '团队空间'
+      const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      type Turn = { q: { author: string; time: string; text: string } | null; rows: Array<{ author: string; time: string; text: string; kind: string; mine: boolean }> }
+      const turns: Turn[] = []
+      for (const ev of events.value) {
+        if (ev.voided) continue
+        const time = (ev.ts ?? '').slice(0, 16).replace('T', ' ')
+        const author = authorLabel(ev.authorId, members.value)
+        if (ev.kind === 'message' && (ev.authorKind === 'human')) {
+          if (ev.authorId === me.value?.id) continue // 自己的发言是操作记录，不进纪要正文
+          turns.push({ q: { author, time, text: ev.text }, rows: [] })
+          continue
+        }
+        const rows = turns.length ? turns[turns.length - 1]!.rows : []
+        if (ev.kind === 'message') rows.push({ author, time, text: ev.text, kind: ev.kind, mine: ev.authorKind === 'agent' })
+        else if (/服务流程|已完成|开始/.test(ev.text)) rows.push({ author: '系统', time, text: ev.text, kind: 'system', mine: false })
+      }
+      // 自己的发言被跳过后可能产生空首回合 —— 清掉没有问答内容的回合。
+      const usable = turns.filter((t) => t.q || t.rows.length)
+      const body = usable.map((t, i) => {
+        const head = t.q
+          ? `<div class="q"><div class="qt">议题 ${i + 1} · ${esc(t.q.author)} · ${esc(t.q.time)}</div><div class="qb">${esc(t.q.text)}</div></div>`
+          : '<div class="q"><div class="qt">开场</div></div>'
+        const answers = t.rows.map((r) =>
+          r.kind === 'system'
+            ? `<div class="sys">${esc(r.text)}</div>`
+            : `<div class="a"><span class="aa">${esc(r.author)}：</span>${esc(r.text).replace(/\n/g, '<br/>')}</div>`,
+        ).join('')
+        return head + answers
+      }).join('<hr class="sep"/>')
+      const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+        body{font-family:'Microsoft YaHei',sans-serif;margin:36px;line-height:1.7;color:#222}
+        h1{font-size:20px;border-bottom:2px solid #2f54eb;padding-bottom:8px}
+        .meta{color:#888;font-size:12px;margin-bottom:18px}
+        .q{margin-top:14px}.qt{color:#2f54eb;font-weight:bold;font-size:13px}
+        .qb{font-weight:bold;margin:4px 0 8px}
+        .a{margin:6px 0 6px 14px}.aa{color:#555}
+        .sys{color:#999;font-size:12px;margin:4px 0 4px 14px}
+        .sep{border:none;border-top:1px dashed #ccc;margin:16px 0}
+      </style></head><body>
+        <h1>会议纪要 —— ${esc(title)}</h1>
+        <div class="meta">导出时间：${new Date().toLocaleString('zh-CN')}　·　共 ${usable.length} 个议题</div>
+        ${body}
+      </body></html>`
+      try {
+        const blob = new Blob(['\ufeff', html], { type: 'application/msword;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `纪要-${title}-${new Date().toISOString().slice(0, 10)}.doc`
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch { /* 导出失败静默忽略 */ }
+    }
+
+    // ── 草稿持久化（按会话隔离，localStorage）───────────────────────────
+    watch(draft, (v) => {
+      if (!activeId.value) return
+      if (v) localStorage.setItem(`space_draft_${activeId.value}`, v)
+      else localStorage.removeItem(`space_draft_${activeId.value}`)
+    })
+    /** 切换会话 / 首次挂载后恢复该会话草稿。 */
+    function restoreDraft() {
+      draft.value = localStorage.getItem(`space_draft_${activeId.value}`) ?? ''
+    }
+
+    // ── 桌面通知：页签不可见 + 非本人消息时弹系统通知 ────────────────────
+    function notifyIfHidden(event: EventLite) {
+      try {
+        if (event.authorId === me.value?.id) return
+        if (!document.hidden) return
+        if (event.kind !== 'message' || !event.text) return
+        // 免打扰联动：当前会话在 space_muted_sessions 名单（sessionId 字符串数组，
+        // 会话栏开关 UI 写入，本处只做读取侧）内则不通知。
+        const muted = JSON.parse(localStorage.getItem('space_muted_sessions') ?? '[]')
+        if (Array.isArray(muted) && muted.includes(activeId.value)) return
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+        new Notification(activeSession.value?.title ?? '团队空间', { body: event.text.slice(0, 60) })
+      } catch { /* 通知失败静默忽略 */ }
+    }
+
+    // ── 「AI 正在输入」：仅 turn 进行中（chain）时每 5s 轮询 agents ──────
+    let typingTimer: ReturnType<typeof setInterval> | undefined
+    function stopTypingPoll() {
+      if (typingTimer) { clearInterval(typingTimer); typingTimer = undefined }
+    }
+    function syncTypingPoll() {
+      if (turn.value?.state === 'chain') {
+        if (typingTimer) return
+        typingTimer = setInterval(() => {
+          void rpc.value.agents(getToken()).then((ag) => {
+            if (ag && !isUnauth(ag)) agents.value = ag
+          }).catch(() => { /* 轮询失败静默 */ })
+        }, 5000)
+      } else {
+        stopTypingPoll()
+      }
+    }
+    watch(turn, syncTypingPoll)
+    const workingAgents = () => agents.value.filter((a) => a.status === 'working')
+
+    // ── 人类「正在输入」指示（socket 'space:typing'）────────────────────
+    // 与上面「AI 正在工作中」（turn chain + agents 轮询）两套机制独立共存：
+    // AI 一行（typingLine）、人类一行（humanTypingLine），渲染上 AI 行在下。
+    const humanTyping = ref({ name: '', ts: 0 }) as { value: { name: string; ts: number } }
+    let humanTypingTimer: ReturnType<typeof setTimeout> | undefined
+    let lastTypingSent = 0 // 本端节流戳（≥2s 才向服务端广播一次）
+    /** 收到他人 typing 帧：记录并 3s 无更新自动消失（自己的帧直接忽略）。 */
+    function onHumanTyping(sessionId: string, name: string) {
+      if (sessionId !== activeId.value) return
+      if (!name || name === me.value?.displayName) return
+      humanTyping.value = { name, ts: Date.now() }
+      clearTimeout(humanTypingTimer)
+      humanTypingTimer = setTimeout(() => { humanTyping.value = { name: '', ts: 0 } }, 3000)
+    }
+    /** 草稿变化时节流上报（≥2s 一次且 draft 非空；清空不上报）。 */
+    function maybeSendTyping() {
+      const now = Date.now()
+      if (!draft.value.trim() || now - lastTypingSent < 2000) return
+      lastTypingSent = now
+      void rpc.value.typing(getToken(), activeId.value, me.value?.displayName ?? '')
+        .catch(() => { /* typing 失败静默 —— 瞬时信号不值得打扰用户 */ })
     }
 
     async function load() {
+      const token = getToken()
       try {
-        sessions.value = await rpc.value.sessions()
-        if (commands.value.length === 0) commands.value = await rpc.value.commands()
-        // 缺省选中：URL 指定的会话优先，否则首个会话，并回写 URL（会话栏据此高亮）。
+        sessions.value = (await rpc.value.sessions(token)) ?? []
+        if (commands.value.length === 0) commands.value = (await rpc.value.commands(token)) ?? []
         if (!activeId.value && sessions.value.length > 0) {
           const initial = sessions.value.find((s) => s.id === route.query.session) ?? sessions.value[0]!
           activeId.value = initial.id
           if (route.query.session !== initial.id) void router.replace({ query: { session: initial.id } })
         }
         if (!activeId.value) return
-        const [ev, mb, st, tn] = await Promise.all([
-          rpc.value.events(activeId.value),
-          rpc.value.members(activeId.value),
-          rpc.value.staging(activeId.value),
-          rpc.value.turn(activeId.value),
+        const [ev, mb, st, tn, ag, mm, rc, td] = await Promise.all([
+          rpc.value.events(token, activeId.value),
+          rpc.value.members(token, activeId.value),
+          rpc.value.staging(token, activeId.value),
+          rpc.value.turn(token, activeId.value),
+          rpc.value.agents(token),
+          rpc.value.memories(token, activeId.value),
+          rpc.value.reactions(token, activeId.value),
+          rpc.value.todos(token, activeId.value),
         ])
+        if (isUnauth(ev) || isUnauth(mb)) return unauthed()
         if (ev) events.value = ev
         if (mb) members.value = mb
         if (st) staging.value = st
         turn.value = tn
+        if (ag) agents.value = ag
+        rpc.value.humans(token).then((h) => { if (h) humans.value = h }).catch(() => {})
+        if (mm && !isUnauth(mm)) memories.value = mm
+        if (td && !isUnauth(td)) todos.value = td
+        // 回应汇总：服务端错误结构（{error}）不覆盖本地已有（保留上次数据渲染）。
+        if (rc && !('error' in rc)) reactions.value = rc
         if (reply.value.startsWith('加载失败')) reply.value = ''
       } catch (e) {
         replyOk.value = false
@@ -193,11 +577,76 @@ const TeamspacePage = defineComponent({
       }
     }
 
+    // ── 表情回应：点同 emoji 再点一次 = 撤；响应就地更新汇总 ─────────────
+    async function toggleReaction(ev: TEvent, emoji: string) {
+      if (!activeId.value) return
+      const already = (reactions.value[ev.id] ?? []).some(
+        (s) => s.emoji === emoji && s.users.includes(me.value?.id ?? ''))
+      const rpc_ = already ? rpc.value.unreact : rpc.value.react
+      try {
+        const res = await rpc_(getToken(), activeId.value, ev.id, emoji)
+        if (isUnauth(res)) return unauthed()
+        if ('error' in res) { showReply(`回应失败（${res.error}）`, false); return }
+        // 就地替换该事件的汇总（无回应后数组为空 → 删键，避免残留渲染）。
+        if (res.length) reactions.value = { ...reactions.value, [ev.id]: res }
+        else {
+          const { [ev.id]: _drop, ...rest } = reactions.value
+          reactions.value = rest
+        }
+      } catch (e) {
+        showReply(`回应失败：${String((e as Error).message ?? e)}`, false)
+      }
+    }
+
+    // ── 实时推送（IM 化）：socket 上的 'space:event' 增量合并 ─────────────
+    function onSocketMessage(ev: MessageEvent) {
+      try {
+        const msg = JSON.parse(String(ev.data))
+        // 人类「正在输入」帧（typing RPC 广播）：瞬时信号，不进时间线。
+        if (msg?.type === 'space:typing') {
+          onHumanTyping(String(msg.body?.sessionId ?? ''), String(msg.body?.name ?? ''))
+          return
+        }
+        if (msg?.type !== 'space:event') return
+        const event = msg.body?.event as EventLite | undefined
+        if (!event) return
+        // 会话切换期间 event.sessionId 不等于当前视图 —— 忽略（切回时全量刷新）。
+        if (event.sessionId !== activeId.value) return
+        mergeEvent(event)
+        notifyIfHidden(event)
+      } catch {
+        // 非法帧忽略（socket 上还有 rpc:response 等其它类型）。
+      }
+    }
+    /** 按 id 去重、seq 升序合并一条事件（socket 推送与乐观回执共用）。 */
+    function mergeEvent(event: EventLite) {
+      if (events.value.some((e) => e.id === event.id)) return
+      events.value = [...events.value, event].sort((a, b) => a.seq - b.seq)
+      // 当前打开的会话 = 已读：同步本地已读时刻，会话栏红点即灭（跨 entry 共享 localStorage）。
+      // ⚠ 只对本页正打开的会话写已读 —— 原实现对任意 session 的推送都写，
+      // 会把其它会话的未读一键清零（2026-10-06 B1 实测踩坑）。
+      if (event.sessionId && event.sessionId === activeId.value) {
+        localStorage.setItem(`space_seen_${event.sessionId}`, String(Date.now()))
+      }
+    }
+    function onSocketOpen() {
+      // 断线重连后全量刷新一次（推送缺口补偿）。
+      void load()
+    }
+
     // 会话栏改选 = 改 URL；本页只认 URL，唯一的选中真相源。
     watch(() => route.query.session, (v) => {
       if (v && v !== activeId.value) {
         activeId.value = v
         events.value = []
+        reactions.value = {} // 切会话清掉回应汇总（随 load 重拉）
+        reactPickerId.value = ''
+        replyTo.value = null // 切会话清掉引用条（引用属于旧会话的消息）
+        humanTyping.value = { name: '', ts: 0 } // 切会话清掉「正在输入」指示
+        clearTimeout(humanTypingTimer)
+        clearSearch()
+        restoreDraft()
+        pendingUnreadScroll = true // 进新会话：首次加载完成后做未读定位
         void load()
       }
     })
@@ -205,15 +654,11 @@ const TeamspacePage = defineComponent({
     function onDraft(v: string) {
       draft.value = v
       menu.value = deriveMenu(v)
-      activeIdx.value = -1 // 打开菜单不预选高亮（P2：选中态只由键盘动作产生）
+      activeIdx.value = -1
+      maybeSendTyping() // 人类「正在输入」：节流后广播（≥2s 一次）
     }
 
-    // ── 键盘状态机（2026-09-29 回炉定稿，单一 handler 无竞态）：
-    //    · Shift+Enter 恒换行 —— 先于一切分支放行，绝不 preventDefault；
-    //    · 菜单开（有候选）：Enter/Tab 恒确认选中项（未选过则确认第 0 项），
-    //      ↑↓ 换选中、Esc 关闭 —— Enter 只归菜单，绝不直发；
-    //    · 菜单关（无候选/已 Esc）：裸 Enter 直发。
-    //    菜单「开着」的定义 = 有候选（deriveMenu 已把空匹配折算成关闭）。
+    // ── 键盘状态机（既有契约原样保留）────────────────────────────────────
     function menuCount(): number {
       const m = menu.value
       if (!m) return 0
@@ -224,7 +669,7 @@ const TeamspacePage = defineComponent({
       if (!m) return
       if (m.kind === 'slash') {
         const items = slashItems(m.query)
-        const c = items[activeIdx.value] ?? items[0] // 未选过/越界 → 第 0 项
+        const c = items[activeIdx.value] ?? items[0]
         if (c) pickCommand(c.name)
       } else {
         const items = mentionItems(m.query)
@@ -232,10 +677,6 @@ const TeamspacePage = defineComponent({
         if (mm) insertMention(mm.principalId)
       }
     }
-    /** Shift+Enter 恒换行：preventDefault + 在光标处显式插 \n。不依赖浏览器
-     *  默认行为 —— 合成事件（测试注入）不会触发默认动作，显式插入才对真实
-     *  键盘与注入两条路径都成立（2026-09-30 回炉：旧写法裸 return 依赖默认
-     *  行为，合成注入下零换行）。 */
     function insertNewline(): void {
       const ta = inputEl.value
       const text = draft.value
@@ -258,60 +699,199 @@ const TeamspacePage = defineComponent({
         if (e.key === 'Escape') { menu.value = null; e.preventDefault(); return }
         return
       }
-      if (e.key === 'Enter') { void sendText(draft.value); e.preventDefault() }
+      if (e.key === 'Enter' && !sending.value) { void sendText(draft.value); e.preventDefault() }
     }
-    // 失焦延迟关闭：给浮层里的点选留出 click 完成时间
     function onBlur(): void {
       setTimeout(() => { menu.value = null }, 200)
     }
 
-    /** 点选指令联想：把行尾 "/token" 补全成 "/name "（有参指令留给用户填参数）。 */
     function pickCommand(name: string) {
       draft.value = draft.value.replace(slashRe, `/${name} `)
       menu.value = null
     }
-
-    /** 点选成员联想：把结尾的 "@token" 替换成 "@id "。 */
     function insertMention(id: string) {
-      draft.value = draft.value.replace(mentionRe, `@${id} `)
+      // '@所有人' 是合成候选：哨兵 id 不进草稿，插的是可读的 '@所有人 '。
+      draft.value = draft.value.replace(mentionRe, id === '__all__' ? '@所有人 ' : `@${id} `)
       menu.value = null
     }
 
-    async function sendText(text: string) {
-      if (!activeId.value) {
-        replyOk.value = false
-        reply.value = '请先选择或新建一个会议'
-        return
-      }
-      if (!text.trim()) {
-        replyOk.value = false
-        reply.value = '请输入内容再发送'
-        return
-      }
-      try {
-        const result: SendResult = await rpc.value.send(activeId.value, authorId.value, text, parseMentions())
-        replyOk.value = 'reply' in result
-        reply.value = 'reply' in result ? result.reply : `出错了（${result.error}）：${result.detail}`
-        if ('reply' in result) draft.value = ''
-        menu.value = null
-        await load()
-      } catch (e) {
-        replyOk.value = false
-        reply.value = `发送失败：${String((e as Error).message ?? e)}`
+    /** 成功回执 3s 自动消隐（错误常显，可手动关）。 */
+    function showReply(text: string, ok: boolean) {
+      reply.value = text
+      replyOk.value = ok
+      clearTimeout(replyTimer)
+      if (ok) {
+        replyTimer = setTimeout(() => { reply.value = '' }, 3000)
       }
     }
 
-    // 时间线自动滚到底部
+    // ── 文件消息：选文件 → POST /api/upload → 成功后组装文本走 sendText ──
+    // 上传中 fileUploading：composer「文件」按钮禁用 + 文案「上传中…」。
+    const fileUploading = ref(false)
+    /** 点「文件」：动态建 input[type=file] 触发系统选择框（浏览器 API，非样式）。 */
+    function pickFile() {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.onchange = () => {
+        const file = input.files?.[0]
+        if (file) void uploadFile(file)
+      }
+      input.click()
+    }
+    async function uploadFile(file: File) {
+      if (fileUploading.value || closed.value) return
+      fileUploading.value = true
+      try {
+        const res = await fetch(`${getApiBase()}/api/upload?name=${encodeURIComponent(file.name)}`, {
+          method: 'POST', body: file, credentials: 'same-origin',
+          headers: { authorization: `Bearer ${getToken()}` },
+        })
+        if (res.status === 401) { unauthed(); return }
+        if (res.status === 413) { showReply('文件过大（上限 20MB）', false); return }
+        if (!res.ok) { showReply(`上传失败（HTTP ${res.status}）`, false); return }
+        const data = await res.json() as { url: string; name: string; size: number }
+        const kb = Math.max(1, Math.round(data.size / 1024))
+        // 复用消息全链路（乐观上屏 / socket 推送）：url 藏在文本里。
+        await sendText(`[文件] ${data.name} (${kb} KB)\n${data.url}`)
+      } catch (e) {
+        showReply(`上传失败：${String((e as Error).message ?? e)}`, false)
+      } finally {
+        fileUploading.value = false
+      }
+    }
+
+    async function sendText(text: string) {
+      if (!activeId.value) { showReply('请先选择或新建一个会议', false); return }
+      // IM 化：空输入静默忽略（不再弹错误回执）。
+      if (!text.trim()) return
+      if (sending.value || closed.value) return
+      sending.value = true
+      // 引用系统化（2026-10-02）：引用关系走 replyTo 结构化字段，消息正文不再拼前缀。
+      const fullText = text
+      const localId = `__local_${++replySeq}`
+      // 乐观插入：本地临时事件先上屏（人类消息右对齐），服务端确认后按 id 对齐。
+      const optimistic: EventLite = {
+        id: localId,
+        seq: Number.MAX_SAFE_INTEGER,
+        ts: new Date().toISOString(),
+        authorId: me.value?.id ?? '',
+        authorKind: 'human',
+        kind: 'message',
+        text: fullText,
+      } as EventLite
+      events.value = [...events.value, optimistic]
+      try {
+        const result: SendResult = await rpc.value.send(getToken(), activeId.value, fullText, parseMentions(), replyTo.value?.id ?? null)
+        if (isUnauth(result)) { unauthed(); return }
+        if ('error' in result) {
+          // 回滚乐观插入，显示错误。
+          events.value = events.value.filter((e) => e.id !== localId)
+          showReply(`出错了（${result.error}）：${result.detail}`, false)
+          return
+        }
+        // 确认成功：去掉临时事件；真事件由响应或 socket 推送补上（两者按 id 去重）。
+        events.value = events.value.filter((e) => e.id !== localId)
+        if (result.event) mergeEvent(result.event)
+        draft.value = ''
+        replyTo.value = null
+        replyTo.value = null // 引用已随消息发出，清掉引用条
+        localStorage.removeItem(`space_draft_${activeId.value}`)
+        menu.value = null
+        if (result.reply) showReply(result.reply, true)
+        void load()
+      } catch (e) {
+        events.value = events.value.filter((e) => e.id !== localId)
+        showReply(`发送失败：${String((e as Error).message ?? e)}`, false)
+      } finally {
+        sending.value = false
+      }
+    }
+
+    // 滚动跟随（修复 UX 评审第 1 条）：贴底才自动跟随；偏离给「回到最新」。
+    function onScroll() {
+      const wrap = document.querySelector('.content-body .el-scrollbar__wrap') as HTMLElement | null
+      if (!wrap) return
+      const gap = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight
+      nearBottom.value = gap < 80
+    }
+    function scrollToBottom() {
+      void scrollbar.value?.setScrollTop(999999)
+      nearBottom.value = true
+    }
+
+    // ── 未读定位（IM 化）：进会话首次加载完成后，滚到最后已读时刻之后 ────
+    // 的第一条非本人消息附近；没有未读才滚到底。已读时刻的写入时机不变。
+    let pendingUnreadScroll = false // 进会话前置位，events 首次变化时消费一次
+    function scrollToUnread() {
+      const seen = Number(localStorage.getItem(`space_seen_${activeId.value}`) ?? '0')
+      // 未读起点 = 已读时刻之后的第一条「非本人、未撤回」消息。
+      const idx = events.value.findIndex((e) =>
+        e.kind === 'message' && e.authorId !== me.value?.id && !e.voided &&
+        (Date.parse(e.ts) || 0) > seen)
+      if (idx < 0) { scrollToBottom(); return }
+      // 近似定位：el-scrollbar 的 wrap 上按 index/total * scrollHeight 估算目标位置
+      //（各行高度不一，只能近似滚到那条消息附近，不做逐行精确测量）。
+      const wrap = document.querySelector('.content-body .el-scrollbar__wrap') as HTMLElement | null
+      if (!wrap) { scrollToBottom(); return }
+      const target = Math.max(0, (idx / events.value.length) * wrap.scrollHeight - wrap.clientHeight / 3)
+      void scrollbar.value?.setScrollTop(target)
+      const gap = wrap.scrollHeight - target - wrap.clientHeight
+      nearBottom.value = gap < 80
+    }
     watch(() => events.value.length, async () => {
       await nextTick()
-      scrollbar.value?.setScrollTop(999999)
+      // 首次加载的未读定位优先于「贴底跟随」；之后照常贴底跟随。
+      if (pendingUnreadScroll) {
+        pendingUnreadScroll = false
+        scrollToUnread()
+        return
+      }
+      if (nearBottom.value) scrollToBottom()
     })
 
-    onMounted(() => {
-      void load()
-      timer = setInterval(() => void load(), 4000)
+    // ── 可见即已读兜底：页面从后台回到可见时，把当前会话写一次已读时刻 ──
+    // 防止「看过但红点还在」的边缘态（切走瞬间推来的消息未落 seen）。
+    function onVisibilityChange() {
+      if (!document.hidden && activeId.value) {
+        localStorage.setItem(`space_seen_${activeId.value}`, String(Date.now()))
+      }
+    }
+
+    onMounted(async () => {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+      const meRes = await rpc.value.me(getToken())
+      if (!meRes || isUnauth(meRes)) { unauthed(); return }
+      me.value = meRes
+      pendingUnreadScroll = true // 首次进入：加载完成后做未读定位（无未读则滚到底）
+      await load()
+      restoreDraft()
+      syncTypingPoll()
+      // 页签不可见时申请一次桌面通知权限（用户拒绝/失败均静默）。
+      if (document.hidden && typeof Notification !== 'undefined') {
+        try { void Notification.requestPermission().catch(() => {}) } catch { /* 静默 */ }
+      }
+      // 后端 HTTP 基址（撤回/上传用）：端口由 RPC 下发（env APP_PORT）。
+      try {
+        const port = await rpc.value.apiPort(getToken())
+        if (port) apiBase = `${location.protocol}//${location.hostname}:${port}`
+      } catch { /* 保持 :8080 兜底 */ }
+      // client.socket 是 Vue ref（可能为 null）—— 取 .value 并守卫。
+      const rawSocket = (appCtx.client.socket as { value?: WebSocket } | undefined)?.value
+      socket = rawSocket && typeof rawSocket.addEventListener === 'function' ? rawSocket : undefined
+      if (!socket) console.warn('[space] client.socket 不可监听（外壳版本差异），实时推送降级为手动刷新')
+      socket?.addEventListener('message', onSocketMessage)
+      socket?.addEventListener('open', onSocketOpen)
     })
-    onUnmounted(() => clearInterval(timer))
+    onUnmounted(() => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.querySelector('.content-body .el-scrollbar__wrap')
+        ?.removeEventListener('scroll', onScroll)
+      socket?.removeEventListener('message', onSocketMessage)
+      socket?.removeEventListener('open', onSocketOpen)
+      clearTimeout(replyTimer)
+      clearTimeout(humanTypingTimer)
+      stopTypingPoll()
+    })
 
     return () => {
       const ElButton = resolveComponent('el-button') as unknown as string
@@ -321,19 +901,29 @@ const TeamspacePage = defineComponent({
       const ElTag = resolveComponent('el-tag') as unknown as string
       const ElEmpty = resolveComponent('el-empty') as unknown as string
       const ElScrollbar = resolveComponent('el-scrollbar') as unknown as string
+      const ElDropdown = resolveComponent('el-dropdown') as unknown as string
+      const ElDropdownItem = resolveComponent('el-dropdown-item') as unknown as string
       const ElPopover = resolveComponent('el-popover') as unknown as string
+      const DropdownItem = resolveComponent('el-dropdown-item') as unknown as string
+      const Dropdown = resolveComponent('el-dropdown') as unknown as string
       const KCard = resolveComponent('k-card') as unknown as string
       const ElDivider = resolveComponent('el-divider') as unknown as string
       const ElText = resolveComponent('el-text') as unknown as string
+      const ElSpace = resolveComponent('el-space') as unknown as string
+      const ElProgress = resolveComponent('el-progress') as unknown as string
       const ElTimeline = resolveComponent('el-timeline') as unknown as string
+      const ElAvatar = resolveComponent('el-avatar') as unknown as string
       const ElTimelineItem = resolveComponent('el-timeline-item') as unknown as string
       const ElDescriptions = resolveComponent('el-descriptions') as unknown as string
       const ElDescriptionsItem = resolveComponent('el-descriptions-item') as unknown as string
       const KLayout = resolveComponent('k-layout') as unknown as string
       const KIcon = resolveComponent('k-icon') as unknown as string
       const KSlot = resolveComponent('k-slot') as unknown as string
+      const ElLink = resolveComponent('el-link') as unknown as string
+      const ElImage = resolveComponent('el-image') as unknown as string
+      const ElSteps = resolveComponent('el-steps') as unknown as string
+      const ElStep = resolveComponent('el-step') as unknown as string
 
-      // ── 薄顶栏（k-layout #header / #menu 槽，外壳 .layout-header 44px）──
       const activeStatus = activeSession.value ? sessionStatus(activeSession.value) : null
       const topbarLeft = () => [
         hasRail.value
@@ -344,101 +934,381 @@ const TeamspacePage = defineComponent({
         h('span', { class: 'layout-header-title', key: 'title' },
           activeSession.value?.title ?? '未选择会议'),
         activeStatus
-          ? h(ElTag, {
-              key: 'status', size: 'small', type: activeStatus.tag,
-            }, { default: () => activeStatus.label })
+          ? h(ElTag, { key: 'status', size: 'small', type: activeStatus.tag },
+              { default: () => activeStatus.label })
           : null,
       ]
       const topbarRight = () => [
         turn.value?.state === 'static'
           ? h(ElTag, { key: 'paused', size: 'small', type: 'warning' }, { default: () => '已暂停' })
           : null,
-        // 协作面板开关（2026-09-30 拍板：不再是「呼出遮罩抽屉」，而是折叠 /
-        // 展开常驻右列 —— 与左栏开关同款范式，窄视口默认收起保持可用）。
         h(ElButton, {
           key: 'panel', text: true, type: panelOpen.value ? 'primary' : 'info',
           onClick: () => { panelOpen.value = !panelOpen.value },
         }, { default: () => '协作面板' }),
       ]
 
-      // ── 消息行（时间戳默认不显示；悬停消息行内揭示「作者 · 时间」）──────
-      // 2026-09-30 回炉：弃 el-tooltip —— popper 走传送门，弹出不确定；改
-      // hoveredId（setup 级 ref）驱动的行内揭示。⚠ 第四轮二次回炉根因：ref
-      // 曾误声明在这个 render 体内 —— 页面 4s 轮询等任何重渲染都会重建 ref，
-      // 悬停状态随渲染丢弃，揭示条件永不成立（真实 CDP 复现坐实）。修法：
-      // ref 上移 setup 体，跨重渲染存续。
-      const messageRow = (ev: EventLite) => {
-        const main = ev.authorKind === 'human'
-          // 人类消息 = 右对齐气泡（el-card 作为 el-row 的直接子项按内容收缩）
-          ? h(ElRow, { justify: 'end' }, {
-              default: () => h(ElCard, { shadow: 'never' }, { default: () => h('div', ev.text) }),
-            })
-          // agent/系统消息 = 左对齐平文 + 角色标签（shared 的 EventItem，只此一份）
-          : h(EventItem, { event: ev, members: members.value })
-        return h(ElTimelineItem, {
-          key: ev.id,
-          type: ev.authorKind === 'human' ? 'primary' : ev.authorKind === 'agent' ? 'success' : 'info',
-          hollow: ev.authorKind !== 'human',
-        }, { default: () => h('div', {
-            onMouseenter: () => { hoveredId.value = ev.id },
-            onMouseleave: () => { if (hoveredId.value === ev.id) hoveredId.value = '' },
-          }, [
-            main,
-            hoveredId.value === ev.id
-              ? h(ElText, { size: 'small', type: 'info' },
-                  { default: () => `${authorLabel(ev.authorId, members.value)} · ${formatTime(ev.ts)}` })
-              : null,
-          ]) })
+      // 文本渲染：@提及 → 小号 primary el-tag，其余原样（人类气泡 + 搜索结果共用）。
+      // 文件消息（[文件] 开头）：图片扩展名 → el-image；否则 el-link 新窗打开下载。
+      const renderText = (text: string) => {
+        // 引用深度融合（2026-10-02）：消息头部的「> 引用 #seq 作者：摘要」行
+        // 渲染为引用块（竖线 + 灰底小字），其余为正文 —— 发送格式不变
+        //（服务端零改动），展示层升级。
+        const quoteRe = /^> 引用 #(\d+) (.+?)：([\s\S]*?)\n([\s\S]*)$/
+        const qm = quoteRe.exec(text)
+        if (qm) {
+          // 旧版文本引用的作者字段可能是裸 id —— 能对上成员表就换显示名
+          //（2026-10-05：时间线不该给用户看内部 id）。
+          const rawAuthor = qm[2]!
+          const pretty = members.value.some((m) => m.principalId === rawAuthor)
+            ? authorLabel(rawAuthor, members.value)
+            : rawAuthor
+          return [
+            h('div', { class: 'sp-quote', title: qm[3] }, `↳ 回复 #${qm[1]} ${pretty}：${qm[3]}`),
+            h('div', renderText(qm[4] ?? '')),
+          ]
+        }
+        const file = splitFileMessage(text)
+        if (file) {
+          // 标题形如「[文件] 名 (123 KB)」；链接文本取纯文件名。
+          const label = file.title.replace(/^\[文件\]\s*/, '').replace(/\s*\([^)]*\)$/, '') || file.title
+          const isImage = IMAGE_RE.test(file.url)
+          return [
+            h('div', { key: 'file-title' }, file.title),
+            isImage
+              ? h(ElImage, { key: 'file-image', src: file.url, fit: 'scale-down', lazy: true })
+              : h(ElLink, { key: 'file-link', type: 'primary', href: file.url, target: '_blank' },
+                  { default: () => label }),
+          ]
+        }
+        return splitMentions(text).map((seg, i) => seg.at
+          ? h(ElTag, { key: i, size: 'small', type: 'primary' }, { default: () => seg.t })
+          : seg.t)
       }
 
+      /** 搜索结果正文渲染：命中 query 的段 → warning 小 tag（只用于搜索列表，
+       *  时间线正文仍走 renderText 不高亮）；文件消息维持 renderText 原渲染。 */
+      const renderSearchText = (text: string) => {
+        if (isFileMessage(text)) return renderText(text)
+        return splitHighlight(text, searchQuery.value).map((seg, i) => seg.hit
+          ? h(ElTag, { key: `hl-${i}`, size: 'small', type: 'warning' }, { default: () => seg.t })
+          : seg.t)
+      }
+
+      // ── 消息行（悬停行内揭示「作者 · 时间」）────────────────────────────
+      // flowView 非空 = 系统事件里的服务流程行 → 渲染成进度卡片（renderTimeline 传入）。
+      /** 结构化引用块：由 replyTo 解析原事件（撤回 → 灰字；缺失 → 兜底），
+       *  点击定位原消息并短暂高亮（im.css 的 .sp-flash）。 */
+      const quoteBlock = (replyToId: string) => {
+        const orig = events.value.find((e) => e.id === replyToId)
+        const head = orig
+          ? `回复 #${orig.seq} ${authorLabel(orig.authorId, members.value)}`
+          : '回复原消息'
+        const body = !orig
+          ? '原消息不在当前视图'
+          : orig.voided ? '原消息已撤回' : orig.text.slice(0, 80)
+        return h('div', {
+          class: 'sp-quote',
+          title: body,
+          onClick: () => {
+            const el = document.querySelector(`[data-ev-id="${replyToId}"]`)
+            el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            el?.classList.add('sp-flash')
+            setTimeout(() => el?.classList.remove('sp-flash'), 1400)
+          },
+        }, `↳ ${head}：${body}`)
+      }
+
+      const messageRow = (ev: TEvent, flowView?: FlowEventView | null) => {
+        const isFlow = ev.authorKind === 'system' && !ev.voided && !!flowView
+        // 服务流程进度卡片：el-card 内 el-text 说明行 + el-steps（active = 已完成步数）。
+        const flowCard = flowView
+          ? h('div', { key: `flow-${ev.id}`, class: 'sp-flow' }, [
+                h(ElText, { key: 'flow-head', size: 'small', type: 'info' }, {
+                  default: () => `服务流程 [${flowView.flowName}]` +
+                    (flowView.kind === 'done' ? '：已完成 ✓' : flowView.task ? `：${flowView.task}` : ''),
+                }),
+                h(ElSteps, { key: 'flow-steps', active: flowView.current, alignCenter: true }, {
+                  default: () => flowView.steps.map((s, i) => h(ElStep, { key: i, title: s })),
+                }),
+              ])
+          : null
+        // 聊天骨架（2026-10-02 视觉重做）：头像 + 气泡 + 元信息，替代圆点轴。
+        const self = ev.authorKind === 'human' && ev.authorId === me.value?.id
+        // 撤回入口：仅自己的（authorKind='human'）未撤回消息悬停时出现，在「引用」旁。
+        const canRecall = !ev.voided && ev.kind === 'message' &&
+          ev.authorKind === 'human' && ev.authorId === me.value?.id
+        // 回应汇总标签：count>0 才渲染；users 含我 → primary 高亮。
+        const myId = me.value?.id ?? ''
+        const summaryTags = (reactions.value[ev.id] ?? []).map((s) => h(ElTag, {
+          key: `react-${ev.id}-${s.emoji}`, size: 'small',
+          type: s.users.includes(myId) ? 'primary' : 'info',
+          // 点汇总标签 = 快速切换自己的这个回应（与面板语义一致）。
+          style: { cursor: 'pointer' },
+          onClick: () => void toggleReaction(ev, s.emoji),
+        }, { default: () => `${s.emoji} ${s.count}` }))
+        // 回应面板：固定 5 emoji 的行内按钮组（不用 popover，避免传送门不确定性）。
+        const reactionPanel = reactPickerId.value === ev.id && !ev.voided
+          ? h(ElSpace, { size: 4 }, {
+              default: () => REACTION_EMOJIS.map((em) => {
+                const mine = (reactions.value[ev.id] ?? []).some(
+                  (s) => s.emoji === em && s.users.includes(myId))
+                return h(ElButton, {
+                  key: `pick-${ev.id}-${em}`, text: true, size: 'small',
+                  ...(mine ? { type: 'primary' as const } : {}),
+                  onClick: () => void toggleReaction(ev, em),
+                }, { default: () => em })
+              }),
+            })
+          : null
+        if (ev.authorKind === 'system' && !isFlow) {
+          return h('div', { class: 'sp-sys', key: ev.id },
+            h(ElText, { size: 'small', type: 'info' }, { default: () => ev.text }))
+        }
+        const membersView = [...members.value,
+      ...humans.value.map((u) => ({ principalId: u.id, role: u.displayName, duty: u.displayName })),
+      ...agents.value.map((a) => ({ principalId: a.id, role: a.title, duty: a.title }))]
+    // 聊天名字只显示显示名（id 收进悬停 title，不占版面）。
+    const m0 = membersView.find((x) => x.principalId === ev.authorId)
+    const name = m0 ? (m0.duty?.trim() ? m0.duty : m0.role) : (ev.authorId ?? '系统')
+        const bubble = ev.voided
+          ? h(ElText, { size: 'small', type: 'info' }, { default: () => '消息已撤回' })
+          : isFlow
+            ? flowCard
+            : ev.authorKind === 'human'
+              ? renderText(ev.text)
+              : renderMarkdown(ev.text, h, { ElText })
+        const metaRow = !ev.voided
+          ? h('div', { class: 'sp-msg-meta' }, [
+              h('span', formatTime(ev.ts)),
+              ev.kind === 'message' && !ev.voided
+                ? h(ElDropdown, { trigger: 'click', onCommand: (cmd: string) => {
+                    if (cmd === 'quote') {
+                      replyTo.value = {
+                        author: name,
+                        summary: ev.text.slice(0, 50),
+                        seq: ev.seq,
+                        id: ev.id,
+                      }
+                      inputEl.value?.focus()
+                      return
+                    }
+                    if (cmd === 'react') {
+                      reactPickerId.value = reactPickerId.value === ev.id ? '' : ev.id
+                      return
+                    }
+                    if (cmd === 'recall') return void recallEvent(ev)
+                  } }, {
+                    default: () => h(ElButton, { text: true, size: 'small' }, { default: () => '⋯' }),
+                    dropdown: () => [
+                      h(ElDropdownItem, { command: 'quote' }, { default: () => '引用' }),
+                      h(ElDropdownItem, { command: 'react' }, { default: () => '回应' }),
+                      canRecall
+                        ? h(ElDropdownItem, { command: 'recall', divided: true }, { default: () => '撤回' })
+                        : null,
+                    ],
+                  })
+                : null,
+            ])
+          : null
+        const reactionsRow = summaryTags.length
+          ? h('div', { class: 'sp-reactions' }, summaryTags)
+          : null
+        return h('div', { key: ev.id, 'data-ev-id': ev.id, class: `sp-msg${self ? ' self' : ''}` }, [
+          h(ElAvatar, { size: 32 }, { default: () => name.charAt(0) }),
+          h('div', { class: 'sp-msg-body' }, [
+            h('div', { class: 'sp-msg-name' }, name),
+            ev.replyTo ? quoteBlock(ev.replyTo) : null,
+            h('div', {
+              class: `sp-bubble${ev.authorKind === 'agent' && !ev.voided && !isFlow ? ' agent' : ''}`,
+            }, bubble),
+            metaRow,
+            reactionsRow,
+            reactionPanel,
+          ]),
+        ])
+      }
+
+      // ── 时间分隔线（groupByDay 渲染辅助）：相邻消息日期变化处插 el-divider ──
+      const renderTimeline = () => {
+        const nodes: unknown[] = []
+        let lastDay = ''
+        // 服务流程上下文（零状态）：顺序遍历时维护最近一条「启动/完成」行的
+        // 流程名与 steps，推进行没有 steps 就地取用；重放事件流天然恢复上下文。
+        let lastFlowName = ''
+        let lastFlowSteps: string[] = []
+        for (const ev of events.value) {
+          const day = (ev.ts ?? '').slice(0, 10)
+          if (day && day !== lastDay) {
+            lastDay = day
+            nodes.push(h(ElDivider, { key: `day-${day}`, contentPosition: 'center' },
+              { default: () => dayLabel(ev.ts) }))
+          }
+          // 服务流程系统事件：先按当前上下文解析，再回写上下文（启动/完成行自带 steps）。
+          const fv = ev.authorKind === 'system' && !ev.voided
+            ? parseFlowEvent(ev.text, { flowName: lastFlowName, steps: lastFlowSteps })
+            : null
+          if (fv && (fv.kind === 'start' || fv.kind === 'done')) {
+            lastFlowName = fv.flowName
+            lastFlowSteps = fv.steps
+          }
+          nodes.push(messageRow(ev, fv))
+        }
+        return nodes
+      }
+
+      // ── 搜索行（时间线区域顶部）：回车即搜，「清除」恢复全量 ─────────────
+      const searchBar = h(ElRow, { justify: 'center' }, {
+        default: () => h(ElSpace, {}, {
+          default: () => [
+            h(ElInput, {
+              modelValue: searchQuery.value,
+              'onUpdate:modelValue': (v: string) => { searchQuery.value = v },
+              onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') void doSearch() },
+              clearable: true,
+              placeholder: '搜索本会话消息…',
+            }),
+            h(ElButton, { type: 'primary', size: 'small', onClick: () => void doSearch() },
+              { default: () => '搜索' }),
+            h(ElButton, { size: 'small', onClick: clearSearch }, { default: () => '清除' }),
+            // 导出 Markdown：当前时间线 events 落成 .md 文件下载（纯前端）。
+            h(ElButton, { text: true, size: 'small', disabled: events.value.length === 0, onClick: exportMarkdown },
+              { default: () => '导出' }),
+            h(ElButton, {
+              text: true, size: 'small', disabled: events.value.length === 0,
+              title: '按回合折叠生成会议纪要（Word 可打开）',
+              onClick: exportMinutes,
+            }, { default: () => '纪要' }),
+          ],
+        }),
+      })
+
+      // ── 搜索命中列表（只读，替代时间线渲染）────────────────────────────
+      const searchArea = () => h('div', { class: CENTERED }, [
+        h(ElRow, { justify: 'space-between' }, {
+          default: () => [
+            h(ElText, { key: 'cnt', size: 'small', type: 'info' },
+              { default: () => `搜索结果（${searchResults.value?.length ?? 0} 条）` }),
+            h(ElButton, { key: 'close', text: true, size: 'small', onClick: clearSearch },
+              { default: () => '关闭' }),
+          ],
+        }),
+        (searchResults.value ?? []).map((ev) => h(ElCard, { key: ev.id, shadow: 'never' }, {
+          default: () => [
+            h(ElText, { size: 'small', type: 'info' },
+              { default: () => `${authorLabel(ev.authorId, members.value)} · ${formatTime(ev.ts)}` }),
+            h('div', renderSearchText(ev.text)),
+          ],
+        })),
+      ])
+      // ── 空会话引导 chips：@名 取成员表里真实存在的第一个对应角色 ─────────
+      const emptyChips = () => CHIP_ROLES
+        .map(([role, prompt]) => {
+          const m = members.value.find((mm) => mm.role === role)
+          return m ? `@${m.principalId} ${prompt}` : ''
+        })
+        .filter((t) => t !== '')
+
+      // ── 「AI 正在输入」指示行（时间线底部）──────────────────────────────
+      const typingLine = turn.value?.state === 'chain' && workingAgents().length
+        ? h(ElRow, { justify: 'center' }, {
+            default: () => h(ElSpace, {}, {
+              default: () => [
+                h(ElText, { size: 'small', type: 'info' },
+                  { default: () => `${workingAgents()[0]!.title} 正在工作中` }),
+                h(ElText, { size: 'small', type: 'info' }, { default: () => '…' }),
+              ],
+            }),
+          })
+        : null
+      // 人类「正在输入」行（AI 行之上）：3s 内有 typing 帧才显示。
+      const humanTypingLine = humanTyping.value.name
+        ? h(ElRow, { justify: 'center', key: 'human-typing' }, {
+            default: () => h(ElText, { size: 'small', type: 'info' },
+              { default: () => `${humanTyping.value.name} 正在输入…` }),
+          })
+        : null
+
       const messageArea = h('div', { class: CENTERED }, [
-        !activeId.value
-          ? h(ElEmpty, { description: '还没有会议 —— 点左侧「新会议」开始协作' })
-          : events.value.length === 0
-            ? h(ElEmpty, { description: '还没有事件 —— 在下方输入区发言，/commit 提交后这里出现时间线' })
-            : h(ElTimeline, {}, { default: () => events.value.map(messageRow) }),
+        searchResults.value !== null
+          ? searchArea()
+          : !activeId.value
+            ? h(ElEmpty, { description: '还没有会议 —— 点左侧「新会议」开始协作' })
+            : events.value.length === 0
+              ? h('div', [
+                  h(ElEmpty, { description: '还没有消息 —— 在下方输入区发言；@某位成员可召唤 AI' }),
+                  emptyChips().length
+                    ? h(ElRow, { justify: 'center' }, {
+                        default: () => h(ElSpace, { wrap: true }, {
+                          default: () => emptyChips().map((chip) => h(ElButton, {
+                            key: chip, round: true, size: 'small',
+                            // 仅填入草稿，不发送。
+                            onClick: () => { onDraft(chip); inputEl.value?.focus() },
+                          }, { default: () => chip })),
+                        }),
+                      })
+                    : null,
+                ])
+              : h('div', { class: 'sp-list' }, [...renderTimeline(), humanTypingLine, typingLine]),
       ])
 
-      // ── 协作面板（2026-09-30 拍板：非遮罩常驻右列，数据口径不变）────────
-      // 外壳现成右列类 .right-sidebar（layout.scss，与 .page-sidebar 对称）承
-      // 接第三列，零新样式。空值行整行不渲染：「暂停原因」只在真有暂停原因时
-      // 显示、「说明」只在有 stopDetail 时显示、「已委托」只在有委托时显示 ——
-      // 停顿时不再满屏横杠。
+      // ── 协作面板 v2（2026-10-02 用户拍板「实事求是」）──────────────────
+      // 砍掉引擎诊断信息（协调者调用次数/自治动作/预算进度/暂停原因表格）——
+      // 那是开发者调试面，不是用户功能。只保留三样真实有用的东西：
+      //   ① 暂停提示：仅在回合暂停时显示一行原因（顶栏「已暂停」的展开）；
+      //   ② 成员（含 AI 状态）：能 @ 谁，AI 忙闲一目了然；
+      //   ③ 团队待办：/todo 的只读清单。
       const t = turn.value
-      const stopText = t ? (STOP_LABEL[t.stopReason] ?? t.stopReason) : ''
-      const panelRows = [
-        t && stopText && stopText !== '—'
-          ? h(ElDescriptionsItem, { label: '暂停原因' }, { default: () => stopText })
-          : null,
-        t?.stopDetail
-          ? h(ElDescriptionsItem, { label: '说明' }, { default: () => t.stopDetail })
-          : null,
-        t
-          ? h(ElDescriptionsItem, { label: '协调者调用（本回合）' }, { default: () => String(t.decisionCalls) })
-          : null,
-        t && t.delegatedTargets.length
-          ? h(ElDescriptionsItem, { label: '本回合已委托' }, { default: () => t.delegatedTargets.join('、') })
-          : null,
-      ].filter((x) => x !== null)
       const panelCard = h(ElCard, { shadow: 'hover' }, {
-        header: () => [
-          h(ElTag, { size: 'small', type: t ? (STATE_TAG[t.state] ?? 'info') : 'info' },
-            { default: () => t ? (STATE_LABEL[t.state] ?? t.state) : '无回合' }),
-          ' 协作轮次',
-        ],
         default: () => [
-          panelRows.length
-            ? h(ElDescriptions, { column: 1, border: true, size: 'small' }, { default: () => panelRows })
-            : h(ElText, { size: 'small', type: 'info' }, { default: () => '本轮无暂停 / 委托详情' }),
-          h(ElDivider, { contentPosition: 'left' }, { default: () => '可 @ 的成员（协调者不可被调用）' }),
-          mentionCandidates().length
-            ? h(ElRow, { gutter: 8 }, {
-                default: () => mentionCandidates().map((m) => h(ElTag, {
-                  key: m.principalId, size: 'small',
-                  type: m.role === 'DRI' ? 'success' : 'primary',
-                }, { default: () => memberLabel(m) })),
-              })
-            : h(ElEmpty, { description: '暂无在册成员', imageSize: 60 }),
+          // ⓪ 协作进行时（B2，2026-10-06）：回合链路上 = AI 在干活，人话
+          // 呈现「谁手头有活」；完成/暂停各自有对应的一行状态。
+          t?.state === 'chain'
+            ? h(ElText, { size: 'small', type: 'success', class: 'sp-panel-block' },
+                { default: () => `AI 协作中${t.delegatedTargets.length ? ` —— ${t.delegatedTargets.join('、')} 手头有任务，完成后自动回报` : '，等待 AI 回应…'}` })
+            : null,
+          // ① 暂停提示（仅暂停时出现，一行小字，不再做表格）。
+          t?.state === 'static' && t.stopReason
+            ? h(ElText, { size: 'small', type: 'warning', class: 'sp-panel-block' },
+                { default: () => `回合已暂停：${STOP_LABEL[t.stopReason] ?? t.stopReason}` })
+            : null,
+          // ② 成员（人类 + AI 合并，AI 带忙闲状态）。
+          h('div', { class: 'sp-panel-title' }, '成员（点击头像下方名字可 @）'),
+          mentionCandidates().length || agents.value.length
+            ? h('div', { class: 'sp-member-list' }, [
+                ...mentionCandidates().map((m) => {
+                  const ag = agents.value.find((a) => a.id === m.principalId)
+                  const status = ag ? ` · ${ag.status === 'working' ? '工作中' : ag.status === 'done' ? '刚完成' : '空闲'}` : ''
+                  // chip 只放短名（分工/角色 + 忙闲），完整「名（id）」进悬浮
+                  // title —— 2026-10-05：长 id 曾把面板右缘顶裁切。
+                  const short = `${m.duty?.trim() || m.role}${status}`
+                  return h(ElTag, {
+                    key: m.principalId, size: 'small', class: 'sp-chip',
+                    type: m.role === 'DRI' || m.role === '群主' ? 'success' : 'primary',
+                    title: `${memberLabel(m)}${status ? ` —— AI 状态：${status.replace(' · ', '')}` : ''}`,
+                  }, { default: () => short })
+                }),
+                ...agents.value
+                  .filter((a) => !mentionCandidates().some((m) => m.principalId === a.id))
+                  .map((a) => h(ElTag, {
+                    key: a.id, size: 'small', class: 'sp-chip', type: 'info',
+                    title: '直接 @ 或 /tell 可派活',
+                  }, { default: () => `${a.title} · ${a.status === 'working' ? '工作中' : '空闲'}` })),
+              ])
+            : h(ElText, { size: 'small', type: 'info' }, { default: () => '暂无在册成员' }),
+          // ③ 团队待办（/todo 只读清单，写路径走指令）。
+          h('div', { class: 'sp-panel-title' }, '团队待办'),
+          todos.value.length
+            ? todos.value
+              .slice()
+              .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+              .map((td, i) => h(ElText, {
+                key: `todo-${td.id}`, size: 'small',
+                type: td.done ? 'info' : undefined,
+                class: 'sp-panel-block',
+              }, { default: () => `${td.done ? '[x]' : '[ ]'} ${td.done ? '' : (i + 1) + '. '}${td.text}` }))
+            : h(ElText, { size: 'small', type: 'info', class: 'sp-panel-block' },
+              { default: () => '暂无待办 —— 用 /todo <文本> 记一条' }),
         ],
       })
       const collabPanel = () => panelOpen.value
@@ -448,7 +1318,6 @@ const TeamspacePage = defineComponent({
         : null
 
       // ── 联想浮层（el-popover 虚拟锚定输入框，placement top-start）──────
-      // 菜单项统一渲染（P2：无特配色、无常亮主色）；高亮只属于键盘选中项。
       const menuRow = (i: number, label: string, hint: string, onClick: () => void) =>
         h('div', { key: `${i}-${label}` }, h(ElButton, {
           text: true, ...(i === activeIdx.value ? { type: 'primary' } : {}), onClick,
@@ -465,7 +1334,15 @@ const TeamspacePage = defineComponent({
         const items = mentionItems(m.query)
         return items.length === 0
           ? [h('div', '（没有匹配的成员）')]
-          : items.map((mm, i) => menuRow(i, memberLabel(mm), '插入提及', () => insertMention(mm.principalId)))
+          : items.map((mm, i) => menuRow(
+              i,
+              // 「@所有人」合成候选：特殊 hint（其余成员照常「插入提及」）。
+              mm.principalId === '__all__' ? '@所有人' : memberLabel(mm),
+              // hint 展示该成员的角色/分工（2026-10-05：每行都写「插入提及」
+              // 是重复噪音 —— 动作本身不言自明）。
+              mm.principalId === '__all__' ? '召唤全体成员' : (mm.duty?.trim() || mm.role),
+              () => insertMention(mm.principalId),
+            ))
       }
       const suggestionPopover = () => h(ElPopover, {
         visible: menu.value !== null,
@@ -475,13 +1352,11 @@ const TeamspacePage = defineComponent({
         width: 560,
       }, { default: menuContent })
 
-      // × 用显式按钮（shared IconBtn）：el-tag 内置 close 是内部 SVG，点击命中
-      // 有歧义且无法标 aria-label（2026-09-29 回炉实测）。
-      // 只有作者能看到 ×（服务端 /del 对非作者仍会再校验一次）。
+      // × 用显式按钮（shared IconBtn）。只有作者本人能看到。
       const stagingLine = (e: StagingEntry) => h('span', { key: e.id }, [
         h(ElTag, { size: 'large', type: 'info' },
           { default: () => `#${e.seq} ${authorLabel(e.authorId, members.value)}：${e.text}` }),
-        e.authorId === authorId.value
+        e.authorId === me.value?.id
           ? h(IconBtn, {
               icon: 'times-full',
               label: `删除暂存条目 #${e.seq}（等价于 /del ${e.seq}）`,
@@ -490,82 +1365,103 @@ const TeamspacePage = defineComponent({
           : null,
       ])
 
-      // ── composer 悬浮卡片（贴底居中，不再通栏）──────────────────────────
-      // 2026-09-30 拍板：说明书式提示与「暂存区为空」占位不再常显 —— 悬停 /
-      // 聚焦输入区才揭示提示行（composerHint 状态驱动，与消息时间戳同款范式），
-      // 平时留白，减少中间区文字噪音。交互契约零改动（自动暂存 /commit/@ 联想/
-      // Shift+Enter 均原样）。
-      // P0 回炉：揭示挂在这层「每轮 patch 必复用、永不重建」的稳定包装 div 上
-      // （根 div 在 composer 定义处一次性创建、被 render 闭包长期持有），
-      // hover/focus 两路各自独立状态；focusin/focusout 是冒泡的原生事件，
-      // 真实鼠标、点击、Tab、键入都确定命中（原生 focus/blur 不冒泡，弃）。
+      // ── composer 悬浮卡片（贴底居中；已结束会话禁用）────────────────────
       const composer = h('div', [
         h('div', {
           class: CENTERED,
-          onMouseenter: () => { composerHover.value = true },
-          onMouseleave: () => { composerHover.value = false },
-          onFocusin: () => { composerFocus.value = true },
-          onFocusout: () => { composerFocus.value = false },
         }, [
         suggestionPopover(),
-        // k-card（外壳原语，首选）：圆角 8px，背景与阴影由组件自带的语义令牌
-        // （映射外壳 elevated / shadow 档）承担 —— props 零手写（P2 悬浮卡片质感）。
-        h(KCard, null, {
+        h(KCard, { class: 'sp-composer' }, {
           default: () => [
+            // 引用条：composer 输入框上方（仅 replyTo 存在时显示；× 清除）。
+            replyTo.value
+              ? h('span', { key: 'reply-bar' }, [
+                  h(ElTag, {
+                    size: 'small', type: 'info', closable: true,
+                    onClose: () => { replyTo.value = null },
+                  }, { default: () => `引用 #${replyTo.value.seq} ${replyTo.value.author}：${replyTo.value.summary}` }),
+                ])
+              : null,
             h(ElInput, {
               modelValue: draft.value,
               'onUpdate:modelValue': onDraft,
               onKeydown,
               onBlur,
+              disabled: closed.value,
               ref: (inst) => { inputEl.value = (inst as { textarea?: HTMLTextAreaElement } | null)?.textarea ?? null },
               type: 'textarea',
               rows: 3,
-              placeholder: '输入发言…（/ 召唤指令联想；@ 提及成员；Enter 发送，Shift+Enter 换行）',
+              placeholder: closed.value
+                ? '会话已结束，不能继续发言'
+                : '输入消息，Enter 发送…',
             }),
-            h(ElRow, { justify: 'end' }, {
-              default: () => h(ElButton, { type: 'primary', onClick: () => void sendText(draft.value) },
-                { default: () => '发送' }),
+            h(ElRow, { justify: 'space-between', align: 'middle' }, {
+              default: () => [
+                // 文件消息入口：选文件 → 上传（20MB 上限）→ 成功后自动发文件消息。
+                h(ElButton, {
+                  key: 'file-btn', text: true, size: 'small', class: 'sp-attach',
+                  disabled: closed.value || fileUploading.value,
+                  title: '上传文件（20MB 上限）',
+                  onClick: pickFile,
+                }, { default: () => [
+                    // 回形针图标 + 文字（2026-10-05：孤零零两个字像未完成的占位）。
+                    h('svg', {
+                      viewBox: '0 0 24 24', width: 14, height: 14,
+                      fill: 'none', stroke: 'currentColor', 'stroke-width': 2,
+                      'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+                      style: 'vertical-align: -2px; margin-right: 4px',
+                    }, [h('path', { d: 'M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48' })]),
+                    fileUploading.value ? '上传中…' : '文件',
+                  ] }),
+                h(ElButton, {
+                  key: 'send-btn', class: 'sp-send-icon',
+                  type: 'primary', loading: sending.value, disabled: closed.value,
+                  title: '发送（Enter）',
+                  onClick: () => void sendText(draft.value),
+                }, { default: () => h('svg', {
+                      viewBox: '0 0 24 24', width: 17, height: 17,
+                      fill: 'none', stroke: 'currentColor', 'stroke-width': 2.4,
+                      'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+                    }, [
+                      h('path', { d: 'M12 19V6' }),
+                      h('path', { d: 'M5.5 12.5 12 5.5l6.5 7' }),
+                    ]) }),
+              ],
             }),
-            // 回执轻量化（P2：整行 alert 挤占空间）——行内小标签 + 文本，肉眼可见不变
             reply.value ? h('span', [
               h(ElTag, { size: 'small', type: replyOk.value ? 'success' : 'error' },
                 { default: () => (replyOk.value ? '回执' : '出错') }),
               h('span', ` ${reply.value}`),
               h(IconBtn, { icon: 'times-full', label: '关闭回执', onPress: () => { reply.value = '' } }),
             ]) : null,
-            // 暂存条目照常常显（有内容 = 真信息）；「暂存区为空」占位不再刷存在感
-            staging.value.map(stagingLine),
+            // 暂存条目只在非空时显示（IM 化：主路径直达时间线，暂存是可选路径）。
+            staging.value.length ? staging.value.map(stagingLine) : null,
           ],
         }),
-        composerHint.value
-          ? h('div', [
-              h(ElText, { size: 'small', type: 'info' },
-                { default: () => '普通文本自动暂存（不触发协调者），/commit 提交暂存' +
-                  (staging.value.length === 0 ? '；暂存区为空' : '') }),
-            ])
-          : null,
         ]),
       ])
 
-      // ── 根布局：k-layout（外壳 chrome）+ 三区骨架 ────────────────────────
-      // 左区 = 会话栏槽位视图（sessions 包入驻；缺席时 k-slot 渲染为空，
-      // 页面不 import 该包 —— 入驻 = 纯新增）。中区 = 消息列 + composer。
-      // 右区 = 协作面板常驻列（2026-09-30 拍板：非遮罩，不再盖主区）。
       return h(KLayout, { main: 'page-teamspace' }, {
         header: topbarLeft,
         menu: topbarRight,
         default: () => [
-          // 折叠不做动画（第四轮回炉拍板）：过渡是锦上添花，确定性一票否决 ——
-          // 标准件过渡机制存在环境性失效面（仲裁实测零过渡事件 + 折叠后交互
-          // 病态恶化），弃用动画换折叠/展开瞬时可靠、零过渡风险。
+          h(ThemeStyle),
           railOpen.value && hasRail.value
             ? h('aside', { class: 'page-sidebar' }, [
                 h(KSlot, { name: 'space-teamspace-sidebar', single: true }),
               ])
             : null,
           h('div', { class: 'content-area' }, [
+            activeId.value ? searchBar : null,
             h('div', { class: 'content-body' }, [
               h(ElScrollbar, { ref: scrollbar }, { default: () => messageArea }),
+              // 「回到最新」悬浮按钮：偏离底部时出现。
+              !nearBottom.value && events.value.length
+                ? h(ElButton, {
+                    type: 'primary', size: 'small', onClick: scrollToBottom,
+                    style: { position: 'absolute', bottom: '120px', left: '50%' },
+                  }, { default: () => '回到最新' })
+                : null,
             ]),
             composer,
           ]),
@@ -577,10 +1473,6 @@ const TeamspacePage = defineComponent({
 })
 
 // ── 页面注册（官方约定）─────────────────────────────────────────────────
-// 页面出现在外壳菜单/路由靠 client 插件自调 client.router.page（logger-webui
-// dist 原文同款）；entry 的 routes 选项只影响服务端 SPA 404/加载态判定。
-// ⚠ 不能注册在 '/'：外壳自带 home 页先占了 '/'（@cordisjs/client/app/home），
-// 路由按注册顺序先匹配先赢 —— 用真实路径 '/teamspace'（同官方 '/logs'）。
 interface PageCtx {
   client: {
     router: {
@@ -593,7 +1485,7 @@ export default function main(ctx: PageCtx) {
   ctx.client.router.page({
     path: '/teamspace',
     name: '团队空间',
-    icon: 'activity:default',
+    icon: ICONS.teamspace,
     order: 900,
     component: TeamspacePage,
   })

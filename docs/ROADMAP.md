@@ -15,6 +15,77 @@
 - 设施插件（`cordis.yml`）：`server`(8080) + `debug-server`(5172) + `debug-webui`
   + `plugin-loader-webui` / `plugin-logger-webui` / `plugin-database-webui` + `plugin-database(-sqlite)`
 
+**IM 化协作改造已落码**（2026-09-30，用户拍板）：多账号注册登录（users/login_tokens，
+迁移 0007 + `plugins/space-auth`）、消息直达时间线（`/stage` `/commit` 降级为可选）、
+websocket 实时推送（`plugins/space-push`，`space/event-appended` → 5174 broadcast）、
+AI 自治回合（去强制 await_human，自治预算默认 8，超限 `budget_exhausted` 暂停）、
+AI 主动发言（`ctx.messages.send` 统一入口）、微信式聊天列表与 `/login` 登录页。
+
+**分层架构固化**（2026-09-30，用户拍板）：L0~L12 层模型 + 横切层建档于
+`docs/ARCHITECTURE.md`；`space-tool`/`space-memory` 补真、`space-retrieval`/
+`space-context` 新建（迁移 0008 建 memories 表）；判红器 `scripts/lint-layers.sh`。
+
+**三轮体验迭代**（2026-09-30 ~ 10-01）：/help、回合记忆自动沉淀
+（`plugins/memory-recorder`）、消息搜索、引用回复、导出 Markdown、草稿持久化、
+桌面通知、会话置顶/免打扰、未读红点+定位、AI 记忆透明面板、自治预算进度条、
+「AI 正在工作中」指示、空会话引导、登录记住用户名、消息撤回、@所有人、
+文件消息（`plugins/space-upload`）、表情回应（迁移 0009 建 msg_reactions）、
+人类「正在输入」广播、新成员入会欢迎、Ctrl+K 快速切换会话、
+回合视图（`plugins/space-dialog`）、AI 消息 Markdown 渲染（shared/md.ts）、
+`/summary` 一键会议纪要（`plugins/ai-summary`）、种子提示词换成可用默认文案、
+确定性服务流程指令（`plugins/flow-commands`：/code /test /review，MC 式多 Agent
+接力）、/todo 团队待办（记忆层存储）、未读数进标签页标题、搜索命中高亮、
+可见即已读兜底、服务流程进度卡片（el-steps）、`npm run backup` 备份脚本、
+配置全面面板化（schemastery Config：LLM/Embedding/Agent 身份/flows/预算/白名单/
+上传/注册开关——5172 面板在线改并保存）、知识库域（迁移 0010 + space-kb + 检索
+三源接入 + /kb 管理页）、Embedding 实现（`space-embedding-openai`，EMBED_* env
+兜底）、账号管理（迁移 0011 is_admin + 首用户自动管理员 + 5172 /admin 页）、
+new-api 网关附带（deploy/docker-compose.newapi.yml）。
+**模型与接入设置页**（2026-10-05）：schemastery 原生配置表单对本地 ts 插件渲染
+不出（面板显示「此插件尚未安装」），改走自建通道 —— `ctx.settings` 设置缝
+（seam/space-settings，同步 KV；impl 落 sqlite settings 表，迁移 0013）+
+5172 `/models` 页（LLM/Embedding 的 baseURL/model/apiKey 表单 + 连通测试；
+apiKey 只写不回显）。取值优先级：settings（面板）> Config > env。保存即生效，
+无需重启。路由避开面板内置的 /settings（通用设置），故用 /models。
+**Agent 配置页**（2026-10-05）：5172 `/agents` 页（admin 同口径）—— 名册
+（注册表全量 + 生命周期状态）、提示词模板编辑（ctx.prompts upsert，下一回合
+生效）、per-agent promptRef 重定向（settings 键 agent.<id>.promptRef，
+agent-analyst-llm 现读）、自治预算（settings 键 agent.autonomyBudget，
+orchestrator 闸门现读）。
+**真实模型端到端打通**（2026-10-05）：阿里云 MaaS（qwen3-max + 
+qwen3.7-text-embedding 1024 维）经 /models 页配置后，@需求分析师 → 真大脑
+派单 → 【真模型】回复全链路验证通过。附带修复：@提及解析放宽（@角色/@分工
+显示名也认，服务端与客户端双端；末尾标点剥离）—— 此前手打 @标题 不会触发
+AI（mentions 只认内部 id）。
+**对话质量与 UI 打磨**（2026-10-05 晚）：协调者输出契约修正 —— @点名 = 明确
+授权，大脑是调度员不得在 reply 里代答（此前 qwen3-max 会抢答/复读历史）；
+Agent 成果单次落库（analyst 此前 messages.send + reportFeedback 同文双发）；
+回合收尾回声抑制（大脑复述成果原文 → 引擎最后一道闸丢弃）。UI：成员面板
+chip 短名不再裁切、引用块旧格式裸 id 换显示名、@菜单 hint 显示角色、composer
+textarea 禁 resize、文件按钮加回形针图标。诊断：大脑原始输出落 logs.db
+（排「答非所问」必须看得到它）。
+**控制台专业版式**（2026-10-05 深夜）：/admin /models /agents 三页统一设计
+语言（shared/client/console.ts + im.css「控制台专业版式」段）—— 页头（标题+
+职责描述+状态胶囊+页级导航）、分区卡片（主色竖条标题+浅描边微阴影）、双列
+表单栅格、虚线分隔操作行+内联结果、灰/橙/绿/红语义状态点；保存/测试结果从
+大 alert 改为内联与细条；暗色模式（light-dark 令牌）同步适配。
+**5174 侧打磨**（2026-10-05 深夜）：登录/注册页净化（.sp-plain 藏外壳
+global-nav 与 layout-activity，:has 选择器）；已登录态从默认空盒插画改为
+居中分区卡；会话栏彩色头像（id 哈希色相，去掉「新」字首字）；新增
+space-client-ui-bridge（5174 /admin → 5172/admin?token= 跳转，DEBUG_PORT
+取端口，延迟 replace 防外壳启动竞态）。
+**知识库页修复**（2026-10-06）：/kb 白屏两连（client 少 import ThemeStyle；
+useRpc 是 ref，全部 rpc.* 调用漏 .value —— 该页自上线即不可用）；灌文档
+FOREIGN KEY 必炸（kb_chunks 先于 kb_documents 插入，顺序颠倒）；检索命中
+标题字段名对齐（doc_title）。页面视觉纳入 console 设计语言。另有：零消息
+空会话清理（先 backup 再删 5 条测试空会话）。
+**配置面板化 + 账号体系完善**（2026-10-02）：schemastery Config 声明（LLM/
+Embedding/Agent/flows/预算/白名单/上传/注册开关，5172 面板在线改）、知识库域
+（迁移 0010 + space-kb + 检索三源 + /kb 管理页）、账号管理（迁移 0011 is_admin +
+首用户自动管理员 + 5172 /admin 页 + 登出/账号管理入口）、消息长度上限 5000、
+CORS 中间件（`plugins/space-cors`）、回复关系字段（迁移 0012 reply_to + 结构化
+引用块 + 点击定位）、冒烟脚本 `scripts/smoke.sh`（8 项全过）。
+
 ---
 
 ## M1　最基础的插件 + 调试控制台　✅ 已完成

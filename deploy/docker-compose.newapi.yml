@@ -1,0 +1,33 @@
+# deploy/docker-compose.newapi.yml —— 附带 new-api 模型网关（可选，2026-10-01）。
+#
+# 作用：把各家 LLM/Embedding 供应商收敛成一个 OpenAI 兼容入口，本系统只配
+# 「网关地址 + 网关令牌」两个字段，供应商管理全在 new-api 自己的网页里。
+# 不想用网关可完全不启动本服务 —— 系统直连供应商的路径原样保留。
+#
+# 启动：  docker compose -f deploy/docker-compose.newapi.yml up -d
+# 管理页：http://localhost:3000 （初始账号 root / 123456，登录后立刻改密！）
+# 配置：  管理页 → 渠道 → 添加渠道（选供应商、贴 API Key、选模型）
+#         管理页 → 令牌 → 添加令牌（复制 sk-... 给本系统用）
+# 接入：  5172 控制台 → 插件 → space-llm-openai / space-embedding-openai：
+#         baseURL = http://<主机>:3000/v1，apiKey = 上面复制的令牌
+#         （或在 .env 里配 LLM_BASE_URL/LLM_API_KEY 与 EMBED_* 同款）
+#
+# 轻量口径：用内置 SQLite，无 MySQL/Redis 依赖；数据落 ./data/new-api。
+services:
+  new-api:
+    image: ghcr.io/calcium-ion/new-api:latest
+    container_name: teamspace-new-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=Asia/Shanghai
+      # 初始 root 密码（登录后请立刻在管理页改掉；留空则用缺省 123456）
+      - INITIAL_ROOT_TOKEN=
+    volumes:
+      - ../data/new-api:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -7,6 +7,9 @@
   "main": "src/index.ts",
   "dependencies": {
     "space-event": "*",
+    "space-kb": "*",
+    "space-identity": "*",
+    "space-memory": "*",
     "space-prompt": "*",
     "space-session": "*",
     "space-staging": "*"

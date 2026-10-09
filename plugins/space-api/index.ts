@@ -6,14 +6,18 @@
 //   GET /api/sessions                会话清单
 //   GET /api/sessions/:id/events     事件（append-only，按 seq 升序）
 //   GET /api/sessions/:id/members    在册成员
+//   GET /api/users                   人类用户清单（去敏，IM 化邀请成员用）
 //   GET /api/panels                  已登记的页内区域（seam/space-ui 注册表）
 import type { Context } from 'cordis'
 
 export const name = 'space-api'
-export const inject = ['server', 'session', 'eventLog', 'ui']
+export const inject = ['server', 'session', 'eventLog', 'ui', 'users']
 
 export function apply(ctx: Context) {
   ctx.server.get('/api/sessions', async () => Response.json(ctx.session.listSessions()))
+
+  // 人类用户清单（去敏视图，无 passwordHash）——邀请成员 / 观测用。
+  ctx.server.get('/api/users', async () => Response.json(await ctx.users.listHumans()))
 
   ctx.server.get('/api/sessions/:id/events', async (req) => {
     const session = ctx.session.getSession(req.params.id)

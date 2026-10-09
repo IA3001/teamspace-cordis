@@ -1,0 +1,11 @@
+{
+  "name": "space-settings",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：ctx.settings —— 运行时键值设置（模型接入等）。只有词汇与 Service 声明，零实现",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

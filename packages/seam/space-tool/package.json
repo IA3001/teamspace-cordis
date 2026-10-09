@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "seam：ctx.tools —— 工具目录 + 注册表。只有词汇与 Service 声明，零实现",
+  "description": "seam：工具层词汇（ToolService 注册表 + 受控调用 + ToolResult/ToolError），零 IO；实现由 plugins/space-tool 提供",
   "main": "src/index.ts",
   "peerDependencies": {
     "cordis": "^4.0.0-rc.10"

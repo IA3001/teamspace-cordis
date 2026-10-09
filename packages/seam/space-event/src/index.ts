@@ -83,6 +83,8 @@ export interface SessionEvent {
   toolCalls: ToolCall[]
   /** 长回复 / 快速回复。 */
   replyMode: string
+  /** 引用/回复的目标事件 id（可空；引用系统化 2026-10-02）。 */
+  replyTo?: string | null
   voided: boolean
   /** 废止留痕三项：谁撤的 / 何时 / 为什么。 */
   voidedBy: string | null
@@ -98,6 +100,17 @@ export type EventInput = Omit<
   SessionEvent,
   'seq' | 'ts' | 'voided' | 'voidedBy' | 'voidedAt' | 'voidedReason'
 > & { ts?: string; seq?: number }
+
+// ── 表情回应（IM 化 2026-10-01）───────────────────────────────────────────
+// 回应依附于事件存在（events 只追加不删除，回应表级联删只是防御性兜底）。
+// 语义：一人一事件一个 emoji 只一条（幂等）；unreact 幂等（没回应过也返回现状）。
+
+/** 一个 emoji 的回应汇总：数量 + 回应人列表（前端用 users 含不含我来高亮）。 */
+export interface ReactSummary {
+  emoji: string
+  count: number
+  users: string[]
+}
 
 // ── 错误分类法（规律 3：实现与策略不得自造错误串，只能抛这里的错误码）──────
 
@@ -189,4 +202,18 @@ export abstract class EventLogService extends Service {
    * 允许走 LIKE 兜底（trigram 对 2 字词命中率的问题，承旧链实测结论）。
    */
   abstract search(sessionId: string, query: string): SessionEvent[]
+
+  // ── 表情回应（IM 化 2026-10-01；零 IO 声明，SQL 细节归实现层）───────────
+
+  /** 打一个表情回应（重复打同一个 = 幂等忽略）。返回该事件回应后的最新汇总。 */
+  abstract react(eventId: string, userId: string, emoji: string): Promise<ReactSummary[]>
+
+  /** 撤一个表情回应（没回应过也幂等成功）。返回该事件回应后的最新汇总。 */
+  abstract unreact(eventId: string, userId: string, emoji: string): Promise<ReactSummary[]>
+
+  /**
+   * 批量查一组事件的回应汇总（一次查，供时间线渲染，避免 N+1）。
+   * 没有回应的事件不出现在返回的 Record 里（前端按 undefined = 无回应处理）。
+   */
+  abstract reactions(eventIds: string[]): Promise<Record<string, ReactSummary[]>>
 }

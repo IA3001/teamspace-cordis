@@ -1,0 +1,11 @@
+{
+  "name": "space-identity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：身份域词汇（UserService + 用户/token 形状 + 错误分类法），零 IO；实现由 impl/space-store-sqlite 提供",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

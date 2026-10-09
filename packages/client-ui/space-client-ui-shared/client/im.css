@@ -1,0 +1,324 @@
+/* im.css —— 聊天骨架专属样式层（铁律 1 修订记账 2026-10-02 的唯一例外文件）。
+ *
+ * 边界：选择器只允许 .sp- 前缀与 Element Plus CSS 变量；零业务逻辑。
+ * 由 teamspace / sessions 页 import（vite 打包进各自产物）。
+ */
+
+/* ── 消息流（替代 el-timeline 圆点轴）────────────────────────────────── */
+.sp-list { padding: 4px 14px 16px; }
+
+.sp-msg { display: flex; gap: 10px; margin: 10px 0; align-items: flex-start; }
+.sp-msg.self { flex-direction: row-reverse; }
+
+.sp-msg-avatar { flex: none; }
+
+.sp-msg-body { display: flex; flex-direction: column; gap: 2px; max-width: 72%; min-width: 0; }
+.sp-msg.self .sp-msg-body { align-items: flex-end; }
+
+.sp-msg-name { font-size: 12px; color: var(--el-text-color-secondary); padding: 0 4px; }
+
+.sp-bubble {
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+  border: 1px solid var(--el-border-color-lighter);
+}
+.sp-msg.self .sp-bubble {
+  background: light-dark(var(--el-color-primary-light-9), #33406b);
+  border-color: light-dark(var(--el-color-primary-light-8), #44508a);
+}
+.sp-bubble.agent {
+  background: var(--el-bg-color);
+  border-color: var(--el-border-color-lighter);
+}
+.sp-bubble pre {
+  margin: 4px 0;
+  padding: 8px 10px;
+  background: var(--el-fill-color);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.sp-bubble code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  background: var(--el-fill-color);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.sp-bubble pre code { background: transparent; padding: 0; }
+
+.sp-msg-meta {
+  display: flex; gap: 6px; align-items: center;
+  font-size: 12px; color: var(--el-text-color-secondary);
+  padding: 0 4px;
+}
+.sp-msg.self .sp-msg-meta { flex-direction: row-reverse; }
+
+.sp-reactions { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 4px; }
+
+.sp-sys {
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin: 10px 0;
+}
+
+/* 流程进度卡片（⚙ 系统事件）：比普通卡片更轻的内嵌面板 */
+.sp-flow {
+  margin: 10px auto;
+  max-width: 85%;
+  padding: 10px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+}
+
+/* ── 会话栏（左）──────────────────────────────────────────────────────── */
+.sp-rail-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; margin: 2px 0;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--el-text-color-primary);
+}
+.sp-rail-item:hover { background: var(--el-fill-color-light); }
+.sp-rail-item.active { background: var(--el-color-primary-light-9); }
+.sp-rail-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sp-rail-title { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; }
+.sp-rail-sub { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
+.sp-rail-sub .sp-brief { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.sp-rail-time { flex: none; }
+
+/* ── 协作面板（右）与通用小件 ─────────────────────────────────────────── */
+.sp-panel-section { margin-top: 10px; }
+.sp-panel-title {
+  font-size: 12px; color: var(--el-text-color-secondary);
+  font-weight: 500; margin-bottom: 6px;
+}
+.sp-chip { cursor: pointer; }
+
+.sp-rail-main > .sp-rail-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sp-rail-title { font-size: 14px; font-weight: 500; color: var(--el-text-color-primary); }
+
+/* ── 登录页 ───────────────────────────────────────────────────────────── */
+.sp-login-brand { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 0 2px; }
+.sp-login-logo {
+  width: 44px; height: 44px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--el-color-primary); color: #fff;
+  font-weight: 700; font-size: 18px; letter-spacing: 1px;
+}
+.sp-login-title { font-size: 18px; font-weight: 600; color: var(--el-text-color-primary); }
+.sp-login-sub { font-size: 12px; color: var(--el-text-color-secondary); }
+.sp-login-btn { width: 100%; margin-top: 4px; }
+.el-tabs { --el-tabs-header-margin: 0 0 12px; }
+
+/* ── 引用块（深度融合版）────────────────────────────────────────────── */
+.sp-quote {
+  display: flex; align-items: center; gap: 4px;
+  border-left: 2px solid var(--el-color-primary);
+  padding: 1px 0 1px 8px;
+  margin: 0 0 3px 2px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.sp-quote:hover { text-decoration: underline; }
+
+/* 定位原消息时的短暂高亮 */
+.sp-flash { outline: 2px solid var(--el-color-primary-light-5); border-radius: 10px; transition: outline-color .8s; }
+
+/* ── 会话栏底部个人条 ─────────────────────────────────────────────────── */
+.sp-identity {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-lighter);
+}
+.sp-identity-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 500; color: var(--el-text-color-primary);
+}
+.sp-identity-actions { display: flex; gap: 2px; flex: none; }
+
+/* ── 协作面板 v2 ─────────────────────────────────────────────────────── */
+.sp-panel-title { font-size: 12px; font-weight: 500; color: var(--el-text-color-secondary); margin: 10px 0 6px; }
+.sp-panel-block { display: block; margin: 2px 0; }
+.sp-member-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-member-list .el-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Composer（DeepSeek 式一体输入区）───────────────────────────────── */
+.sp-composer { --el-card-padding: 10px 12px 8px; }
+.sp-composer .el-textarea__inner {
+  background: transparent;
+  border: none;
+  box-shadow: none !important;
+  padding: 8px 10px 2px;
+  min-height: 56px;
+  resize: none;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--el-text-color-primary);
+}
+.sp-composer .el-textarea__inner::placeholder { color: var(--el-text-color-secondary); }
+.sp-composer .sp-send {
+  border-radius: 16px;
+  padding: 8px 18px;
+  font-weight: 500;
+}
+.sp-composer .sp-attach { margin-right: auto; }
+
+/* 圆形图标发送键（DeepSeek 式 ↑）*/
+.sp-send-icon {
+  width: 36px; height: 36px; padding: 0 !important;
+  border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+}
+.sp-send-icon svg { display: block; }
+
+/* ── 管理页容器与表格 ────────────────────────────────────────────────── */
+.sp-admin-wrap .el-table .cell { white-space: nowrap; }
+.sp-admin-wrap .el-table { --el-table-border-color: var(--el-border-color-lighter); }
+
+/* ── 模型与接入设置页（/settings，2026-10-05）────────────────────────── */
+.sp-setting-form { max-width: 640px; }
+.sp-setting-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.sp-setting-head h3 { margin: 0; font-size: 16px; }
+.sp-setting-hint { font-size: 12px; opacity: 0.65; line-height: 1.5; margin-top: 2px; }
+
+/* ── 交互打磨（2026-10-05）──────────────────────────────────────────── */
+/* composer 的 textarea 不许拖拽变形（聊天输入是固定行为） */
+.sp-composer textarea { resize: none; }
+/* 成员 chip 兜底：万一超长也折行，不顶破面板 */
+.sp-member-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.sp-member-list .sp-chip { max-width: 100%; height: auto; white-space: normal; }
+
+/* ── 交互打磨（2026-10-05）──────────────────────────────────────────── */
+/* composer 的 textarea 不许拖拽变形（聊天输入是固定行为） */
+.sp-composer textarea { resize: none; }
+/* 成员 chip 兜底：万一超长也折行，不顶破面板 */
+.sp-member-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.sp-member-list .sp-chip { max-width: 100%; height: auto; white-space: normal; }
+
+/* ── 控制台专业版式（2026-10-05 改版：/admin /models /agents 三页共享）── */
+.sp-admin-wrap { max-width: 1000px; margin: 0 auto; padding: 26px 30px 56px; }
+
+/* 页头：大标题 + 职责描述 + 状态胶囊 + 页级动作 */
+.sp-page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.sp-page-head h2 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: .3px; }
+.sp-page-sub { margin-top: 6px; font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.65; }
+.sp-page-actions { display: flex; gap: 2px; flex-shrink: 0; padding-top: 5px; }
+
+/* 状态胶囊：描边圆点，替代成堆的 el-tag */
+.sp-status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--el-border-color-lighter); background: var(--el-fill-color-light); color: var(--el-text-color-regular); }
+.sp-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-danger); flex-shrink: 0; }
+.sp-status--ok i { background: var(--el-color-success); }
+.sp-status--warn i { background: var(--el-color-warning); }
+.sp-status--idle i { background: var(--el-text-color-disabled); }
+.sp-page-actions { gap: 10px; }
+.sp-page-actions .el-button + .el-button { margin-left: 0 !important; }
+.sp-status-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 分区卡片：浅描边 + 微阴影，标题带主色竖条 */
+.sp-section { background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 12px; padding: 18px 22px 20px; margin-bottom: 16px; box-shadow: 0 1px 2px rgb(0 0 0 / 4%); }
+.sp-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.sp-section-title { font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 9px; }
+.sp-section-title::before { content: ''; width: 4px; height: 15px; border-radius: 2px; background: var(--el-color-primary); }
+.sp-section-desc { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 5px; line-height: 1.6; }
+
+/* 双列表单栅格：长字段 span2；窄屏降单列 */
+.sp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 20px; margin-top: 8px; }
+.sp-grid .sp-span2 { grid-column: span 2; }
+@media (max-width: 720px) { .sp-grid { grid-template-columns: 1fr; } .sp-grid .sp-span2 { grid-column: span 1; } }
+.sp-field-label { font-size: 12.5px; color: var(--el-text-color-secondary); margin: 12px 0 6px; }
+.sp-hint { font-size: 12px; color: var(--el-text-color-secondary); opacity: .85; margin-top: 5px; line-height: 1.55; }
+
+/* 卡片底部操作行：虚线分隔 + 内联结果 */
+.sp-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--el-border-color-lighter); }
+.sp-result { font-size: 13px; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; }
+.sp-result--ok { color: var(--el-color-success); }
+.sp-result--err { color: var(--el-color-danger); }
+
+/* 全页结果条（替代 el-alert） */
+.sp-note { font-size: 13px; padding: 9px 14px; border-radius: 9px; margin-bottom: 16px; border: 1px solid; line-height: 1.55; }
+.sp-note--ok { color: var(--el-color-success); border-color: var(--el-color-success-light-5, color-mix(in srgb, var(--el-color-success) 30%, transparent)); background: var(--el-color-success-light-9, transparent); }
+.sp-note--err { color: var(--el-color-danger); border-color: var(--el-color-danger-light-5, color-mix(in srgb, var(--el-color-danger) 30%, transparent)); background: var(--el-color-danger-light-9, transparent); }
+
+/* 表格微调：次要色表头 + 圆角 */
+.sp-section .el-table { --el-table-header-bg-color: var(--el-fill-color-light); --el-table-header-text-color: var(--el-text-color-secondary); border-radius: 9px; }
+.sp-section .el-table th .cell { font-weight: 600; font-size: 12.5px; }
+
+/* 密钥只读显示（等宽） */
+.sp-keyview { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+
+/* ── 登录页（/login）净化（2026-10-05）──────────────────────────────── */
+/* 登录/注册页不要外壳左侧图标栏：页面根节点带 .sp-plain，这里用 :has 把
+   外壳 .global-nav 整列藏掉（flex 布局自动收回 48px）。 */
+body:has(.sp-plain) .global-nav { display: none; }
+/* 登录卡与已登录卡共用的窄容器（覆盖 k-content 默认留白，居中偏上） */
+.sp-plain { display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; }
+.sp-plain > .sp-section { width: 400px; box-shadow: 0 10px 30px rgb(0 0 0 / 8%); }
+/* 活动栏（theme/插件/日志入口）同样不属于登录页 —— 与 .global-nav 一起藏。 */
+body:has(.sp-plain) .layout-activity { display: none; }
+
+/* ── 移动端基础响应式（B5，2026-10-06）──────────────────────────────── */
+/* ≤760px：会话栏与右侧面板改为覆盖式抽屉，时间线占满整宽。 */
+@media (max-width: 760px) {
+  .page-sidebar {
+    position: fixed !important;
+    left: 0; top: 48px; bottom: 0;
+    width: min(78vw, 300px) !important;
+    z-index: 60;
+    background: var(--el-bg-color);
+    box-shadow: 8px 0 24px rgb(0 0 0 / 12%);
+    overflow-y: auto;
+  }
+  .right-sidebar {
+    position: fixed !important;
+    right: 0; top: 48px; bottom: 0;
+    width: min(78vw, 320px) !important;
+    z-index: 60;
+    background: var(--el-bg-color);
+    box-shadow: -8px 0 24px rgb(0 0 0 / 12%);
+    overflow-y: auto;
+  }
+  /* 搜索栏在窄屏收窄 */
+  .content-area .el-row .el-input { min-width: 0; }
+  /* 成员面板避免顶裁切 */
+  .sp-member-list .sp-chip { max-width: 96%; }
+}
+
+/* ── 控制台导航胶囊 + 工具行（2026-10-07 反馈修）────────────────────── */
+/* 右上角页级导航：文本链接 → 胶囊按钮（原来是挤成一坨的裸文字） */
+.sp-page-actions .el-button {
+  background: var(--el-fill-color);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 999px;
+  padding: 9px 15px;
+  color: var(--el-text-color-regular);
+  font-weight: 500;
+}
+.sp-page-actions .el-button + .el-button { margin-left: 0 !important; }
+.sp-page-actions .el-button:hover { color: var(--el-color-primary); border-color: var(--el-color-primary-light-5, var(--el-color-primary)); background: var(--el-bg-color); }
+/* 区块工具行：开关 / 搜索 / 筛选 同行 */
+.sp-toolbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.sp-toolbar-group { display: flex; align-items: center; gap: 8px; }
+.sp-toolbar-label { font-size: 13px; color: var(--el-text-color-secondary); }
+.sp-pager { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+/* ── 登录门（拒绝态）卡片（2026-10-07）──────────────────────────────── */
+.sp-login-gate { display: flex; justify-content: center; align-items: flex-start; padding-top: 8vh; }
+.sp-login-box { width: 420px; box-sizing: border-box; box-shadow: 0 10px 30px rgb(0 0 0 / 10%); }
+.sp-login-brand {
+  width: 48px; height: 48px; border-radius: 12px; margin: 0 auto 12px;
+  background: var(--el-color-primary); color: #fff;
+  font-weight: 700; font-size: 17px; letter-spacing: 1px;
+  display: flex; align-items: center; justify-content: center;
+}

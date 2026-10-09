@@ -67,9 +67,11 @@ fi
 say() { printf '  %s\n' "$*"; }
 
 # 打印运行时端口一览（各脚本复用，保证输出口径一致）
+# 2026-09-30 修正：5174 团队空间页面已启用（IM 式聊天，需登录）——
+# 旧文案「暂未启用」与 check-web.sh 断言 5174 必须 200 矛盾。
 print_endpoints() {
-  say "后端监听   http://${APP_HOST}:${APP_PORT}   （健康检查 /healthz）"
+  say "后端监听   http://${APP_HOST}:${APP_PORT}   （健康检查 /healthz、认证 /api/auth/*）"
   say "调试控制台 http://${APP_HOST}:${DEBUG_PORT}   （插件 / 日志 / 数据库，无登录直达）"
   say "控制台 dev 端口 ${CONSOLE_PORT}（暂未启用）"
-  say "团队空间 dev 端口 ${TEAMSPACE_PORT}（暂未启用）"
+  say "团队空间   http://${APP_HOST}:${TEAMSPACE_PORT}   （IM 聊天页，注册 /login）"
 }

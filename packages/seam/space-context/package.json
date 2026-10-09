@@ -1,0 +1,14 @@
+{
+  "name": "space-context",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：上下文注入层词汇（ContextAssemblyService + AssembledContext），零 IO；实现由 plugins/space-context 提供（prompt 模板 + 历史 + 记忆 + 检索的统一注入面）",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10",
+    "space-event": "*",
+    "space-memory": "*",
+    "space-retrieval": "*"
+  }
+}

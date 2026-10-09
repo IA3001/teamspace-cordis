@@ -8,12 +8,33 @@ import type { Context } from 'cordis'
 import type { DelegatePayload } from 'space-orchestrator'
 
 export const name = 'agent-reviewer-stub'
-export const inject = ['agents', 'orchestrator', 'agentRuntime']
+// messages：主动发言（IM 化改造 2026-09-30）。
+export const inject = ['agents', 'orchestrator', 'agentRuntime', 'messages']
 
-const AGENT_ID = 'agent.reviewer'
-const TITLE = '代码审查者'
+import z from 'schemastery'
 
-export function apply(ctx: Context) {
+/** 面板可配（5172 → 插件 → agent-reviewer-stub）：身份与提示词引用。 */
+/** apply 侧的 TS 视图（值/类型同名双导出，TS 命名空间分离合法）。 */
+export interface Config {
+  agentId?: string
+  title?: string
+}
+
+export const Config = z.object({
+  agentId: z.string().description('注册表/入会用 id（改名需同步 users 表）').default('agent.reviewer'),
+  title: z.string().description('给人看的名字（@ 提及候选与流程步骤名）').default('代码审查者'),
+})
+
+
+/** 从回执截一句主动总结（首行，截 80 字）。 */
+function summaryOf(text: string): string {
+  const first = (text.split('\n').find((l) => l.trim()) ?? '').trim()
+  return first.length > 80 ? `${first.slice(0, 80)}…` : first
+}
+
+export function apply(ctx: Context, config: Config = {}) {
+  const AGENT_ID = config.agentId ?? 'agent.reviewer'
+  const TITLE = config.title ?? '代码审查者'
   ctx.agents.register({
     id: AGENT_ID,
     kind: 'coding',
@@ -27,9 +48,20 @@ export function apply(ctx: Context) {
     if (p.target !== TITLE && p.target !== AGENT_ID) return
     void ctx.agentRuntime
       .perform(AGENT_ID, p.instruction)
-      .then((r) => ctx.orchestrator.reportCodingResult(p.sessionId, p.target, r.receipt))
+      .then((r) => {
+        // 收执口：回执落时间线；不再强制暂停（自治预算归引擎管，IM 化改造）。
+        ctx.orchestrator.reportCodingResult(p.sessionId, p.target, r.receipt)
+        // 主动发言：同一条 send 路径，void 防未处理 rejection。
+        void ctx.messages.send(
+          p.sessionId,
+          AGENT_ID,
+          `审查完成：${summaryOf(r.receipt) || summaryOf(p.instruction) || '（无摘要）'}。` +
+            `需要我继续复查修改吗？@协调者 可继续派活`,
+          [],
+        ).catch((e: unknown) => console.error('[agent-reviewer-stub] 主动发言失败：', (e as Error).message))
+      })
       .catch((e: unknown) => {
-        ctx.logger.error('[agent-reviewer-stub] 委托任务执行失败：%s', (e as Error).message)
+        console.error('[agent-reviewer-stub] 委托任务执行失败：', e)
       })
   })
 }

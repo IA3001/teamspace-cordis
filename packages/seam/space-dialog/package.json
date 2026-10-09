@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "seam：ctx.dialog —— 结构化对话流的只读扩展点。只有词汇与 Service 声明，零实现",
+  "description": "seam：ctx.dialog —— 协作层（L8）对话/回合视图，显示层与协作面板的只读口径。只有词汇与 Service 声明，零实现；流转层（orchestrator）未来可提供实现",
   "main": "src/index.ts",
   "peerDependencies": {
     "cordis": "^4.0.0-rc.10"

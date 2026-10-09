@@ -108,8 +108,12 @@ export type TurnState = 'chain' | 'static'
 
 /** 暂停原因（stopReason 的约定取值；界面与日志都按它显示）。 */
 export type StopReason =
-  /** 已暂停，等待人类下一步指示（正常暂停点）。 */
+  /** 已暂停，等待人类下一步指示（保留；IM 化后仅在预算耗尽与错误停机时出现，不再是默认路径）。 */
   | 'await_human'
+  /** 回合自然完成：无未完成委托且协调者不再继续（IM 化后的默认收敛路径，2026-09-30）。 */
+  | 'completed'
+  /** 每回合自治预算耗尽，暂停等人类（IM 化改造，2026-09-30）。 */
+  | 'budget_exhausted'
   /** 委托了名单外目标，已拒绝并暂停。 */
   | 'invalid_target'
   /** 协调者大脑未注册。 */
@@ -128,6 +132,11 @@ export interface Turn {
   state: TurnState
   /** 本回合协调者大脑**实际发起**的调用次数（资源口径：每条人类消息恰好 1 次）。 */
   decisionCalls: number
+  /**
+   * 本回合已消耗的自治动作数（IM 化改造，2026-09-30）：每次引擎发起委托 /
+   * 继续调用 +1，达到每回合预算（默认 8）→ budget_exhausted 暂停。
+   */
+  autonomousActions: number
   /** 本回合已委托过的目标（一轮内同一目标只能调一次的可观测账本）。 */
   delegatedTargets: string[]
   /** 本次为什么停（空 = 没停）。要在界面上能看见，不是只进日志。 */
@@ -206,8 +215,9 @@ export class OrchestratorError extends Error {
 //   · onPlan：每回合恰好一次大脑调用（decisionCalls=1）；无脑/失败/空输出/
 //     名单外目标一律**暂停**（state=static）且不猜；合法委托 → 输出
 //     「已收到指令，将委托[target]：…」后保持 chain 等目标反馈。
-//   · reportFeedback：收到目标 agent 反馈后**必须**暂停（await_human）——
-//     「禁止未获新授权自动发起下一次调用」的执行点，不靠协调者自觉。
+//   · reportFeedback / reportCodingResult：反馈视为结果回流（IM 化改造
+//     2026-09-30），由引擎按每回合自治预算决定继续；无新委托且协调者不再
+//     继续 → completed 收敛，预算耗尽 → budget_exhausted 暂停。
 //   · 回合状态进程内存（P3 拍板）：重启回到 static —— 静止即安全默认。
 export abstract class OrchestratorService extends Service {
   constructor(ctx: Context) {
@@ -225,19 +235,35 @@ export abstract class OrchestratorService extends Service {
   abstract onPlan(payload: PlanPayload): Promise<StepResult | null>
 
   /**
-   * 目标 agent 反馈入口：落一条该 agent 的发言事件，随后**必须**暂停
-   * （await_human）。没有在途委托时调用 → not_delegating。
+   * 目标 agent 反馈入口：落一条该 agent 的发言事件（IM 化改造 2026-09-30：
+   * 反馈视为结果回流，由引擎按自治预算决定是否继续 —— 不再强制暂停；
+   * 收敛语义见 StopReason.completed / budget_exhausted）。
+   * 没有在途委托时调用 → not_delegating。
    */
   abstract reportFeedback(sessionId: string, target: string, text: string): SessionEvent
 
   /**
    * coding agent 收执口（P6 收尾）：委托执行方（agent-coder-stub 等）干完活
-   * 回报结果。与 reportFeedback 同一暂停语义（收到反馈必须停），但落事件时
+   * 回报结果。IM 化改造（2026-09-30）：与 reportFeedback 同一回流语义（不再
+   * 强制 await_human，由引擎按自治预算决定继续或 completed 收敛），但落事件时
    * 按 coding 名册（ctx.agents）解析 authorId —— coding agent 不进会话成员
    * 名册，reportFeedback 的 member.role 查找对它必然落空（not_delegating），
    * 这是名册制的刻意分工，不是漏改。没有在途委托 → not_delegating。
    */
   abstract reportCodingResult(sessionId: string, target: string, text: string): SessionEvent
+
+  /**
+   * 外部委托入口（IM 化流程轨，2026-10-01）：MC 式服务流程（flow-commands）
+   * 的派发不走大脑 decide，但收执口要求在途账本 —— 由本方法把外部委托先
+   * 登记进引擎账本（无回合则开新回合）再发出 'orchestrator/delegate'。
+   * 没有它，agent 回报会因 not_delegating 无处可交。
+   */
+  abstract beginExternalDelegate(
+    sessionId: string,
+    eventId: string,
+    target: string,
+    instruction: string,
+  ): void
 
   /** 回合状态快照（无记录的会话返回默认静止回合）。 */
   abstract turn(sessionId: string): Turn

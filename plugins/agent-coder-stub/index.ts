@@ -19,13 +19,34 @@ import type { Context } from 'cordis'
 import type { DelegatePayload } from 'space-orchestrator'
 
 export const name = 'agent-coder-stub'
-// cordis 严格注入：agents（报到）+ orchestrator（收执口）+ agentRuntime（干活）。
-export const inject = ['agents', 'orchestrator', 'agentRuntime']
+// cordis 严格注入：agents（报到）+ orchestrator（收执口）+ agentRuntime（干活）
+// + messages（主动发言，IM 化改造 2026-09-30）。
+export const inject = ['agents', 'orchestrator', 'agentRuntime', 'messages']
 
-const AGENT_ID = 'agent.coder'
-const TITLE = '编码者'
+import z from 'schemastery'
 
-export function apply(ctx: Context) {
+/** 面板可配（5172 → 插件 → agent-coder-stub）：身份与提示词引用。 */
+/** apply 侧的 TS 视图（值/类型同名双导出，TS 命名空间分离合法）。 */
+export interface Config {
+  agentId?: string
+  title?: string
+}
+
+export const Config = z.object({
+  agentId: z.string().description('注册表/入会用 id（改名需同步 users 表）').default('agent.coder'),
+  title: z.string().description('给人看的名字（@ 提及候选与流程步骤名）').default('编码者'),
+})
+
+
+/** 从回执截一句主动总结（首行，截 80 字）。 */
+function summaryOf(text: string): string {
+  const first = (text.split('\n').find((l) => l.trim()) ?? '').trim()
+  return first.length > 80 ? `${first.slice(0, 80)}…` : first
+}
+
+export function apply(ctx: Context, config: Config = {}) {
+  const AGENT_ID = config.agentId ?? 'agent.coder'
+  const TITLE = config.title ?? '编码者'
   // ── 报到（入驻 = 向 space-agent 缝注册；重复入驻即炸 —— 重启是新进程，无残留）──
   ctx.agents.register({
     id: AGENT_ID,
@@ -44,11 +65,22 @@ export function apply(ctx: Context) {
     void ctx.agentRuntime
       .perform(AGENT_ID, p.instruction)
       .then((r) => {
-        // 收执口：回执落时间线（authorKind='agent'）+ await_human 暂停。
+        // 收执口：回执落时间线（authorKind='agent'）。IM 化改造后不再强制
+        // await_human —— 由编排引擎按自治预算决定是否继续。
         ctx.orchestrator.reportCodingResult(p.sessionId, p.target, r.receipt)
+        // 主动发言（IM 化改造，2026-09-30）：与人类消息同一条 send 路径
+        // （落事件+广播），void 前缀防未处理 rejection。
+        void ctx.messages.send(
+          p.sessionId,
+          AGENT_ID,
+          `编码完成：${summaryOf(r.receipt) || summaryOf(p.instruction) || '（无摘要）'}。` +
+            `需要我继续验证或补充实现吗？@协调者 可继续派活`,
+          [],
+        ).catch((e: unknown) => console.error('[agent-coder-stub] 主动发言失败：', (e as Error).message))
       })
       .catch((e: unknown) => {
-        ctx.logger.error('[agent-coder-stub] 委托任务执行失败：%s', (e as Error).message)
+        console.error('[agent-coder-stub] 委托任务执行失败：', e)
+        console.error('[agent-coder-stub] 委托任务执行失败：', e)
       })
   })
 }

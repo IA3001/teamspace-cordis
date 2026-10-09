@@ -1,0 +1,15 @@
+{
+  "name": "space-embedding-openai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "impl（space-embedding-openai）：ctx.embeddings 的 OpenAI 兼容实现 —— /embeddings 批量文本向量（分批、不重试），配置面板化（配置值优先、env 兜底）",
+  "main": "src/index.ts",
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10",
+    "schemastery": "*"
+  },
+  "dependencies": {
+    "space-settings": "*"
+  }
+}

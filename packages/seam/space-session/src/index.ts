@@ -30,6 +30,8 @@ export type Role =
   | '需求分析师'
   | 'DRI'
   | '成员'
+  | '群主'
+  | '管理员'
 
 export const ROLES: readonly Role[] = [
   '协调者',
@@ -38,6 +40,8 @@ export const ROLES: readonly Role[] = [
   '需求分析师',
   'DRI',
   '成员',
+  '群主',
+  '管理员',
 ]
 
 /** 三个目标 Agent 角色（@ 提及清单与授权名单的候选集）。 */
@@ -61,7 +65,17 @@ export function isTargetAgentRole(r: Role): boolean {
 }
 
 export function isHumanRole(r: Role): boolean {
-  return r === 'DRI' || r === '成员'
+  // IM 化（2026-09-30）：人类成员角色扩为 群主/管理员/DRI/成员。
+  return r === 'DRI' || r === '成员' || r === '群主' || r === '管理员'
+}
+
+/** IM 语义：群主 = 会话创建者，管理员可邀请/移除成员。 */
+export function isGroupOwner(r: Role): boolean {
+  return r === '群主'
+}
+
+export function isGroupAdmin(r: Role): boolean {
+  return r === '群主' || r === '管理员'
 }
 
 // ── 状态词汇 ──────────────────────────────────────────────────────────────

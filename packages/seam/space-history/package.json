@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "seam：ctx.history —— 事件视图过滤器。只有词汇与 Service 声明，零实现",
+  "description": "seam：ctx.history —— 会话层（L5）事件视图过滤器。只有词汇与 Service 声明，零实现；过滤语义由 impl/space-store-sqlite 或 eventLog 组合提供",
   "main": "src/index.ts",
   "peerDependencies": {
-    "cordis": "^4.0.0-rc.10"
+    "cordis": "^4.0.0-rc.10",
+    "space-event": "*"
   }
 }

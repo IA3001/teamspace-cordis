@@ -3,6 +3,7 @@
 > ## 👉 开工先读：[`.rules/IRON-RULES.md`](.rules/IRON-RULES.md)（铁律**唯一出处**）
 > ## 👉 上手 / 跑起来：[`README.md`](README.md)　架构图：[`docs/architecture.html`](docs/architecture.html)
 > ## 👉 接下来做什么：[`docs/ROADMAP.md`](docs/ROADMAP.md)（M1 与**前置门槛**）
+> ## 👉 分层章程：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)（L0~L12 层模型 + 依赖方向 + 反模式；2026-09-30 起新增代码必须对层入座，判红器 `scripts/lint-layers.sh`）
 >
 > 本文件是**开工第一份要读的东西**。它只放铁律的**指针与约束**，不复制正文 ——
 > 复制会漂移（同类工程在 Python 版上吃过「同一份名单四处各写一份」的亏）。
@@ -95,3 +96,25 @@
 
 > `plugins/` 与 `packages/` 的分工：前者是「没有缝」的叶子，后者是「有缝」的（需要被别人替换实现、或被策略包裹）。
 > 层与层之间的依赖方向由 `npm run lint:deps` 强制，表在 `dev-cordis/MODULE-PLAN.md` 第 3.7 节。
+
+## 2026-10-06 交付增量（接手必读）
+
+- **settings 缝**（seam/space-settings + 迁移 0013）：同步 KV，5172 面板
+  （/models /agents /admin）写 `llm.*` `embed.*` `agent.*` `auth.*` 键；
+  消费方（llm-openai / embedding-openai / orchestrator / agent-analyst-llm /
+  space-auth）每次现读 —— 面板改完即生效，不重启。
+- **向量检索**：kb-embedder 插件订阅 `space/kb-doc-added` 回填向量；
+  检索重排的纯函数在 seam space-kb 的 `vectorRerank`（kb 页与
+  space-retrieval 共用）。⚠ store impl 不得依赖 embeddings（成环：
+  store→embeddings→settings→store）。
+- **Coding Agent 真模型**：runtime 的真模型分支已被 settings 激活；
+  占位提示词（「【占位提示词」开头）不当 system —— 角色缺省 system 在
+  agent-runtime 的 ROLE_SYSTEM；正式文案 upsert 进 prompt_templates，
+  /agents 页可改。
+- **/kb 页**：client 的 `rpc.value.*`（useRpc 是 ref）；新页面请抄
+  space-client-ui-settings 的写法（含 console.ts 版式词汇）。
+- **上传**：space-upload 对文本类附件（≤256KB）自动灌知识库。
+- **5174 /admin**：space-client-ui-bridge 桥接页，装载即跳 5172
+  （端口取 DEBUG_PORT，不是 CONSOLE_PORT）。
+- **登录限速**：space-auth 进程内滑动窗口（ip+用户名，10min/8 次）。
+- **verify-staging 已退役**（暂存指令注销），防回归靠 smoke.sh（9 项）。

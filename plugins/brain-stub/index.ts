@@ -21,6 +21,7 @@
 // ⚠ BRAIN_SABOTAGE=1（verify-p8 红测探针，断言 ⑬）：改坏分支二的决策形状
 // —— 未命中也吐委托 JSON；断言「未命中不委托」必须判红；还原（不设 env）复绿。
 import type { Context } from 'cordis'
+import z from 'schemastery'
 import type { OrchestratorBrain, PlanRequest } from 'space-orchestrator'
 import { LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV } from 'space-llm'
 
@@ -29,6 +30,14 @@ export const name = 'brain-stub'
 // agents（coding 名册 id→title）。
 export const inject = ['orchestrator', 'session', 'agents']
 
+/** 配置面板 schema（5172 自动渲染）：占位大脑开关。 */
+export const Config = z.object({
+  enabled: z.boolean()
+    .description('占位大脑开关（false = 不注册大脑，协调者回到 coordinator_unconfigured 安全默认）')
+    .default(true),
+})
+
+/** 运行时取值形状（兼容旧取值：可选，缺省启用）。 */
 export interface Config {
   /** 占位大脑开关（false = 不注册大脑，回到 coordinator_unconfigured 安全默认）。 */
   enabled?: boolean
@@ -109,5 +118,15 @@ export function apply(ctx: Context, config: Config = {}) {
       return `【${MARK}】已收到本轮发言（${req.humanText.length} 字）。未识别到 @ 指定的在册成员，本轮仅回复不派单，已暂停等待人类指示。`
     },
   }
-  ctx.orchestrator.registerBrain(brain)
+  try {
+    ctx.orchestrator.registerBrain(brain)
+  } catch (e) {
+    // brain-llm 已注册真大脑时这里会 duplicate_brain —— 正常降级，不刷错误栈。
+    if ((e as { code?: string }).code === 'duplicate_brain') {
+      ctx.logger.info('[brain-stub] 真大脑（brain-llm）已在位 —— 本占位大脑不注册')
+    } else {
+      throw e
+    }
+  }
+
 }

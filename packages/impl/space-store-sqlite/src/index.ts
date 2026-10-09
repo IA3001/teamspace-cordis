@@ -57,6 +57,7 @@ declare module '@cordisjs/plugin-database' {
       mentions: string
       tool_calls: string
       reply_mode: string
+      reply_to: string | null
       voided: boolean
       voided_by: string | null
       voided_at: string | null
@@ -84,6 +85,51 @@ declare module '@cordisjs/plugin-database' {
       body: string
       updated_at: string
     }
+    users: {
+      id: string
+      username: string
+      password_hash: string
+      display_name: string
+      kind: string
+      is_admin: boolean
+      created_at: string
+    }
+    login_tokens: {
+      token: string
+      user_id: string
+      created_at: string
+      expires_at: string
+    }
+    memories: {
+      id: string
+      scope: string
+      kind: string
+      text: string
+      weight: number
+      author_id: string | null
+      created_at: string
+    }
+    msg_reactions: {
+      event_id: string
+      user_id: string
+      emoji: string
+      created_at: string
+    }
+    kb_documents: {
+      id: string
+      title: string
+      source: string
+      size: number
+      created_at: string
+    }
+    kb_chunks: {
+      id: string
+      doc_id: string
+      idx: number
+      text: string
+      embedding: string
+      created_at: string
+    }
   }
 }
 import { SqliteEventLog } from './eventlog.ts'
@@ -91,6 +137,10 @@ import { SqlitePromptStore } from './prompt.ts'
 import { SqliteStagingStore } from './staging.ts'
 import { currentVersion, expectedVersion } from './loader.ts'
 import { SqliteSessionStore } from './session.ts'
+import { SqliteUserStore } from './users.ts'
+import { SqliteMemoryStore } from './memory.ts'
+import { SqliteKnowledgeStore } from './kb.ts'
+import { SqliteSettingsStore } from './settings.ts'
 
 export const name = 'space-store-sqlite'
 // database 服务由 debug-database-sqlite（驱动插件）提供；未就绪时本插件不加载。
@@ -162,6 +212,7 @@ export function apply(ctx: Context, config: Config = {}) {
     mentions: { type: 'string', nullable: false },
     tool_calls: { type: 'string', nullable: false },
     reply_mode: { type: 'string', nullable: false },
+    reply_to: { type: 'string', nullable: true },
     voided: { type: 'boolean', nullable: false },
     voided_by: { type: 'string', nullable: true },
     voided_at: { type: 'string', nullable: true },
@@ -195,17 +246,75 @@ export function apply(ctx: Context, config: Config = {}) {
     updated_at: { type: 'string', nullable: false },
   }, { primary: 'ref' })
 
+  // 身份域（IM 化 2026-09-30）：与 0007 + 0011_admin 逐列对齐。
+  ctx.database.extend('users', {
+    id: { type: 'string', nullable: false },
+    username: { type: 'string', nullable: false },
+    password_hash: { type: 'string', nullable: false },
+    display_name: { type: 'string', nullable: false },
+    kind: { type: 'string', nullable: false },
+    is_admin: { type: 'boolean', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: 'id' })
+  ctx.database.extend('login_tokens', {
+    token: { type: 'string', nullable: false },
+    user_id: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+    expires_at: { type: 'string', nullable: false },
+  }, { primary: 'token' })
+
+  // 记忆层（分层 L1，2026-09-30）：与 0008_memory 逐列对齐。
+  ctx.database.extend('memories', {
+    id: { type: 'string', nullable: false },
+    scope: { type: 'string', nullable: false },
+    kind: { type: 'string', nullable: false },
+    text: { type: 'string', nullable: false },
+    weight: { type: 'double', nullable: false },
+    author_id: { type: 'string', nullable: true },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: 'id' })
+
+  // 表情回应（IM 化 2026-10-01）：与 0009_reactions 逐列对齐（三元组复合主键）。
+  ctx.database.extend('msg_reactions', {
+    event_id: { type: 'string', nullable: false },
+    user_id: { type: 'string', nullable: false },
+    emoji: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: ['event_id', 'user_id', 'emoji'] })
+
+  // 知识库域（2026-10-01）：与 0010_knowledge 逐列对齐（kb_chunks_fts 是
+  // 外部内容表，注册无意义且驱动表达不了 FTS5 —— 只注册两张真表）。
+  ctx.database.extend('kb_documents', {
+    id: { type: 'string', nullable: false },
+    title: { type: 'string', nullable: false },
+    source: { type: 'string', nullable: false },
+    size: { type: 'integer', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: 'id' })
+  ctx.database.extend('kb_chunks', {
+    id: { type: 'string', nullable: false },
+    doc_id: { type: 'string', nullable: false },
+    idx: { type: 'integer', nullable: false },
+    text: { type: 'string', nullable: false },
+    embedding: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: 'id' })
+
   // ── 4. 两个缝的真正实现 ───────────────────────────────────────────────────
   new SqliteSessionStore(ctx, db) // 提供 ctx.session
+  new SqliteUserStore(ctx, db) // 提供 ctx.users（身份域，IM 化）
+  new SqliteMemoryStore(ctx, db) // 提供 ctx.memory（记忆层，L1）
   const eventLog = new SqliteEventLog(ctx, db) // 提供 ctx.eventLog
   // staging 的 commit 要落人类发言事件（跨缝组合在同一 impl 内完成，
   // 契约见 seam/space-staging 的 commit），所以把 eventLog 递给它。
   new SqliteStagingStore(ctx, db, eventLog) // 提供 ctx.staging
   // 提示词模板（P8）：内容资产（get/upsert/list），DDL 唯一出处 migrations/0006。
   new SqlitePromptStore(ctx, db) // 提供 ctx.prompts
+  new SqliteKnowledgeStore(ctx, db) // 提供 ctx.kb（知识库域，2026-10-01）
+  new SqliteSettingsStore(ctx, db) // 提供 ctx.settings（运行时设置 KV，2026-10-05）
 
   console.log(
-    `[${name}] 就绪：${path}（schema v${current}，业务表 sessions / session_members / events / staging_entries / prompt_templates + 留痕表 action_log）`,
+    `[${name}] 就绪：${path}（schema v${current}，业务表 sessions / session_members / events / staging_entries / prompt_templates / msg_reactions / kb_documents / kb_chunks + 留痕表 action_log）`,
   )
 
   // 清理：cordis v4 惯用法 —— apply 返回函数即 disposer（卸载/停止时关库连接）。

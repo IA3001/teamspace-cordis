@@ -23,4 +23,4 @@ cache/
 # 编辑器
 .DS_Store
 .vscode/
-.idea/
+.idea/data/new-api/

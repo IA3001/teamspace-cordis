@@ -55,14 +55,56 @@
 - id: staging-commands
   name: './plugins/staging-commands/index.ts'
 
+# 登录/注册 HTTP 口（IM 化，2026-09-30）：/api/auth/register|login|logout|me
+# + Set-Cookie HttpOnly space_token。ctx.users 由 space-store-sqlite 提供。
+- id: space-cors
+  name: './plugins/space-cors/index.ts'
+- id: space-auth
+  name: './plugins/space-auth/index.ts'
+
+# 消息推送（IM 化，2026-09-30）：socket 广播 'space:event'（由另一代理实现，
+# 此处只管注册进合成源）。
+- id: space-message
+  name: './plugins/space-message/index.ts'
+
+# 工具层（P9，2026-10-01）：ctx.tools 唯一提供者 —— 工具注册表 + allowlist
+# 闸门 + 每笔调用留痕（铁律 2）。allow 配置了就只放行清单内的 toolId
+#（其余 not_allowed），缺省全放行；能力方注册、使用方按名调用（反模式 2）。
+- id: space-tool
+  name: './plugins/space-tool/index.ts'
+  config:
+    allow: ['tool.workdir-perform']
+
+# 能力方注册示例：把 coding 工作区能力（ctx.agentRuntime.perform）注册成
+# 工具 tool.workdir-perform。Agent 层一律 ctx.tools.invoke 调用，不得绕过
+# 注册表直连 agentRuntime（分层章程 docs/ARCHITECTURE.md 反模式 2）。
+- id: tool-workdir
+  name: './plugins/tool-workdir/index.ts'
+
+# 检索层（P9，2026-10-01，分层 L3）：ctx.retrieval 唯一提供者 —— event FTS
+# 与 memory 两数据源统一成一个检索面，score 粗排降序截 limit；纯读零副作用。
+- id: space-retrieval
+  name: './plugins/space-retrieval/index.ts'
+
+# 上下文注入层（P9，2026-10-01，分层 L4）：ctx.context 唯一提供者 ——
+# prompt 模板 + 最近历史 + 记忆召回 + 检索命中统一组装并裁字符预算。
+# Agent/大脑调 LLM 前一律走本缝取上下文，注入逻辑只有一份。
+- id: space-context
+  name: './plugins/space-context/index.ts'
+
 # ── 业务插件：P3（协作大脑）────────────────────────────────────────────
-# ctx.orchestrator 服务提供者 + Plan 触发的接管者：订阅 ctx.on('staging/plan')
-# （P2 留的接缝，接缝不变）→ 每回合恰好一次大脑调用 → 名单校验 / 三级兜底
-# 走 policy/space-authz 纯函数。协调者大脑通过 ctx.orchestrator.registerBrain
+# ctx.orchestrator 服务提供者 + Plan 触发的接管者：IM 化后触发源双轨 ——
+# 'staging/plan'（/commit 兼容路径）+ 'space/plan'（@提及直达，主路径），
+# agent 事件经 'space/event-appended' 回流续步。名单校验 / 三级兜底走
+# policy/space-authz 纯函数。协调者大脑通过 ctx.orchestrator.registerBrain
 # 注入（P3 拍板：不含真实 LLM 适配器，只留接口；未注册 → coordinator_unconfigured
 # 暂停等人类，安全默认）。回合状态进程内存，重启回 static。
+# autonomyBudget：每回合 AI 自主动作预算（IM 化拍板 2026-09-30；超限
+# budget_exhausted 暂停等人类 —— 这是「AI 高度自治」的安全护栏）。
 - id: orchestrator
   name: './plugins/orchestrator/index.ts'
+  config:
+    autonomyBudget: 8
 
 # 占位大脑（P8，2026-09-30）：第一个真实挂在 registerBrain 上的 OrchestratorBrain，
 # 让委托回路端到端可观测。**非 NLP**：@ 提示命中授权名册 → 合法 JSON 委托
@@ -113,5 +155,84 @@
 - id: space-llm-openai
   name: './packages/impl/space-llm-openai/src/index.ts'
 
+# ctx.embeddings（2026-10-01）：OpenAI 兼容 /embeddings 批量文本向量（分批、
+# 不重试、60s 超时）。配置面板化：面板留空回退 .env 的 EMBED_* 三件套
+#（Embedding 可与 LLM 不同供应商）；未配置也照常提供（configured=false）。
+- id: space-embedding-openai
+  name: './packages/impl/space-embedding-openai/src/index.ts'
+
 - id: space-agent-runtime
   name: './packages/impl/space-agent-runtime/src/index.ts'
+
+# 会议 Agent（真模型示范，2026-10-01）：第一个走全分层组合的会议角色 ——
+# L7 委托 → L4 组装 → L0 单次调用 → L8 发言；LLM 未配置/失败回退【占位】。
+# 铁律 4：加一个会议 bot = 复制本条 + 改 config（role/agentId/title），零改码。
+- id: agent-analyst-llm
+  name: './plugins/agent-analyst-llm/index.ts'
+  config:
+    role: 需求分析师
+    agentId: a_analyst
+    title: 需求分析师
+    promptRef: prompt.minutes
+
+# 事件视图过滤器（分层 L5 会话层，2026-10-01）：ctx.history.view ——
+# eventLog 的纯过滤视图（作者种类/事件种类/时间窗/条数），供显示层按口径取数。
+- id: space-history
+  name: './plugins/space-history/index.ts'
+
+# 文件消息（2026-10-01，最小可行版）：POST /api/upload（cookie 鉴权，20MB 上限）
+# + GET /api/uploads/:name（免鉴权局域网下载，防目录穿越）。文件不进事件新列，
+# 前端把下载 url 拼进消息文本（[文件] 开头）走现有消息链路。
+- id: space-upload
+  name: './plugins/space-upload/index.ts'
+
+# 回合记忆沉淀观察者（2026-10-01）：completed 收束 → memory.remember ——
+# AI「记得上次聊到哪」的机制面；独立观察者，流转层保持零记忆职责。
+- id: memory-recorder
+  name: './plugins/memory-recorder/index.ts'
+
+# /summary 指令（2026-10-01）：一键让会议记录官生成本会话纪要 —— L4 组装
+#（prompt.minutes + 最近 60 条）→ L0 单次调用 → L8 以 a_recorder 上时间线。
+# LLM 未配置/失败回【占位】，诚实标注（铁律：不猜不重试）。
+- id: ai-summary
+  name: './plugins/ai-summary/index.ts'
+
+# /todo 团队待办（2026-10-01）：四条指令（list/done/del + 记账）——存储复用
+# 记忆层（kind='todo'），append-only 上以 forget+remember 实现状态翻转。
+- id: ai-todo
+  name: './plugins/ai-todo/index.ts'
+
+# 账号管理页（2026-10-01）：挂 5172 调试控制台（debug webui 的 webui 服务是
+# 无名默认实例 —— 不写 webui isolate 即消费它，同 debug-loader-webui 口径）。
+# users RPC 全部首参 token 且仅管理员放行；ctx.users 由 space-store-sqlite 提供。
+- id: client-ui-admin
+  name: './packages/client-ui/space-client-ui-admin/src/index.ts'
+
+# 模型与接入设置页（2026-10-05）：挂 5172 调试控制台（与 admin 同口径）。
+# LLM/Embedding 表单 + 连通测试；写入 ctx.settings（0013_settings 表），
+# space-llm-openai / space-embedding-openai 每次 resolve() 现读，改完即生效。
+# 路由避开面板内置的 /settings（通用设置），用 /models。
+- id: client-ui-settings
+  name: './packages/client-ui/space-client-ui-settings/src/index.ts'
+
+# Agent 配置页（2026-10-05）：挂 5172 调试控制台（与 admin/models 同口径）。
+# 名册/提示词模板编辑（ctx.prompts）/per-agent promptRef 重定向/自治预算。
+# settings 键：agent.autonomyBudget、agent.<id>.promptRef —— 消费方现读。
+- id: client-ui-agents
+  name: './packages/client-ui/space-client-ui-agents/src/index.ts'
+
+# 知识库向量回填器（2026-10-06，A2）：订阅 space/kb-doc-added，经
+# ctx.embeddings 向量化分块写回 kb_chunks.embedding；启动时全库扫尾。
+# 检索层（kb.ts search）检测到向量即按余弦相似度排序，否则关键词兜底。
+- id: kb-embedder
+  name: './plugins/kb-embedder/index.ts'
+
+# 回合视图（分层 L8 协作层，2026-10-01）：ctx.dialog.turns —— 事件流折叠的
+# 只读回合口径（人类消息开回合、系统事件收束），显示层/协作面板可查。
+- id: space-dialog
+  name: './plugins/space-dialog/index.ts'
+
+# 确定性服务流程指令（MC 式，2026-10-01）：/code /test /review —— 指令=流程、
+# 步骤=agent，结果事件回流自动接力；与「@提及自由协作」双轨并存（章程第七节）。
+- id: flow-commands
+  name: './plugins/flow-commands/index.ts'

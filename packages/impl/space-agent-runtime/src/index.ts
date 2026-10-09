@@ -83,14 +83,27 @@ export class AgentRuntime extends AgentRuntimeService {
       // ── 模式判定（确定性）：ctx.llm 在且 configured（.env 三件套齐）= 真模型 ──
       const llm = llmOrNull(this.ctx)
       const llmReady = Boolean(llm && llm.configured)
-      const model = llmReady ? process.env[LLM_MODEL_ENV]?.trim() ?? '(unset)' : null
+      // 模型名现读 settings（/models 页）> env；面板改完即生效（A1 打磨）。
+      const model = llmReady
+        ? this.ctx.settings.get<string>('llm.model', '')?.trim() ||
+          process.env[LLM_MODEL_ENV]?.trim() || '(unset)'
+        : null
 
       const files: string[] = [filename]
       if (llm && llmReady) {
         // 真模型模式：promptRef 提示词（未绑定/未预置 → 通用兜底）+ 指令 →
         // 单次调用 → 产物 artifact-<时间>.md 落盘。LlmError 原样上抛
         // （外层 catch 状态回 idle；委托链日志 / 5172 日志页可见）。
-        const system = promptBody ??
+        // 占位提示词（「【占位提示词」开头）不当 system —— 会污染模型输出
+        //（实测模型跟着占位词走神，2026-10-06）。按 agent 角色给缺省 system。
+        const ROLE_SYSTEM: Record<string, string> = {
+          'agent.coder': '你是「编码者」。根据指令编写生产质量的代码：完整可运行的实现 + 必要注释 + 单元测试，用 Markdown 代码块输出，不要输出与任务无关的寒暄。',
+          'agent.tester': '你是「测试者」。根据指令与交付物设计测试：给出测试清单（正常/边界/异常）、可执行的断言代码、以及明确的通过/失败判据，用 Markdown 输出。',
+          'agent.reviewer': '你是「代码审查者」。对交付物逐条审查：正确性、边界条件、可读性、安全隐患；每条给出严重级（P0-P3）与修改建议，最后给 结论：通过 / 需修改。用 Markdown 输出。',
+        }
+        const placeholderBody = !promptBody || promptBody.includes('【占位提示词')
+        const system = (!placeholderBody && promptBody) ||
+          ROLE_SYSTEM[agentId] ||
           '你是团队协作系统的 coding agent。按指令完成工作，用 Markdown 输出可直接落库的交付内容。'
         const answer = await llm.chat([
           { role: 'system', content: system },
@@ -103,7 +116,7 @@ export class AgentRuntime extends AgentRuntimeService {
             `# 产物（${title}）`,
             '',
             `- 模型：${model}`,
-            `- 提示词：${promptRef ?? '(未绑定)'}（当前为占位正文，等角色原文 upsert 替换）`,
+            `- 提示词：${promptRef ?? '(未绑定)'}${placeholderBody ? '（当前为占位正文，等角色原文 upsert 替换；本轮用内置角色 system）' : ''}`,
             `- 时间：${new Date().toISOString()}`,
             '',
             '## LLM 输出',
@@ -189,7 +202,7 @@ export class AgentRuntime extends AgentRuntimeService {
 export const name = 'space-agent-runtime'
 // cordis 严格注入：agents（名册/状态机）+ workdir（领地落盘）+ commands（/tell）
 // + prompts（提示词内容）+ llm（真模型能力，P8 下半场）。
-export const inject = ['agents', 'workdir', 'commands', 'prompts', 'llm']
+export const inject = ['agents', 'workdir', 'commands', 'prompts', 'llm', 'settings']
 
 export function apply(ctx: Context) {
   const runtime = new AgentRuntime(ctx)

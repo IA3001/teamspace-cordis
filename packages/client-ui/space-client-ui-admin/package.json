@@ -1,0 +1,18 @@
+{
+  "name": "space-client-ui-admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "client-ui：账号管理页（/admin，挂 5172 调试控制台）。走 webui RPC data（users/resetPassword/setAdmin/removeUser/me，全部首参 token 且仅管理员放行）",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-ui": "*",
+    "space-identity": "*"
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  },
+  "scripts": {
+    "build": "vite build --manifest manifest.json"
+  }
+}

@@ -35,11 +35,21 @@ fi
 PAGES=(
   "space-client-ui-teamspace|团队空间"
   "space-client-ui-sessions|会话栏"
+  "space-client-ui-auth|登录页"
+  "space-client-ui-kb|知识库"
+  # 账号管理页挂在 5172 调试控制台（默认 webui 实例）：host 字段标明验哪个端口。
+  "space-client-ui-admin|账号管理|debug"
 )
 
 for entry in "${PAGES[@]}"; do
   pkg="${entry%%|*}"
-  label="${entry##*|}"
+  rest="${entry#*|}"
+  label="${rest%%|*}"
+  # host 字段（可选）：debug = 用 5172 端口验证，缺省用 5174。
+  case "$rest" in
+    *"|debug") pbase="http://${HOST}:${DEBUG_PORT}" ;;
+    *)         pbase="$BASE" ;;
+  esac
   manifest="packages/client-ui/${pkg}/dist/manifest.json"
   if [ ! -f "$manifest" ]; then
     report "${label}：找不到 ${manifest}（先 npm run build:web）"
@@ -53,7 +63,7 @@ for entry in "${PAGES[@]}"; do
   fi
   while IFS= read -r file; do
     [ -z "$file" ] && continue
-    url="${BASE}/-/v1/modules/${pkg}/dist/${file}"
+    url="${pbase}/-/v1/modules/${pkg}/dist/${file}"
     pcode="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null)"
     if [ "$pcode" = "200" ]; then
       note "${label} ${file} → 200 ✅"

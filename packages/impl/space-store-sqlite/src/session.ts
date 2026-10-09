@@ -157,6 +157,27 @@ export class SqliteSessionStore extends SessionService {
     return toMembership(row)
   }
 
+  setRole(sessionId: string, principalId: string, role: Membership['role']): Membership {
+    if (!isRole(role)) {
+      throw new SessionError('invalid_role', `角色 ${JSON.stringify(role)} 不是合法的团队成员角色`)
+    }
+    const existing = this.db
+      .prepare(`SELECT * FROM session_members WHERE session_id = ? AND principal_id = ? AND status = 'active'`)
+      .get(sessionId, principalId) as Row | undefined
+    if (!existing) throw new SessionError('not_found', `该参与者不在册（或已离开）: ${principalId}`)
+    if (existing.role === role) return toMembership(existing)
+    try {
+      this.db.prepare(`UPDATE session_members SET role = ? WHERE session_id = ? AND principal_id = ? AND status = 'active'`)
+        .run(role, sessionId, principalId)
+    } catch (e) {
+      mapConstraintError(e)
+    }
+    const row = this.db
+      .prepare(`SELECT * FROM session_members WHERE session_id = ? AND principal_id = ?`)
+      .get(sessionId, principalId) as Row
+    return toMembership(row)
+  }
+
   leave(sessionId: string, principalId: string): void {
     const r = this.db
       .prepare(

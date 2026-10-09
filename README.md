@@ -61,11 +61,13 @@ profiles/*/cordis.patch.yml ────────┘                         
 需要 Node.js **22.5 或更高版本**。在仓库目录执行：
 
 ```bash
-npm install
+npm ci                     # 按 package-lock.json 安装锁定依赖
 cp .env.example .env       # 按需填写本机配置；.env 不入库
 npm run migrate            # 首次运行或迁移变更后
 npm start
 ```
+
+修改依赖或 workspace 包清单后运行 `npm install` 并提交更新后的 lockfile；npm 会强制要求 Node.js ≥22.5.0。
 
 开发时用 `npm run dev`。服务端口只在 `.env` 配置；启动后可查看 `.env` 中对应的
 `APP_PORT`、`DEBUG_PORT`、`CONSOLE_PORT` 和 `TEAMSPACE_PORT`。健康检查路径为 `/healthz`。
@@ -73,12 +75,15 @@ npm start
 常用检查：
 
 ```bash
-npm run typecheck
-npm run smoke              # 需要服务已启动
-npm run gate               # 项目验证链；按项目规则留存检查结果
+npm run gate:static       # 本地快速检查；无需启动服务
+npm start                  # 启动后端和 Web 页面
+npm run gate:runtime      # 完整运行时验收；需要服务已启动
+npm run gate               # 依次运行 static 与 runtime 两组门禁
+npm run verify:ui          # 浏览器交互验收；需要服务和可用 Chromium
 ```
 
-其他入口：`npm run stop` 停止服务，`npm run backup` 备份本地数据。
+其他入口：`npm run stop` 停止服务，`npm run backup` 备份数据库、日志、上传和团队共享文件；Agent 私有工作区需显式运行 `npm run backup -- --include-workdirs`（可能占用较多磁盘）。
+生产发布步骤见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)。
 
 ## 改动前先记住这些边界
 

@@ -37,6 +37,8 @@ export type WorkdirErrorCode =
   | 'not_found'
   /** 创建时目标 root 已被别的 agent 占用（路径冲突）。 */
   | 'already_assigned'
+  /** Host quota registration is required but missing or failed. */
+  | 'quota_unavailable'
   /** resolve 结果逃出 root —— execdir 铁则，硬错误。 */
   | 'path_escape'
   /** 释放清理失败（实现层必须带原因）。 */
@@ -54,7 +56,8 @@ export class WorkdirError extends Error {
 
 // ── 服务缝 ────────────────────────────────────────────────────────────────
 // 实现层必须保证的语义：
-//   · claim：幂等领取——该 agent 已有区则原样返回；没有则创建（mkdir 含父级）。
+//   · claim：幂等领取——该 agent 已有区则原样返回；没有则创建（mkdir 含父级）并在
+//     配置宿主机配额时先登记；生产环境要求配额但登记不可用 → quota_unavailable。
 //     root 被别的 agent 占用 → already_assigned；未知 agent（未入驻）→ not_found
 //   · release：清理（删目录）并注销；清理失败 → cleanup_failed；未领取 → not_found
 //   · resolve：拼接并归一化后校验仍在 root 内，逃逸 → path_escape（execdir 铁则）

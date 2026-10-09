@@ -17,6 +17,7 @@
 //      ctx.orchestrator.reportCodingResult 收执（落时间线 + await_human 暂停）。
 import type { Context } from 'cordis'
 import type { DelegatePayload } from 'space-orchestrator'
+import { AgentRunCancelledError } from 'space-agent-runtime'
 
 export const name = 'agent-coder-stub'
 // cordis 严格注入：agents（报到）+ orchestrator（收执口）+ agentRuntime（干活）
@@ -54,6 +55,7 @@ export function apply(ctx: Context, config: Config = {}) {
     title: TITLE,
     // 提示词引用（P8）：绑定 seed 预置的占位提示词；原文到位后 upsert 换正文，ref 不变。
     promptRef: 'prompt.coding',
+    speechPolicy: 'proactive',
     // capabilities 开放词表（seam 词汇）：stub 只声明 coding
     capabilities: ['coding'],
   })
@@ -63,13 +65,15 @@ export function apply(ctx: Context, config: Config = {}) {
     // 双口径认领（承 /tell 先例）：target = 名册 title 或 id。
     if (p.target !== TITLE && p.target !== AGENT_ID) return
     void ctx.agentRuntime
-      .perform(AGENT_ID, p.instruction)
+      .perform(AGENT_ID, p.instruction, { sessionId: p.sessionId, sourceEventId: p.eventId })
       .then((r) => {
         // 收执口：回执落时间线（authorKind='agent'）。IM 化改造后不再强制
         // await_human —— 由编排引擎按自治预算决定是否继续。
-        ctx.orchestrator.reportCodingResult(p.sessionId, p.target, r.receipt)
+        const delivered = ctx.orchestrator.reportCodingResult(p.sessionId, p.target, r.receipt)
+        if (delivered.authorKind !== 'agent') return
         // 主动发言（IM 化改造，2026-09-30）：与人类消息同一条 send 路径
         // （落事件+广播），void 前缀防未处理 rejection。
+        if (!ctx.messages) return // isolated mechanism verifiers do not mount the message service
         void ctx.messages.send(
           p.sessionId,
           AGENT_ID,
@@ -79,6 +83,11 @@ export function apply(ctx: Context, config: Config = {}) {
         ).catch((e: unknown) => console.error('[agent-coder-stub] 主动发言失败：', (e as Error).message))
       })
       .catch((e: unknown) => {
+        if (e instanceof AgentRunCancelledError) {
+          ctx.orchestrator.cancelDelegatedTask(p.sessionId, p.target, p.eventId)
+          ctx.logger.info('[agent-coder-stub] 失效来源任务已取消（source=%s）', p.eventId)
+          return
+        }
         console.error('[agent-coder-stub] 委托任务执行失败：', e)
         console.error('[agent-coder-stub] 委托任务执行失败：', e)
       })

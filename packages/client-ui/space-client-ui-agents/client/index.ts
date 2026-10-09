@@ -1,6 +1,6 @@
 // Agent 配置页（客户端）—— 2026-10-05 新增，挂在 5172 调试控制台。
 //
-// 结构：onMounted 先 me(token) —— 未登录/非管理员 → 就地登录卡片（承
+// 结构：onMounted 先 me(token) —— 未登录 → 就地 Admin 登录卡片（承
 // admin / models 包同款）；管理员 →
 //   ① 名册表（id/标题/类别/能力/状态/promptRef + 每行「改提示词」弹窗）
 //   ② 自治预算（el-input-number + 保存，即改即用）
@@ -38,7 +38,7 @@ interface ConfigShape {
 }
 interface OpResult { ok?: boolean; detail?: string; error?: string }
 
-const TOKEN_KEY = 'space_token'
+const TOKEN_KEY = 'admin_token'
 const getToken = () => localStorage.getItem(TOKEN_KEY) ?? ''
 
 const AgentsPage = defineComponent({
@@ -61,7 +61,7 @@ const AgentsPage = defineComponent({
     }
 
     const rpc = useRpc<{
-      me(token: string): Promise<{ id: string; isAdmin: boolean } | null>
+      me(token: string): Promise<{ id: string; username: string } | null>
       getConfig(token: string): Promise<ConfigShape | null>
       savePrompt(token: string, ref: string, title: string, body: string): Promise<OpResult | null>
       saveAgentPrompt(token: string, agentId: string, promptRef: string): Promise<OpResult | null>
@@ -71,7 +71,7 @@ const AgentsPage = defineComponent({
       login(username: string, password: string): Promise<{ token: string } | { error: string; detail?: string }>
     }>()
 
-    const me = ref<{ id: string; isAdmin: boolean } | null | undefined>(null)
+    const me = ref<{ id: string; username: string } | null | undefined>(null)
     const cfg = ref<ConfigShape | null>(null)
     const msg = ref('')
     const msgOk = ref(true)
@@ -135,10 +135,8 @@ const AgentsPage = defineComponent({
     }
 
     onMounted(async () => {
-      const qtoken = route.query.token
-      if (typeof qtoken === 'string' && qtoken) localStorage.setItem(TOKEN_KEY, qtoken)
       const m = await rpc.value.me(getToken())
-      if (!m || !m.isAdmin) { me.value = undefined; return }
+      if (!m) { me.value = undefined; return }
       me.value = m
       await refresh()
     })
@@ -425,7 +423,7 @@ const AgentsPage = defineComponent({
 interface PageCtx {
   client: {
     router: {
-      page(options: { path: string; name: string; order?: number; component: unknown }): void
+      page(options: { path: string; name: string; order?: number; icon?: string; component: unknown }): void
     }
   }
 }

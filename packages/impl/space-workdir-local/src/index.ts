@@ -20,10 +20,18 @@
 // space-workdir（契约）+ space-agent（入驻名单校验）。
 import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join, normalize, resolve, sep } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { Service } from 'cordis'
 import type { Context } from 'cordis'
 import { WorkdirError, WorkdirService } from 'space-workdir'
 import type { WorkdirHandle } from 'space-workdir'
+
+const execFileAsync = promisify(execFile)
+export interface WorkdirQuotaOptions {
+  ensure?: (agentId: string) => Promise<void>
+  required?: boolean
+}
 
 export class LocalWorkdirService extends WorkdirService {
   /** agentId → handle（进程内台账；目录在磁盘，重启后按需重建台账由 claim 补登）。 */
@@ -32,6 +40,7 @@ export class LocalWorkdirService extends WorkdirService {
   constructor(
     ctx: Context,
     private readonly dataDir: string,
+    private readonly quota: WorkdirQuotaOptions = {},
   ) {
     super(ctx)
   }
@@ -62,6 +71,15 @@ export class LocalWorkdirService extends WorkdirService {
         throw new WorkdirError('already_assigned', `工作区 ${root} 已被 agent "${otherId}" 占用`)
       }
     }
+    const ensureQuota = this.quota.ensure ?? this.helperQuota()
+    if (ensureQuota) {
+      try { await ensureQuota(agentId) }
+      catch (e) {
+        throw new WorkdirError('quota_unavailable', `Agent 工作区宿主机配额登记失败：${(e as Error).message}`)
+      }
+    } else if (this.quota.required ?? process.env.NODE_ENV === 'production') {
+      throw new WorkdirError('quota_unavailable', '生产环境未配置工作区配额助手，拒绝创建 Agent 工作区')
+    }
     try {
       mkdirSync(root, { recursive: true })
     } catch (e) {
@@ -71,6 +89,22 @@ export class LocalWorkdirService extends WorkdirService {
     this.handles.set(agentId, handle)
     this.ctx.logger.info('[workdir] agent %s 领取工作区 %s', agentId, root)
     return handle
+  }
+
+  private helperQuota(): ((agentId: string) => Promise<void>) | undefined {
+    const helper = process.env.WORKDIR_QUOTA_HELPER?.trim()
+    if (!helper) return undefined
+    const sudo = process.env.WORKDIR_QUOTA_SUDO === '1'
+    return async (agentId) => {
+      const command = sudo ? 'sudo' : helper
+      const args = sudo ? ['-n', helper, 'ensure', agentId] : ['ensure', agentId]
+      try {
+        await execFileAsync(command, args, { timeout: 30_000, windowsHide: true, maxBuffer: 4096 })
+      } catch (e) {
+        const error = e as Error & { stderr?: string; code?: number | string }
+        throw new Error((error.stderr || error.message).trim().slice(0, 500))
+      }
+    }
   }
 
   async release(agentId: string): Promise<void> {

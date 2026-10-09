@@ -8,12 +8,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-NODE_BIN="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}"
-export PATH="$NODE_BIN:$PATH"
+source "$REPO_ROOT/scripts/node-runtime.sh"
+resolve_node_bin
 
-PAGES=(space-client-ui-teamspace space-client-ui-sessions space-client-ui-auth space-client-ui-kb space-client-ui-admin space-client-ui-settings space-client-ui-agents space-client-ui-bridge)
+# Build only pages loaded by active bundles. Settings and Agents administration
+# now live in the Teamspace/Admin pages; the old bridge is retired.
+PAGES=(space-client-ui-teamspace space-client-ui-sessions space-client-ui-auth space-client-ui-kb space-client-ui-admin)
 
 printf '构建 client-ui 页面包（产物 dist/ 不入库，运行时 devMode:false 只读产物）\n'
+python3 scripts/build-theme.py
 for p in "${PAGES[@]}"; do
   dir="packages/client-ui/$p"
   if [ ! -f "$dir/package.json" ]; then

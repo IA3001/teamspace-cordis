@@ -110,6 +110,8 @@ export type TurnState = 'chain' | 'static'
 export type StopReason =
   /** 已暂停，等待人类下一步指示（保留；IM 化后仅在预算耗尽与错误停机时出现，不再是默认路径）。 */
   | 'await_human'
+  /** Agent 明确标记需要 DRI 决定；依赖工作暂停，等待固定决策命令。 */
+  | 'await_human_decision'
   /** 回合自然完成：无未完成委托且协调者不再继续（IM 化后的默认收敛路径，2026-09-30）。 */
   | 'completed'
   /** 每回合自治预算耗尽，暂停等人类（IM 化改造，2026-09-30）。 */
@@ -218,7 +220,8 @@ export class OrchestratorError extends Error {
 //   · reportFeedback / reportCodingResult：反馈视为结果回流（IM 化改造
 //     2026-09-30），由引擎按每回合自治预算决定继续；无新委托且协调者不再
 //     继续 → completed 收敛，预算耗尽 → budget_exhausted 暂停。
-//   · 回合状态进程内存（P3 拍板）：重启回到 static —— 静止即安全默认。
+//   · 回合状态热缓存于进程内存，并由实现层持久化；恢复必须以 SQLite 状态与
+//     事件来源校验，避免重复回复、重复委托或跳过未完成步骤。
 export abstract class OrchestratorService extends Service {
   constructor(ctx: Context) {
     super(ctx, 'orchestrator')
@@ -240,7 +243,7 @@ export abstract class OrchestratorService extends Service {
    * 收敛语义见 StopReason.completed / budget_exhausted）。
    * 没有在途委托时调用 → not_delegating。
    */
-  abstract reportFeedback(sessionId: string, target: string, text: string): SessionEvent
+  abstract reportFeedback(sessionId: string, target: string, text: string, sourceEventIds?: string[]): SessionEvent
 
   /**
    * coding agent 收执口（P6 收尾）：委托执行方（agent-coder-stub 等）干完活
@@ -251,6 +254,21 @@ export abstract class OrchestratorService extends Service {
    * 这是名册制的刻意分工，不是漏改。没有在途委托 → not_delegating。
    */
   abstract reportCodingResult(sessionId: string, target: string, text: string): SessionEvent
+
+  /** Store a result from any data-defined or built-in Agent. */
+  abstract reportAgentResult(sessionId: string, target: string, text: string, sourceEventIds?: string[]): SessionEvent
+
+  /** Forget an in-flight delegate after its source is invalidated. */
+  abstract cancelDelegatedTask(sessionId: string, target: string, sourceEventId: string): boolean
+
+  /** Synchronously clear all in-flight delegate ledger entries for a withdrawn source. */
+  abstract cancelDelegationsBySource(sessionId: string, sourceEventId: string): string[]
+
+  /** Stop launching dependent work while affected Agents review a pending DRI decision. */
+  abstract pauseForDecisionReview(sessionId: string, detail: string): void
+
+  /** Release the review hold after the DRI has recorded a final decision. */
+  abstract resolveDecisionReview(sessionId: string): void
 
   /**
    * 外部委托入口（IM 化流程轨，2026-10-01）：MC 式服务流程（flow-commands）

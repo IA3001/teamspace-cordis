@@ -73,13 +73,15 @@
 - id: space-tool
   name: './plugins/space-tool/index.ts'
   config:
-    allow: ['tool.workdir-perform']
+    allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'web.search']
 
-# 能力方注册示例：把 coding 工作区能力（ctx.agentRuntime.perform）注册成
-# 工具 tool.workdir-perform。Agent 层一律 ctx.tools.invoke 调用，不得绕过
-# 注册表直连 agentRuntime（分层章程 docs/ARCHITECTURE.md 反模式 2）。
-- id: tool-workdir
-  name: './plugins/tool-workdir/index.ts'
+# Personal read/write, team-shared read-only, and Docker-isolated code execution.
+- id: sandbox-tools
+  name: './plugins/sandbox-tools/index.ts'
+
+# Web search uses the separately configured search.baseURL/search.apiKey pair.
+- id: tool-web-search
+  name: './plugins/tool-web-search/index.ts'
 
 # 检索层（P9，2026-10-01，分层 L3）：ctx.retrieval 唯一提供者 —— event FTS
 # 与 memory 两数据源统一成一个检索面，score 粗排降序截 limit；纯读零副作用。
@@ -98,7 +100,7 @@
 # agent 事件经 'space/event-appended' 回流续步。名单校验 / 三级兜底走
 # policy/space-authz 纯函数。协调者大脑通过 ctx.orchestrator.registerBrain
 # 注入（P3 拍板：不含真实 LLM 适配器，只留接口；未注册 → coordinator_unconfigured
-# 暂停等人类，安全默认）。回合状态进程内存，重启回 static。
+# 暂停等人类，安全默认）。回合状态进程内存，重启回 static；共享会话租约由 SQLite 提供。
 # autonomyBudget：每回合 AI 自主动作预算（IM 化拍板 2026-09-30；超限
 # budget_exhausted 暂停等人类 —— 这是「AI 高度自治」的安全护栏）。
 - id: orchestrator
@@ -109,8 +111,8 @@
 # 占位大脑（P8，2026-09-30）：第一个真实挂在 registerBrain 上的 OrchestratorBrain，
 # 让委托回路端到端可观测。**非 NLP**：@ 提示命中授权名册 → 合法 JSON 委托
 #（instruction=人类原话），否则纯文本回复；文案处处明示占位。config.enabled=false
-# （用户层覆盖）= 回到 coordinator_unconfigured 安全默认。真 LLM 只留接口位
-#（.env 的 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL，本包只读不打）。
+#（用户层覆盖）= 回到 coordinator_unconfigured 安全默认。文字模型未配置时启用；
+#后台/API 配置或 LLM_* 环境变量就绪后，本包让位给 brain-llm。
 - id: brain-stub
   name: './plugins/brain-stub/index.ts'
   config:
@@ -140,6 +142,15 @@
 - id: agent-registry
   name: './plugins/agent-registry/index.ts'
 
+# 会话消息静默入站到每个已邀请 Agent 的独立记忆流；SQLite 会话槽位提供跨进程
+# 单活动会话租约与 FIFO 等待意图，@ 回复前由 orchestrator 等 Inbox 追上触发消息。
+- id: agent-inbox
+  name: './plugins/agent-inbox/index.ts'
+
+# 团队创建的 Agent 由统一 runtime 处理；目录实例不需要新增 Cordis 插件。
+- id: agent-runtime-dispatcher
+  name: './plugins/agent-runtime-dispatcher/index.ts'
+
 # ctx.workdir 的本机实现（P6 收尾，2026-09-30）：每 agent 一区
 # （<cwd>/data/workdirs/<agentId>，与 store 的 data/ 同源约定）；
 # claim 先验入驻名单（space-agent 缝），resolve 路径边界判定（execdir 铁则）。
@@ -149,9 +160,8 @@
 # ctx.agentRuntime（P8，2026-09-30）：coding 类共享干活路径的机制行 ——
 # P6 在案记账的升格兑现（从 agent-coder-stub 迁入 perform 与 /tell 直派口）。
 # 此后 coding agent 包收敛为「描述符 + 委托认领」（铁律 4：入驻 = 纯新增）。
-# ctx.llm（P8 下半场，2026-09-30）：OpenAI 兼容单次补全（不重试、60s 超时）。
-# 配置读 .env 三件套（LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）；三件套未齐也照常
-# 提供（configured=false），消费方（brain-llm / agent-runtime）据此走占位模式。
+# ctx.llm：OpenAI 兼容单次补全（不重试、60s 超时）。配置优先读后台 settings，
+# 再读插件配置和 .env 的 LLM_* 三件套；未配置也照常提供（configured=false）。
 - id: space-llm-openai
   name: './packages/impl/space-llm-openai/src/index.ts'
 
@@ -169,6 +179,7 @@
 # 铁律 4：加一个会议 bot = 复制本条 + 改 config（role/agentId/title），零改码。
 - id: agent-analyst-llm
   name: './plugins/agent-analyst-llm/index.ts'
+  disabled: true
   config:
     role: 需求分析师
     agentId: a_analyst
@@ -208,22 +219,6 @@
 - id: client-ui-admin
   name: './packages/client-ui/space-client-ui-admin/src/index.ts'
 
-# 模型与接入设置页（2026-10-05）：挂 5172 调试控制台（与 admin 同口径）。
-# LLM/Embedding 表单 + 连通测试；写入 ctx.settings（0013_settings 表），
-# space-llm-openai / space-embedding-openai 每次 resolve() 现读，改完即生效。
-# 路由避开面板内置的 /settings（通用设置），用 /models。
-- id: client-ui-settings
-  name: './packages/client-ui/space-client-ui-settings/src/index.ts'
-
-# Agent 配置页（2026-10-05）：挂 5172 调试控制台（与 admin/models 同口径）。
-# 名册/提示词模板编辑（ctx.prompts）/per-agent promptRef 重定向/自治预算。
-# settings 键：agent.autonomyBudget、agent.<id>.promptRef —— 消费方现读。
-- id: client-ui-agents
-  name: './packages/client-ui/space-client-ui-agents/src/index.ts'
-
-# 知识库向量回填器（2026-10-06，A2）：订阅 space/kb-doc-added，经
-# ctx.embeddings 向量化分块写回 kb_chunks.embedding；启动时全库扫尾。
-# 检索层（kb.ts search）检测到向量即按余弦相似度排序，否则关键词兜底。
 - id: kb-embedder
   name: './plugins/kb-embedder/index.ts'
 
@@ -236,3 +231,7 @@
 # 步骤=agent，结果事件回流自动接力；与「@提及自由协作」双轨并存（章程第七节）。
 - id: flow-commands
   name: './plugins/flow-commands/index.ts'
+
+# 会话 DRI 固定决策指令：通过、否决、暂缓、撤回与重做 Agent 最终回答。
+- id: decision-commands
+  name: './plugins/decision-commands/index.ts'

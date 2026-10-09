@@ -5,10 +5,10 @@
 //     （ctx.prompts.get 抛 not_found）→ ContextError('prompt_missing')。
 //   · system = persona 行（有则「你是：<persona>」）+ promptRef 模板正文 +
 //     工具目录段（ctx.tools.list() 列「id — title」清单），join('\n\n')。
-//   · history = eventLog.listBySession 尾部 recentLimit（缺省 20）条，
+//   · history = Agent 可见事件尾部 recentLimit（缺省 20）条；人类专属工具活动不注入，
 //     listBySession 本就按 seq 升序（seam 契约），切片保序。
 //   · memories = memoryLimit>0 时 memory.recall(`session:<id>`, {limit})；
-//     retrieval = query 非空时 retrieval.search(sessionId, query, {limit:5})。
+//     retrieval = query 非空时检索历史、会话/Agent 私有记忆与团队知识库。
 //     两者失败都降级置空（注入面尽力而为，不因旁路数据源故障炸掉组装）。
 //   · charBudget（缺省 12000）超限时**只裁 history**（从最旧开始），
 //     system / memories / retrieval 不裁 —— 先保 system，再保旁路摘要，
@@ -20,6 +20,7 @@ import type { AssembledContext, AssembleOptions } from 'space-context'
 import type { MemoryItem } from 'space-memory'
 import type { RetrievalHit } from 'space-retrieval'
 import type { SessionEvent } from 'space-event'
+import { isAgentVisibleEvent } from 'space-event'
 
 export const name = 'space-context'
 // 严格注入：session / eventLog / prompts / memory / retrieval + tools（工具目录段）。
@@ -43,6 +44,16 @@ export class ContextAssemblyServiceImpl extends ContextAssemblyService {
     const recentLimit = opts.recentLimit ?? DEFAULT_RECENT_LIMIT
     const memoryLimit = opts.memoryLimit ?? DEFAULT_MEMORY_LIMIT
     const charBudget = opts.charBudget ?? DEFAULT_CHAR_BUDGET
+    const selectedSources = opts.contextSources
+      ? new Set(opts.contextSources)
+      : new Set(['session', 'agent-memory', 'team-kb'])
+    const includeSession = selectedSources.has('session')
+    const includeAgentMemory = selectedSources.has('agent-memory') && Boolean(opts.agentId)
+    const retrievalSources = [
+      ...(includeSession ? ['event' as const] : []),
+      ...(includeSession || includeAgentMemory ? ['memory' as const] : []),
+      ...(selectedSources.has('team-kb') ? ['kb' as const] : []),
+    ]
 
     // 2) system 段：persona 行 + prompt 模板正文 + 工具目录段。
     const parts: string[] = []
@@ -69,14 +80,22 @@ export class ContextAssemblyServiceImpl extends ContextAssemblyService {
     const system = parts.join('\n\n')
 
     // 3) history：尾部 recentLimit 条，listBySession 已按 seq 升序，切片保序。
-    const allEvents: SessionEvent[] = this.ctx.eventLog.listBySession(sessionId)
+    const allEvents: SessionEvent[] = includeSession
+      ? this.ctx.eventLog.listBySession(sessionId).filter(isAgentVisibleEvent)
+      : []
     let history = allEvents.slice(-recentLimit)
 
     // 4) memories：memoryLimit>0 才召回；失败置 []（尽力而为，不炸组装）。
     let memories: MemoryItem[] = []
-    if (memoryLimit > 0) {
+    if (memoryLimit > 0 && (includeSession || includeAgentMemory)) {
       try {
-        memories = await this.ctx.memory.recall(`session:${sessionId}`, { limit: memoryLimit })
+        if (includeSession) memories = await this.ctx.memory.recall(`session:${sessionId}`, { limit: memoryLimit })
+        if (includeAgentMemory && opts.agentId) {
+          const privateMemories = await this.ctx.memory.recall(`agent:${opts.agentId}`, { limit: memoryLimit })
+          memories = [...memories, ...privateMemories.filter((item) => !item.kind.startsWith('cursor:'))]
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+            .slice(0, memoryLimit * 2)
+        }
       } catch (e) {
         console.warn(`[space-context] memory.recall 失败，记忆置空：${(e as Error)?.message ?? e}`)
         memories = []
@@ -86,13 +105,28 @@ export class ContextAssemblyServiceImpl extends ContextAssemblyService {
     // 5) retrieval：query 非空才检索；失败置 []（同上，旁路降级）。
     let retrieval: RetrievalHit[] = []
     const query = opts.query?.trim()
-    if (query) {
+    if (query && retrievalSources.length > 0) {
       try {
-        retrieval = await this.ctx.retrieval.search(sessionId, query, { limit: RETRIEVAL_LIMIT })
+        retrieval = await this.ctx.retrieval.search(sessionId, query, {
+          limit: RETRIEVAL_LIMIT,
+          agentId: opts.agentId,
+          sources: retrievalSources,
+          memoryScopes: [
+            ...(includeSession ? ['session' as const] : []),
+            ...(includeAgentMemory ? ['agent' as const] : []),
+          ],
+        })
       } catch (e) {
         console.warn(`[space-context] retrieval.search 失败，检索置空：${(e as Error)?.message ?? e}`)
         retrieval = []
       }
+    }
+
+    // Recent memory recall and query-based memory RAG can overlap. Keep the
+    // direct recent-memory injection authoritative and avoid repeating the same item.
+    if (memories.length && retrieval.length) {
+      const recalledIds = new Set(memories.map((item) => item.id))
+      retrieval = retrieval.filter((hit) => hit.source !== 'memory' || !recalledIds.has(hit.id))
     }
 
     // 6) 字符预算：approxChars = system + history 正文长度；超 charBudget

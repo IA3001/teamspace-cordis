@@ -29,11 +29,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-NODE_BIN="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}/node"
-if [ ! -x "$NODE_BIN" ]; then
-  printf '✗ 找不到 node：%s\n' "$NODE_BIN" >&2
-  exit 1
-fi
+source "$REPO_ROOT/scripts/node-runtime.sh"
+resolve_node_bin
 
 printf '依赖方向门禁：断言 ①（方向矩阵） ②（seam 无实现） ⑦（包一律私有）\n'
 

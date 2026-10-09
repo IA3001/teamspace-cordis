@@ -4,3 +4,4 @@
 # 停用：用户层写同 id 行 disabled: true 即可。
 - id: agent-reviewer-stub
   name: './plugins/agent-reviewer-stub/index.ts'
+  disabled: true

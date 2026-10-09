@@ -1,0 +1,86 @@
+// Session member role changes preserve membership metadata and leave a timeline audit event.
+import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
+import { Context } from 'cordis'
+import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
+import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
+import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
+import { apply as applySessions } from '../packages/client-ui/space-client-ui-sessions/src/index.ts'
+
+const db = new DatabaseSync(':memory:')
+db.exec('PRAGMA foreign_keys = ON')
+const migrations = fileURLToPath(new URL('../packages/impl/space-store-sqlite/migrations/', import.meta.url))
+for (const migration of loadMigrations(migrations)) db.exec(migration.up)
+
+const ctx = new Context() as Context & Record<string, any>
+new SqliteSessionStore(ctx, db)
+const eventLog = new SqliteEventLog(ctx, db)
+const at = new Date().toISOString()
+const insertUser = db.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at, team_role)
+  VALUES (?, ?, '!', ?, 'human', ?, 'member')`)
+insertUser.run('u_owner', 'owner', 'Owner', at)
+insertUser.run('u_member', 'member', 'Member', at)
+insertUser.run('u_second_dri', 'second-dri', 'Second DRI', at)
+const users = new Map([
+  ['u_owner', { id: 'u_owner', username: 'owner', displayName: 'Owner', kind: 'human' }],
+  ['u_member', { id: 'u_member', username: 'member', displayName: 'Member', kind: 'human' }],
+  ['u_second_dri', { id: 'u_second_dri', username: 'second-dri', displayName: 'Second DRI', kind: 'human' }],
+])
+Object.assign(ctx, {
+  users: {
+    async verifyToken(token: string) {
+      const id = token === 'owner-session' ? 'u_owner' : token === 'member-session' ? 'u_member' : ''
+      if (!id) throw new Error('unauthorized')
+      return users.get(id)
+    },
+    async byId(id: string) { return users.get(id) ?? null },
+    async listHumans() { return [...users.values()] },
+  },
+  agents: { list: () => [] },
+  ui: { registerPanel() {} },
+  webui: { addEntry(_entry: unknown, exposed: Record<string, (...args: any[]) => any>) { Object.assign(ctx, { rpc: exposed }) } },
+})
+applySessions(ctx)
+const rpc = ctx.rpc as Record<string, (...args: any[]) => Promise<any>>
+const session = ctx.session.createSession({ id: 's_members', title: '成员角色验收' })
+ctx.session.join({ sessionId: session.id, principalId: 'u_owner', role: '群主', duty: 'Owner' })
+const original = ctx.session.join({ sessionId: session.id, principalId: 'u_member', role: '成员', duty: 'Member duty' })
+ctx.session.join({ sessionId: session.id, principalId: 'u_second_dri', role: '成员' })
+
+async function main() {
+  assert.equal(await rpc.setMemberRole('bad-session', session.id, 'u_member', 'DRI'), null)
+  assert.equal((await rpc.setMemberRole('member-session', session.id, 'u_member', 'DRI')).error, 'forbidden',
+    'ordinary session members cannot manage other membership roles')
+  const promoted = await rpc.setMemberRole('owner-session', session.id, 'u_member', 'DRI')
+  assert.equal(promoted.find((member: { principalId: string }) => member.principalId === 'u_member')?.role, 'DRI')
+  const after = ctx.session.listMembers(session.id, true).find((member: { principalId: string }) => member.principalId === 'u_member')
+  assert.equal(after.joinedAt, original.joinedAt, 'role changes preserve original joinedAt')
+  assert.equal(after.duty, original.duty, 'role changes preserve member duty')
+  const changeEvent = eventLog.listBySession(session.id).at(-1)!
+  assert.equal(changeEvent.authorKind, 'system')
+  assert.match(changeEvent.text, /Owner（u_owner）将 Member（u_member）的会话角色从「成员」调整为「DRI」/)
+
+  const count = eventLog.listBySession(session.id).length
+  const conflict = await rpc.setMemberRole('owner-session', session.id, 'u_second_dri', 'DRI')
+  assert.equal(conflict.error, 'dri_already_set', 'the single active DRI invariant is enforced by storage')
+  assert.equal(eventLog.listBySession(session.id).length, count, 'failed role change leaves no false timeline event')
+  await rpc.setMemberRole('owner-session', session.id, 'u_member', 'DRI')
+  assert.equal(eventLog.listBySession(session.id).length, count, 'a no-op role update is idempotent and does not duplicate audit events')
+  assert.equal((await rpc.setMemberRole('owner-session', session.id, 'u_member', '群主')).error, 'invalid_role')
+  assert.equal((await rpc.setMemberRole('owner-session', session.id, 'u_owner', 'DRI')).error, 'forbidden',
+    'the session creator keeps the immutable group-owner role')
+  assert.equal((await rpc.removeMember('owner-session', session.id, 'u_owner')).error, 'forbidden',
+    'the session creator cannot be removed')
+
+  await rpc.invite('owner-session', session.id, ['u_second_dri'])
+  const inviteCount = eventLog.listBySession(session.id).length
+  await rpc.invite('owner-session', session.id, ['u_second_dri'])
+  assert.equal(eventLog.listBySession(session.id).length, inviteCount, 'repeating an active invite does not create a false join event')
+  assert.equal((await rpc.members('owner-session', session.id)).length, 3)
+  assert.deepEqual(new Set(ctx.session.listMembers(session.id, true).map((m: { principalId: string }) => m.principalId)),
+    new Set(['u_owner', 'u_member', 'u_second_dri']))
+  console.log('✓ Session member role changes, DRI uniqueness, immutable owner, and membership timeline audit verified')
+}
+
+try { await main() } finally { db.close() }

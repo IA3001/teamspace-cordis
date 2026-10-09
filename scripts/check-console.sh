@@ -23,8 +23,6 @@ set -uo pipefail
 source "$(dirname "$0")/env.sh"
 set +e   # env.sh 带 -e；这里要累计失败，不许第一个 curl 失败就退出
 
-NODE_BIN="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}/node"
-
 # 0.0.0.0 是监听地址，不能拿去连；连本机一律用 127.0.0.1
 HOST="$APP_HOST"
 [ "$HOST" = "0.0.0.0" ] && HOST=127.0.0.1

@@ -6,6 +6,7 @@
 // 干活路径 = 共享机制 ctx.agentRuntime（领工作区 → 任务落盘 → 状态机 → 回执）。
 import type { Context } from 'cordis'
 import type { DelegatePayload } from 'space-orchestrator'
+import { AgentRunCancelledError } from 'space-agent-runtime'
 
 export const name = 'agent-reviewer-stub'
 // messages：主动发言（IM 化改造 2026-09-30）。
@@ -41,16 +42,18 @@ export function apply(ctx: Context, config: Config = {}) {
     title: TITLE,
     // 提示词引用（P8）：绑定 seed 预置的占位提示词（角色4 代码审查）。
     promptRef: 'prompt.review',
+    speechPolicy: 'proactive',
     capabilities: ['review'],
   })
 
   ctx.on('orchestrator/delegate', (p: DelegatePayload) => {
     if (p.target !== TITLE && p.target !== AGENT_ID) return
     void ctx.agentRuntime
-      .perform(AGENT_ID, p.instruction)
+      .perform(AGENT_ID, p.instruction, { sessionId: p.sessionId, sourceEventId: p.eventId })
       .then((r) => {
         // 收执口：回执落时间线；不再强制暂停（自治预算归引擎管，IM 化改造）。
-        ctx.orchestrator.reportCodingResult(p.sessionId, p.target, r.receipt)
+        const delivered = ctx.orchestrator.reportCodingResult(p.sessionId, p.target, r.receipt)
+        if (delivered.authorKind !== 'agent' || !ctx.messages) return
         // 主动发言：同一条 send 路径，void 防未处理 rejection。
         void ctx.messages.send(
           p.sessionId,
@@ -61,6 +64,11 @@ export function apply(ctx: Context, config: Config = {}) {
         ).catch((e: unknown) => console.error('[agent-reviewer-stub] 主动发言失败：', (e as Error).message))
       })
       .catch((e: unknown) => {
+        if (e instanceof AgentRunCancelledError) {
+          ctx.orchestrator.cancelDelegatedTask(p.sessionId, p.target, p.eventId)
+          ctx.logger.info('[agent-reviewer-stub] 失效来源任务已取消（source=%s）', p.eventId)
+          return
+        }
         console.error('[agent-reviewer-stub] 委托任务执行失败：', e)
       })
   })

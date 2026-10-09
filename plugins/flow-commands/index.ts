@@ -6,16 +6,16 @@
 // 每步经 'orchestrator/delegate' 交给对应 agent，结果事件回流自动推进。
 //
 // 已知边界（诚实标注）：
-//   · agent 忙时 delegate 无人认领会滞留 —— 不重试（承「不猜」口径），
-//     用户可重新发起；流程每会话串行，发起前有提示。
-//   · 流程状态进程内存，重启丢失（与 orchestrator turns 同口径）。
+//   · 流程步骤从持久时间线重建；进程重启后当前未完成步骤会按原派发事件恢复，
+//     已有结果会推进到下一步。Orchestrator 自由协作回合仍是内存状态。
+//   · agent 忙时 delegate 无人认领会滞留 —— 用户可重新发起；流程每会话串行。
 import { randomUUID } from 'node:crypto'
 import type { Context } from 'cordis'
 import z from 'schemastery'
 import type { SessionEvent } from 'space-event'
 
 export const name = 'flow-commands'
-export const inject = ['commands', 'eventLog', 'session', 'agents', 'orchestrator']
+export const inject = ['commands', 'eventLog', 'session', 'agents', 'orchestrator', 'sessionWork']
 
 /**
  * 配置面板 schema（5172 自动渲染）：dict 值 = 步骤链（agent 名册 title 或 id）。
@@ -48,11 +48,131 @@ interface Flow {
   task: string
 }
 
+interface RecoveredFlow {
+  sessionId: string
+  flow: Flow
+  dispatchEvent: SessionEvent
+}
+
+/** Rebuild the last in-flight deterministic step from the durable timeline. */
+export function recoverFlowFromEvents(
+  sessionId: string,
+  events: readonly SessionEvent[],
+  configuredFlows: Record<string, string[]>,
+): RecoveredFlow | null {
+  let active: RecoveredFlow | null = null
+  for (const event of events) {
+    if (event.authorKind !== 'system' || event.kind !== 'system') continue
+    const text = event.text
+    if (text.startsWith('⚙ 服务流程 [') && text.includes('] 启动：')) {
+      const nameEnd = text.indexOf('] 启动：')
+      const name = text.slice('⚙ 服务流程 ['.length, nameEnd)
+      const suffixAt = text.lastIndexOf('（步骤：')
+      if (suffixAt < nameEnd || !text.endsWith('）')) { active = null; continue }
+      const steps = text.slice(suffixAt + '（步骤：'.length, -1).split(' → ')
+      const task = text.slice(nameEnd + '] 启动：'.length, suffixAt).replace(/（步骤：$/, '')
+      const configured = configuredFlows[name]
+      if (!configured || configured.length === 0 || steps.length === 0) { active = null; continue }
+      active = { sessionId, flow: { name, steps, idx: 1, task }, dispatchEvent: event }
+      continue
+    }
+    if (!active) continue
+    if (text.startsWith(`⚙ 服务流程 [${active.flow.name}] 完成`) ||
+      text.startsWith(`⚙ 流程 [${active.flow.name}] 暂停`)) {
+      active = null
+      continue
+    }
+    const progress = text.match(/^⚙ 流程推进（(\d+)\/(\d+)）：交给「(.+)」$/u)
+    if (progress && Number(progress[2]) === active.flow.steps.length &&
+      active.flow.steps[Number(progress[1]) - 1] === progress[3]) {
+      active.flow.idx = Number(progress[1])
+      active.dispatchEvent = event
+    }
+  }
+  return active
+}
+
 export function apply(ctx: Context, config: Config = {}) {
   // 面板配置覆盖同名缺省流程（未配置则全用缺省三条 MC 式服务流程）。
   const flows = { ...DEFAULT_FLOWS, ...(config.flows ?? {}) }
-  /** 会话 → 进行中流程。进程内存（重启丢失，同 orchestrator turns 口径）。 */
+  /** 会话 → 进行中流程。内存为热状态；启动时由事件时间线重建。 */
   const running = new Map<string, Flow>()
+
+  function matchingResult(flow: Flow, dispatch: SessionEvent, events: readonly SessionEvent[]): SessionEvent | undefined {
+    const target = flow.steps[flow.idx - 1]
+    const agent = target && findAgent(target)
+    if (!agent) return undefined
+    return events.find((event) => event.seq > dispatch.seq && event.authorKind === 'agent' &&
+      event.authorId === agent.descriptor.id && !event.voided &&
+      (event.sourceEventId === dispatch.id || event.sourceEventIds.includes(dispatch.id)))
+  }
+
+  function advanceFlow(event: SessionEvent): void {
+    const flow = running.get(event.sessionId)
+    if (!flow) return
+    const doneStep = flow.steps[flow.idx - 1]!
+    const agentOk = ctx.agents.list('coding')
+      .some((a) => a.descriptor.id === event.authorId && (a.descriptor.title === doneStep || a.descriptor.id === doneStep))
+    if (!agentOk && !(event.authorId ?? '').includes(doneStep)) return
+    if (flow.idx < flow.steps.length) {
+      const next = flow.steps[flow.idx]!
+      const busy = busyAgent([next])
+      if (busy) {
+        saySystem(event.sessionId, `⚙ 流程 [${flow.name}] 暂停：「${next}」正在其它任务中。等它空闲后重新发起 /${flow.name}（已完成步骤不重做，请自行衔接）`)
+        running.delete(event.sessionId)
+        return
+      }
+      flow.idx++
+      const eventId = saySystem(event.sessionId, `⚙ 流程推进（${flow.idx}/${flow.steps.length}）：交给「${next}」`)
+      ctx.orchestrator.beginExternalDelegate(event.sessionId, eventId, next,
+        `${flow.task}\n[流程上下文] 上一步（${doneStep}）结论：${event.text.slice(0, 300)}`)
+    } else {
+      saySystem(event.sessionId, `⚙ 服务流程 [${flow.name}] 完成（${flow.steps.join(' → ')}）`)
+      running.delete(event.sessionId)
+    }
+  }
+
+  let recoveryWaitingForSessionSlot = false
+  function recoverInterruptedFlows(): void {
+    if (ctx.sessionWork.state().activeSessionId) {
+      recoveryWaitingForSessionSlot = true
+      return
+    }
+    recoveryWaitingForSessionSlot = false
+    for (const session of ctx.session.listSessions()) {
+      if (session.status !== 'open') continue
+      const events = ctx.eventLog.listBySession(session.id)
+      const recovered = recoverFlowFromEvents(session.id, events, flows)
+      if (!recovered) continue
+      const { flow, dispatchEvent } = recovered
+      const result = matchingResult(flow, dispatchEvent, events)
+      if (result) {
+        running.set(session.id, flow)
+        advanceFlow(result)
+        ctx.logger.info('[flow-commands] 从事件日志恢复已完成步骤（session=%s, flow=%s, step=%d）', session.id, flow.name, flow.idx)
+        continue
+      }
+      if (dispatchEvent.voided) {
+        saySystem(session.id, `⚙ 流程 [${flow.name}] 因派发事件已撤回而停止；请在确认后重新发起。`)
+        continue
+      }
+      running.set(session.id, flow)
+      const target = flow.steps[flow.idx - 1]
+      if (!target || !findAgent(target)) {
+        running.delete(session.id)
+        saySystem(session.id, `⚙ 流程 [${flow.name}] 无法恢复：当前步骤「${target ?? ''}」不在 Agent 名册中。`)
+        continue
+      }
+      const instruction = flow.idx === 1 ? flow.task : `${flow.task}\n[流程上下文] 请从持久时间线读取上一步结果后继续。`
+      ctx.orchestrator.beginExternalDelegate(session.id, dispatchEvent.id, target, instruction)
+      saySystem(session.id, `⚙ 流程 [${flow.name}] 已从持久时间线恢复（步骤 ${flow.idx}/${flow.steps.length}：${target}）。`)
+      ctx.logger.info('[flow-commands] 恢复未完成流程步骤（session=%s, flow=%s, step=%d）', session.id, flow.name, flow.idx)
+    }
+  }
+
+  ctx.on('session-work/changed', () => {
+    if (recoveryWaitingForSessionSlot && !ctx.sessionWork.state().activeSessionId) recoverInterruptedFlows()
+  })
 
   /** 落系统事件（自动广播），返回事件 id（作 delegate 的 eventId 追溯锚）。 */
   function saySystem(sessionId: string, text: string): string {
@@ -141,45 +261,11 @@ export function apply(ctx: Context, config: Config = {}) {
     },
   })
 
-  // 接力：当前步骤 agent 的结果事件回流（reportCodingResult 落的 authorKind='agent'
-  // 事件）→ 推进到下一步；最后一步完成即收束。宽容匹配 id 或 title。
-  ctx.on('space/event-appended', ({ event }) => {
-    if (event.authorKind !== 'agent') return
-    const flow = running.get(event.sessionId)
-    if (!flow) return
-    const doneStep = flow.steps[flow.idx - 1]!
-    const agentOk = ctx.agents
-      .list('coding')
-      .some((a) => a.descriptor.id === event.authorId && (a.descriptor.title === doneStep || a.descriptor.id === doneStep))
-    // 兜底：agentId 与步骤 title 直接对不上时，按事件作者 id 含步骤 title 宽容判定。
-    if (!agentOk && !(event.authorId ?? '').includes(doneStep)) return
+  // 接力：结果事件本身及 dispatch source id 持久化于时间线，供运行中推进和启动恢复共用。
+  ctx.on('space/event-appended', ({ event }) => advanceFlow(event))
 
-    if (flow.idx < flow.steps.length) {
-      const next = flow.steps[flow.idx]!
-      // 推进前同样过全局闸门：下一步的 agent 在别的会话忙 → 暂停流程（诚实
-      // 留痕），用户等它空闲后重新发起；不排队不重试（承「不猜」口径）。
-      const busy = busyAgent([next])
-      if (busy) {
-        saySystem(event.sessionId, `⚙ 流程 [${flow.name}] 暂停：「${next}」正在其它任务中。等它空闲后重新发起 /${flow.name}（已完成步骤不重做，请自行衔接）`)
-        running.delete(event.sessionId)
-        return
-      }
-      flow.idx++
-      const eventId = saySystem(
-        event.sessionId,
-        `⚙ 流程推进（${flow.idx}/${flow.steps.length}）：交给「${next}」`,
-      )
-      ctx.orchestrator.beginExternalDelegate(
-        event.sessionId,
-        eventId,
-        next,
-        `${flow.task}\n[流程上下文] 上一步（${doneStep}）结论：${event.text.slice(0, 300)}`,
-      )
-    } else {
-      saySystem(event.sessionId, `⚙ 服务流程 [${flow.name}] 完成（${flow.steps.join(' → ')}）`)
-      running.delete(event.sessionId)
-    }
-  })
+  // 应用入口在整份组合插件清单加载后发出，避免恢复时目标 Agent 监听器尚未注册。
+  ctx.on('app/ready', recoverInterruptedFlows)
 
   console.log(`[${name}] 就绪：${Object.keys(flows).map((k) => `/${k}`).join(' ')}（确定性服务流程）`)
 }

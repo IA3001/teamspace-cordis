@@ -36,6 +36,12 @@ export interface ChatMessage {
 export interface ChatOptions {
   /** 单次调用超时（毫秒）。缺省 60_000。 */
   timeoutMs?: number
+  /** Per-call model override; credentials/base URL remain the shared configured values. */
+  model?: string
+  /** Cancel a request when its causal Agent run is withdrawn. */
+  signal?: AbortSignal
+  /** Optional user-facing completion deltas; callers must not persist them as Agent context. */
+  onToken?: (delta: string) => void
 }
 
 // ── 错误分类法（规律 3：实现不得自造错误串，只能抛这里的错误码）────────────
@@ -47,6 +53,8 @@ export type LlmErrorCode =
   | 'http_error'
   /** 单次调用超时（缺省 60s），不重试。 */
   | 'timeout'
+  /** Caller cancelled this request because its source work was invalidated. */
+  | 'cancelled'
   /** 响应缺 choices[0].message.content（形状不符）。 */
   | 'empty_response'
 

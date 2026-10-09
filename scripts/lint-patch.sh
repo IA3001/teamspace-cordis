@@ -15,11 +15,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-NODE_BIN="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}/node"
-if [ ! -x "$NODE_BIN" ]; then
-  printf '✗ 找不到 node：%s\n' "$NODE_BIN" >&2
-  exit 1
-fi
+source "$REPO_ROOT/scripts/node-runtime.sh"
+resolve_node_bin
 
 printf 'patch 层数门禁：断言 ③（同 id 最多「一个 bundle 层 + 用户层」）\n'
 

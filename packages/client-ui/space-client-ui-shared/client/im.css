@@ -95,6 +95,9 @@
 .sp-rail-sub .sp-brief { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .sp-rail-time { flex: none; }
 
+/* Teamspace header: keep a single-line session name without squeezing status controls. */
+.sp-session-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ── 协作面板（右）与通用小件 ─────────────────────────────────────────── */
 .sp-panel-section { margin-top: 10px; }
 .sp-panel-title {
@@ -162,7 +165,7 @@
   border: none;
   box-shadow: none !important;
   padding: 8px 10px 2px;
-  min-height: 56px;
+  min-height: 44px;
   resize: none;
   font-size: 14px;
   line-height: 1.6;
@@ -265,12 +268,25 @@ body:has(.sp-plain) .global-nav { display: none; }
 /* 登录卡与已登录卡共用的窄容器（覆盖 k-content 默认留白，居中偏上） */
 .sp-plain { display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; }
 .sp-plain > .sp-section { width: 400px; box-shadow: 0 10px 30px rgb(0 0 0 / 8%); }
+.sp-auth-card { width: min(420px, calc(100vw - 32px)); flex: none; box-shadow: 0 10px 30px rgb(0 0 0 / 8%); }
 /* 活动栏（theme/插件/日志入口）同样不属于登录页 —— 与 .global-nav 一起藏。 */
 body:has(.sp-plain) .layout-activity { display: none; }
 
 /* ── 移动端基础响应式（B5，2026-10-06）──────────────────────────────── */
 /* ≤760px：会话栏与右侧面板改为覆盖式抽屉，时间线占满整宽。 */
 @media (max-width: 760px) {
+  .sp-team-layout .layout-header { gap: 6px; padding: 0 8px; }
+  .sp-team-layout .layout-header-breadcrumb { flex: 1; min-width: 0; }
+  .sp-team-layout .layout-header-spacer { display: none; }
+  .sp-drawer-backdrop {
+    position: fixed;
+    inset: 48px 0 0;
+    z-index: 55;
+    border: 0;
+    padding: 0;
+    background: rgb(0 0 0 / 32%);
+    cursor: pointer;
+  }
   .page-sidebar {
     position: fixed !important;
     left: 0; top: 48px; bottom: 0;
@@ -293,6 +309,18 @@ body:has(.sp-plain) .layout-activity { display: none; }
   .content-area .el-row .el-input { min-width: 0; }
   /* 成员面板避免顶裁切 */
   .sp-member-list .sp-chip { max-width: 96%; }
+  /* 窄屏优先给对话与输入操作留空间，低频管理入口仍可从侧栏进入。 */
+  .sp-mobile-secondary,
+  .sp-search-secondary { display: none !important; }
+  .sp-chat-search { padding: 0 8px; }
+  .sp-chat-search .el-space { width: 100%; }
+  .sp-chat-search .el-space__item:first-child { flex: 1; min-width: 0; }
+  .sp-chat-search .sp-search-input { width: 100%; }
+  .sp-list { padding: 4px 10px 14px; }
+  .sp-msg { gap: 8px; }
+  .sp-msg-body { max-width: 86%; }
+  .sp-composer { --el-card-padding: 8px 10px 6px; }
+  .sp-composer .el-textarea__inner { min-height: 44px; padding: 6px 8px 0; font-size: 16px; }
 }
 
 /* ── 控制台导航胶囊 + 工具行（2026-10-07 反馈修）────────────────────── */
@@ -316,9 +344,15 @@ body:has(.sp-plain) .layout-activity { display: none; }
 /* ── 登录门（拒绝态）卡片（2026-10-07）──────────────────────────────── */
 .sp-login-gate { display: flex; justify-content: center; align-items: flex-start; padding-top: 8vh; }
 .sp-login-box { width: 420px; box-sizing: border-box; box-shadow: 0 10px 30px rgb(0 0 0 / 10%); }
-.sp-login-brand {
+.sp-admin-login-badge {
   width: 48px; height: 48px; border-radius: 12px; margin: 0 auto 12px;
   background: var(--el-color-primary); color: #fff;
   font-weight: 700; font-size: 17px; letter-spacing: 1px;
   display: flex; align-items: center; justify-content: center;
 }
+
+/* 活动侧栏较窄，事件定位按钮与长消息需要在卡片内换行，不能横向裁掉。 */
+.sp-activity-card .el-card__body { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; }
+.sp-activity-card .el-text { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.sp-activity-meta { height: auto; max-width: 100%; justify-content: flex-start; text-align: left; white-space: normal; line-height: 1.4; }
+.sp-activity-meta > span { white-space: normal; overflow-wrap: anywhere; }

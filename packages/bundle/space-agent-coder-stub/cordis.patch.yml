@@ -5,3 +5,4 @@
 # 停用：用户层（profiles/*/cordis.patch.yml）写同 id 行 disabled: true 即可，同样零改动。
 - id: agent-coder-stub
   name: './plugins/agent-coder-stub/index.ts'
+  disabled: true

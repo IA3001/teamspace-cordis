@@ -1,7 +1,9 @@
+/// <reference types="vite/client" />
+
 // 左侧会话栏（客户端）—— IM 化改造（2026-09-30，微信式聊天列表）。
 //
 // 结构（本次拍板）：置顶「新会议」主动作（el-dialog：标题输入 + 受邀成员
-// 多选 + coding 角色多选，确定 = createGroup）→ 会话列表改微信式横向行
+// 多选 + Agent 多选，确定 = createGroup）→ 会话列表改微信式横向行
 // （el-avatar 首字 + 标题 + 状态 tag + HH:mm 时间 + 悬停揭示操作按钮：
 // 结束会议 / 邀请 / 移除成员）→ 底部「当前身份」= 登录用户（me(token)）。
 // 邀请与移除成员各用 el-dialog + 多选确认。
@@ -27,7 +29,7 @@ interface SessionRow {
   updatedAt: string
 }
 
-/** coding 名册条目（新会议「附加角色」多选的数据源）。 */
+/** Agent 名册条目（新会议邀请 Agent 的多选数据源）。 */
 interface RosterRow {
   id: string
   title: string
@@ -40,12 +42,21 @@ interface HumanRow {
   displayName: string
 }
 
+interface MemberRow {
+  sessionId: string
+  principalId: string
+  role: string
+  status: string
+  duty: string
+  joinedAt: string
+  leftAt: string | null
+}
+
 /** 当前登录用户（me(token) 的返回）。 */
 interface MeRow {
   id: string
   username: string
   displayName: string
-  isAdmin?: boolean
 }
 
 /** 最近一条消息摘要（summaries RPC 的行；authorName 服务端已解析好）。 */
@@ -70,6 +81,8 @@ const getToken = () => localStorage.getItem(TOKEN_KEY) ?? ''
 /** RPC 返回 {error:'forbidden', detail} 的判定（群权限拒绝等结构化错误）。 */
 const isForbidden = (r: unknown) =>
   typeof r === 'object' && r !== null && (r as { error?: string }).error === 'forbidden'
+const isError = (r: unknown) =>
+  typeof r === 'object' && r !== null && typeof (r as { error?: unknown }).error === 'string'
 /** 每会话「已读时刻」的 localStorage 键前缀（未读红点 = lastTs > seen）。 */
 const seenKey = (sid: string) => `space_seen_${sid}`
 const getSeen = (sid: string) => Number(localStorage.getItem(seenKey(sid)) ?? 0)
@@ -111,14 +124,15 @@ const SessionsRail = defineComponent({
       me(token: string): Promise<MeRow | null>
       sessions(token: string): Promise<SessionRow[] | null>
       summaries(token: string, seen?: Record<string, number>): Promise<SummaryRow[] | null>
-      codingRoster(token: string): Promise<RosterRow[]>
+      members(token: string, sessionId: string): Promise<MemberRow[] | null>
+      agentRoster(token: string): Promise<RosterRow[]>
       listHumans(token: string): Promise<HumanRow[]>
-      createGroup(token: string, title: string, userIds: string[], codingIds: string[]): Promise<SessionRow | null>
+      createGroup(token: string, title: string, userIds: string[], agentIds: string[]): Promise<SessionRow | null>
       invite(token: string, sessionId: string, userIds: string[]): Promise<unknown>
       removeMember(token: string, sessionId: string, principalId: string): Promise<unknown>
+      setMemberRole(token: string, sessionId: string, principalId: string, role: string): Promise<unknown>
       close(token: string, sessionId: string): Promise<SessionRow | null>
       logout(token: string): Promise<boolean | null>
-      debugPort(token: string): Promise<number | null>
     }>()
     const appCtx = useContext()
     const router = useRouter()
@@ -155,7 +169,7 @@ const SessionsRail = defineComponent({
       mutedIds.value = next
     }
 
-    /** 「新会议」对话框：标题输入 + 受邀成员多选 + coding 角色多选。 */
+    /** 「新会议」对话框：标题输入 + 受邀成员和 Agent 多选。 */
     const dialogOpen = ref(false)
     const newTitle = ref('')
     const selectedUsers = ref([]) as { value: string[] }
@@ -170,6 +184,8 @@ const SessionsRail = defineComponent({
     const removeOpen = ref(false)
     const removeSessionId = ref('')
     const removeUserId = ref('')
+    const managedMembers = ref([]) as { value: MemberRow[] }
+    const roleDrafts = ref({}) as { value: Record<string, string> }
 
     /** 最近一条消息摘要：sessionId → {text, ts}（summaries RPC + socket 增量）。 */
     const lastMap = ref({}) as { value: Record<string, SummaryRow> }
@@ -246,12 +262,6 @@ const SessionsRail = defineComponent({
       return `${last.authorName || '成员'}：${body}`
     }
 
-
-    /** 账号管理页（5172 控制台 /admin，token 经 URL 免登传递）。 */
-    async function goAdmin() {
-      const port = await rpc.value.debugPort(getToken())
-      location.href = `http://${location.hostname}:${port ?? 5172}/admin?token=${getToken()}`
-    }
 
     /** 登出：服务端删 token + 前端清 localStorage → 回登录页。 */
     async function doLogout() {
@@ -342,15 +352,15 @@ const SessionsRail = defineComponent({
       sessions.value = []
       me.value = null
       if (location.pathname === '/login') return
-      void router.replace('/login')
+      void router.replace({ path: '/login' })
       location.href = '/login'
     }
 
-    /** coding 名册与人类名单各只拉一次（stub 名册静态；插件启停后刷新页面即新）。 */
+    /** Agent 名册与人类名单各只拉一次。 */
     async function loadMeta() {
       const token = getToken()
       try {
-        roster.value = await rpc.value.codingRoster(token)
+        roster.value = await rpc.value.agentRoster(token)
       } catch {
         roster.value = [] // 名册取不到 = 不展示多选（纯会议照常可开）
       }
@@ -374,7 +384,7 @@ const SessionsRail = defineComponent({
       dialogOpen.value = true
     }
 
-    /** 确定：createGroup(token, 标题(可空→''), 受邀成员, coding 角色)。
+    /** 确定：createGroup(token, 标题(可空→''), 受邀成员, Agent)。
      *  成功后关对话框、刷新列表并选中新会话。 */
     async function create() {
       creating.value = true
@@ -412,12 +422,37 @@ const SessionsRail = defineComponent({
         const r = await rpc.value.removeMember(getToken(), removeSessionId.value, removeUserId.value) as unknown
         if (r === null) return unauthed()
         if (isForbidden(r)) { error.value = (r as { detail: string }).detail; return }
-        removeOpen.value = false
+        if (isError(r)) { error.value = (r as { detail?: string }).detail ?? '移除失败'; return }
         removeUserId.value = ''
         error.value = ''
+        await loadManagedMembers()
       } catch (e) {
         error.value = `移除失败：${String((e as Error).message ?? e)}`
       }
+    }
+
+    async function loadManagedMembers() {
+      const rows = await rpc.value.members(getToken(), removeSessionId.value)
+      managedMembers.value = Array.isArray(rows) ? rows : []
+      roleDrafts.value = Object.fromEntries(managedMembers.value.map((member) => [member.principalId, member.role]))
+    }
+    async function openMemberManagement(sessionId: string) {
+      removeSessionId.value = sessionId
+      removeUserId.value = ''
+      removeOpen.value = true
+      try { await loadManagedMembers() }
+      catch (e) { error.value = `读取成员失败：${String((e as Error).message ?? e)}` }
+    }
+    async function doSetMemberRole(row: MemberRow) {
+      const role = roleDrafts.value[row.principalId]
+      if (!role || role === row.role) return
+      try {
+        const r = await rpc.value.setMemberRole(getToken(), removeSessionId.value, row.principalId, role)
+        if (r === null) return unauthed()
+        if (isForbidden(r) || isError(r)) { error.value = (r as { detail?: string }).detail ?? '角色调整失败'; return }
+        error.value = ''
+        await loadManagedMembers()
+      } catch (e) { error.value = `角色调整失败：${String((e as Error).message ?? e)}` }
     }
 
     /** 结束会议：close(token, sessionId)（幂等）。 */
@@ -446,7 +481,8 @@ const SessionsRail = defineComponent({
       // IM 化：socket 实时更新摘要/未读，替代 5s 轮询；断线重连全量刷新一次，
       // 另留 30s 慢速兜底（会话新建/更名等 socket 不覆盖的变更）。
       // client.socket 是 Vue ref（可能为 null）—— 取 .value 并守卫。
-      const rawSocket = (appCtx.client.socket as { value?: WebSocket } | undefined)?.value
+      const clientWithSocket = appCtx.client as typeof appCtx.client & { socket?: { value?: WebSocket } }
+      const rawSocket = clientWithSocket.socket?.value
       socket = rawSocket && typeof rawSocket.addEventListener === 'function' ? rawSocket : undefined
       if (!socket) console.warn('[space] client.socket 不可监听（外壳版本差异），实时推送降级为手动刷新')
       socket?.addEventListener('message', onSocketMessage)
@@ -466,18 +502,14 @@ const SessionsRail = defineComponent({
     // 当前打开的会话 = 已读（URL 驱动，页面切会话时红点即灭）。
     watch(activeId, (v) => { if (v) markSeen(String(v)) })
 
-    /** 会话头像：标题去掉自动命名前缀取首字；底色按 id 哈希取色相 ——
-     *  全列表一度是清一色「新」+ 同灰底，视觉上分不出谁是谁（2026-10-05）。 */
+    /** 会话头像：用主题强调色与标题首字保持统一。 */
     const avatarOf = (s: { id: string; title: string }) => {
       // ElAvatar 在渲染闭包里才 resolve（resolveComponent 不能提前到 setup 体）。
       const ElAvatar = resolveComponent('el-avatar') as unknown as string
       const bare = s.title.replace(/^新会议\s*/, '') || s.title
-      let hash = 0
-      for (const ch of s.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
-      const hue = hash % 360
       return h(ElAvatar, {
         size: 32,
-        style: `background: hsl(${hue} 42% 52%); color: #fff; font-weight: 600; flex-shrink: 0`,
+        color: 'var(--accent)',
       }, { default: () => bare.charAt(0) || '会' })
     }
 
@@ -497,6 +529,8 @@ const SessionsRail = defineComponent({
       const ElOption = resolveComponent('el-option') as unknown as string
       const ElDialog = resolveComponent('el-dialog') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
+      const ElTable = resolveComponent('el-table') as unknown as string
+      const ElTableColumn = resolveComponent('el-table-column') as unknown as string
 
       /** 会话条目：微信式横向行 —— 头像（标题首字，未读时带红点）+ 标题 +
        *  状态 + 最近消息摘要 + 时间 + 悬停操作；选中项 primary 高亮。 */
@@ -553,10 +587,7 @@ const SessionsRail = defineComponent({
                     return
                   }
                   if (cmd === 'remove') {
-                    removeSessionId.value = s.id
-                    removeUserId.value = ''
-                    removeOpen.value = true
-                    return
+                    return void openMemberManagement(s.id)
                   }
                   if (cmd === 'pinned') return togglePinned(s.id)
                   if (cmd === 'muted') return toggleMuted(s.id)
@@ -635,8 +666,7 @@ const SessionsRail = defineComponent({
           }, { default: () => list.map((a) => h(ElOption, { key: a.id, label: a.label, value: a.id })) })
         : h(ElText, { type: 'info' }, { default: () => '（名单为空）' })
 
-      /** 「新会议」对话框：标题（可空 → 服务端默认命名）+ 受邀成员 +
-       *  coding 角色两组多选；确定 = createGroup。 */
+      /** 「新会议」对话框：标题（可空 → 服务端默认命名）+ 受邀成员和 Agent 多选。 */
       const newSessionDialog = h(ElDialog, {
         modelValue: dialogOpen.value,
         'onUpdate:modelValue': (v: boolean) => { dialogOpen.value = v },
@@ -656,8 +686,8 @@ const SessionsRail = defineComponent({
           roster.value.length
             ? multiSelect(roster.value.map((a) => ({ id: a.id, label: a.title })),
                 selected.value, (v: string[]) => { selected.value = v },
-                '附加 coding 角色（可多选；不选 = 只开纯会议名册）')
-            : h(ElText, { type: 'info' }, { default: () => 'coding 名册为空 —— 确定后只开纯会议名册' }),
+                '邀请 Agent（可多选；不选 = 暂无 Agent 成员）')
+            : h(ElText, { type: 'info' }, { default: () => '当前没有可邀请的 Agent' }),
         ],
         footer: () => h(ElSpace, { size: 8 }, {
           default: () => [
@@ -691,25 +721,50 @@ const SessionsRail = defineComponent({
         }),
       })
 
-      /** 「移除成员」对话框：输入/粘贴成员 id 确认移除。 */
+      /** 成员管理：展示在册成员、记录角色调整或移除事件。 */
       const removeDialog = h(ElDialog, {
         modelValue: removeOpen.value,
         'onUpdate:modelValue': (v: boolean) => { removeOpen.value = v },
-        title: '移除成员（输入成员 id，如 u_xxx）',
-        width: 420,
+        title: '会话成员管理',
+        width: 760,
         closeOnClickModal: false,
       }, {
-        default: () => h(ElInput, {
-          modelValue: removeUserId.value,
-          'onUpdate:modelValue': (v: string) => { removeUserId.value = v },
-          placeholder: '成员 id（u_ 前缀）',
-        }),
-        footer: () => h(ElSpace, { size: 8 }, {
+        default: () => h(ElTable, { data: managedMembers.value, size: 'small', rowKey: 'principalId' }, {
           default: () => [
-            h(ElButton, { onClick: () => { removeOpen.value = false } }, { default: () => '取消' }),
-            h(ElButton, { type: 'danger', onClick: () => void doRemove() }, { default: () => '移除' }),
+            h(ElTableColumn, { label: '成员', minWidth: 220 }, {
+              default: (scope: { row: MemberRow }) => {
+                const human = humans.value.find((item) => item.id === scope.row.principalId)
+                return `${scope.row.duty || human?.displayName || scope.row.principalId}（${scope.row.principalId}）`
+              },
+            }),
+            h(ElTableColumn, { label: '会话角色', width: 220 }, {
+              default: (scope: { row: MemberRow }) => {
+                const human = humans.value.some((item) => item.id === scope.row.principalId)
+                const fixed = scope.row.role === '群主' || !human
+                return fixed
+                  ? h(ElTag, { type: 'info', size: 'small' }, { default: () => scope.row.role })
+                  : h(ElSelect, {
+                    modelValue: roleDrafts.value[scope.row.principalId],
+                    'onUpdate:modelValue': (value: string) => { roleDrafts.value[scope.row.principalId] = value },
+                    size: 'small',
+                    onChange: () => { void doSetMemberRole(scope.row) },
+                  }, { default: () => [
+                    h(ElOption, { label: '普通成员', value: '成员' }),
+                    h(ElOption, { label: 'DRI', value: 'DRI' }),
+                    h(ElOption, { label: '管理员', value: '管理员' }),
+                  ] })
+              },
+            }),
+            h(ElTableColumn, { label: '操作', width: 100 }, {
+              default: (scope: { row: MemberRow }) => scope.row.role === '群主'
+                ? h(ElTag, { type: 'info', size: 'small' }, { default: () => '创建者' })
+                : h(ElButton, { type: 'danger', link: true, onClick: () => { removeUserId.value = scope.row.principalId; void doRemove() } }, {
+                  default: () => '移出会话',
+                }),
+            }),
           ],
         }),
+        footer: () => h(ElButton, { onClick: () => { removeOpen.value = false } }, { default: () => '完成' }),
       })
 
       /** Ctrl+K 快速切换会话面板：过滤输入（打开即聚焦）+ 全量会话列表
@@ -766,10 +821,6 @@ const SessionsRail = defineComponent({
               title: me.value ? `${me.value.displayName}（${me.value.username}）` : '' },
             { default: () => me.value?.displayName ?? '未登录' }),
           h('span', { class: 'sp-identity-actions' }, [
-            me.value?.isAdmin
-              ? h(ElButton, { text: true, size: 'small', onClick: () => void goAdmin() },
-                  { default: () => '账号管理' })
-              : null,
             h(ElButton, { text: true, size: 'small',
                 onClick: () => void doLogout() }, { default: () => '登出' }),
           ]),

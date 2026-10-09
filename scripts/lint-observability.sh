@@ -18,12 +18,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# node 解析：优先环境变量指定，其次 PATH；找不到就明说（不静默假装通过）
-NODE_BIN="${NODE_BIN:-$(command -v node 2>/dev/null || true)}"
-if [ -z "$NODE_BIN" ]; then
-  echo "✗ 找不到 node —— 请先 export PATH（nvm）或设 NODE_BIN 指向 node 可执行文件"
-  exit 1
-fi
+source "$REPO_ROOT/scripts/node-runtime.sh"
+resolve_node_bin
 DB="${DB_PATH:-data/database.db}"
 
 if [ ! -f "$DB" ]; then

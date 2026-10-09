@@ -8,34 +8,33 @@
 //   · isolate 口径：不写 isolate（消费 debug-webui 的无名 webui 实例），
 //     与 admin 包同一拍板（见 admin/src/index.ts 头注）。
 //
-// 权限口径：所有 data 方法首参 token（localStorage 'space_token'），
-// verifyToken 成功且 isAdmin 才放行；非管理员统一返回 null。
+// 权限口径：所有 data 方法首参独立 Admin token（localStorage 'admin_token'），
+// 后台数据方法使用独立 Admin session；Team token 不可访问。
 //
 // 数据流：表单 → RPC save → ctx.settings（sqlite settings 表，0013 迁移）
 // → space-llm-openai / space-embedding-openai 每次 resolve() 现读 ——
 // **改完即生效，无需重启**。apiKey 只写不回显（ getConfig 返回 keyTail）。
 import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
-import type { PublicUser } from 'space-identity'
-import { IdentityError } from 'space-identity'
+import { AdminAuthError } from 'space-admin-auth'
 import { LlmError } from 'space-llm'
 
 export const name = 'space-client-ui-settings'
 // users（鉴权）+ settings（读写）+ llm/embeddings（连通测试用现配服务）。
-export const inject = ['webui', 'users', 'settings', 'llm', 'embeddings']
+export const inject = ['webui', 'settings', 'llm', 'embeddings', 'adminAuth']
 
-/** token → PublicUser；无效返回 null（不抛，RPC 层零异常面）。 */
-async function auth(ctx: Context, token: string): Promise<PublicUser | null> {
+/** token → Admin principal；无效返回 null（不抛，RPC 层零异常面）。 */
+async function auth(ctx: Context, token: string) {
   try {
-    return await ctx.users.verifyToken(String(token ?? ''))
+    return await ctx.adminAuth.verifyToken(String(token ?? ''))
   } catch {
     return null
   }
 }
 
-/** IdentityError/LlmError → { error, detail } 结构化失败（前端直接展示）。 */
+/** AdminAuthError/LlmError → { error, detail } 结构化失败（前端直接展示）。 */
 function fail(e: unknown): { error: string; detail: string } {
-  if (e instanceof IdentityError || e instanceof LlmError) {
+  if (e instanceof AdminAuthError || e instanceof LlmError) {
     return { error: (e as { code?: string }).code ?? 'failed', detail: e.message }
   }
   return { error: 'internal', detail: e instanceof Error ? e.message : String(e) }
@@ -54,7 +53,7 @@ export function apply(ctx: Context) {
       routes: ['/models'],
     },
     {
-      /** 当前登录用户（verifyToken）；页面据此判断 isAdmin。 */
+      /** 当前 Admin session。 */
       async me(token: string) {
         return auth(ctx, token)
       },
@@ -62,7 +61,7 @@ export function apply(ctx: Context) {
       /** 读当前设置。apiKey 不回显，只给 keyTail（后 4 位）与 hasKey。 */
       async getConfig(token: string) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const s = ctx.settings
         const shape = (prefix: string) => {
           const key = s.get<string>(`${prefix}.apiKey`, '')
@@ -86,7 +85,7 @@ export function apply(ctx: Context) {
       /** 保存 LLM 设置。apiKey 传空 = 保留现值；传 '-' = 清除。 */
       async saveLlm(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string; timeoutMs?: number }) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const s = ctx.settings
         if (typeof cfg.baseURL === 'string') s.set('llm.baseURL', cfg.baseURL.trim())
         if (typeof cfg.model === 'string') s.set('llm.model', cfg.model.trim())
@@ -99,7 +98,7 @@ export function apply(ctx: Context) {
       /** 保存 Embedding 设置。apiKey 语义同上。 */
       async saveEmbed(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const s = ctx.settings
         if (typeof cfg.baseURL === 'string') s.set('embed.baseURL', cfg.baseURL.trim())
         if (typeof cfg.model === 'string') s.set('embed.model', cfg.model.trim())
@@ -111,7 +110,7 @@ export function apply(ctx: Context) {
       /** LLM 连通测试：直接用**当前已保存**配置打一次 /chat/completions。 */
       async testLlm(token: string) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const t0 = Date.now()
         try {
           const out = await ctx.llm.chat([{ role: 'user', content: 'ping，请只回复 pong' }], { timeoutMs: 20_000 })
@@ -124,7 +123,7 @@ export function apply(ctx: Context) {
       /** Embedding 连通测试：用当前已保存配置向量一条短文本。 */
       async testEmbed(token: string) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const t0 = Date.now()
         try {
           const v = await ctx.embeddings.embed(['连通测试'])

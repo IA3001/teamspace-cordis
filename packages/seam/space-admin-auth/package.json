@@ -1,0 +1,9 @@
+{
+  "name": "space-admin-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam：独立后台管理员凭据与会话，不依赖 Team 身份",
+  "main": "src/index.ts",
+  "peerDependencies": { "cordis": "^4.0.0-rc.10" }
+}

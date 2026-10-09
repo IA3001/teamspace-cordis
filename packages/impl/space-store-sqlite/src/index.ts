@@ -91,8 +91,8 @@ declare module '@cordisjs/plugin-database' {
       password_hash: string
       display_name: string
       kind: string
-      is_admin: boolean
       created_at: string
+      team_role: string
     }
     login_tokens: {
       token: string
@@ -108,6 +108,7 @@ declare module '@cordisjs/plugin-database' {
       weight: number
       author_id: string | null
       created_at: string
+      source_event_id: string | null
     }
     msg_reactions: {
       event_id: string
@@ -130,6 +131,42 @@ declare module '@cordisjs/plugin-database' {
       embedding: string
       created_at: string
     }
+    agent_definitions: {
+      id: string
+      title: string
+      description: string
+      prompt_ref: string
+      model_ref: string
+      tool_ids: string
+      context_sources: string
+      memory_policy: string
+      speech_policy: string
+      status: string
+      created_at: string
+      updated_at: string
+    }
+    admin_accounts: {
+      id: string
+      username: string
+      password_hash: string
+      created_at: string
+      updated_at: string
+    }
+    admin_sessions: {
+      token: string
+      admin_id: string
+      created_at: string
+      expires_at: string
+    }
+    sandbox_approval_requests: {
+      id: string; agent_id: string; session_id: string | null; source_path: string; source_size: number
+      source_mtime_ms: number; source_ctime_ms: number; source_inode: number; reason: string
+      status: string; created_at: string; decided_at: string | null; decided_by: string | null
+      decision_note: string; delivery_path: string | null
+    }
+    session_work_owners: { process_id: string; session_id: string; owner: string; expires_at: number }
+    session_work_queue: { queue_id: number; process_id: string; session_id: string; owner: string; enqueued_at: number; expires_at: number }
+    file_attachments: { stored_name: string; session_id: string; uploader_id: string; original_name: string; size_bytes: number; created_at: string }
   }
 }
 import { SqliteEventLog } from './eventlog.ts'
@@ -141,6 +178,10 @@ import { SqliteUserStore } from './users.ts'
 import { SqliteMemoryStore } from './memory.ts'
 import { SqliteKnowledgeStore } from './kb.ts'
 import { SqliteSettingsStore } from './settings.ts'
+import { SqliteAgentCatalog } from './agent-catalog.ts'
+import { SqliteAdminAuthStore } from './admin-auth.ts'
+import { SqliteSandboxApproval } from './sandbox-approval.ts'
+import { SqliteSessionWork } from './session-work.ts'
 
 export const name = 'space-store-sqlite'
 // database 服务由 debug-database-sqlite（驱动插件）提供；未就绪时本插件不加载。
@@ -246,15 +287,15 @@ export function apply(ctx: Context, config: Config = {}) {
     updated_at: { type: 'string', nullable: false },
   }, { primary: 'ref' })
 
-  // 身份域（IM 化 2026-09-30）：与 0007 + 0011_admin 逐列对齐。
+  // Team 身份域（管理员另走 admin_accounts/admin_sessions）：与 0007、0016 对齐。
   ctx.database.extend('users', {
     id: { type: 'string', nullable: false },
     username: { type: 'string', nullable: false },
     password_hash: { type: 'string', nullable: false },
     display_name: { type: 'string', nullable: false },
     kind: { type: 'string', nullable: false },
-    is_admin: { type: 'boolean', nullable: false },
     created_at: { type: 'string', nullable: false },
+    team_role: { type: 'string', nullable: false },
   }, { primary: 'id' })
   ctx.database.extend('login_tokens', {
     token: { type: 'string', nullable: false },
@@ -272,6 +313,7 @@ export function apply(ctx: Context, config: Config = {}) {
     weight: { type: 'double', nullable: false },
     author_id: { type: 'string', nullable: true },
     created_at: { type: 'string', nullable: false },
+    source_event_id: { type: 'string', nullable: true },
   }, { primary: 'id' })
 
   // 表情回应（IM 化 2026-10-01）：与 0009_reactions 逐列对齐（三元组复合主键）。
@@ -300,6 +342,61 @@ export function apply(ctx: Context, config: Config = {}) {
     created_at: { type: 'string', nullable: false },
   }, { primary: 'id' })
 
+  // Team-shared Agent definitions (0014); deliberately no creator/owner field.
+  ctx.database.extend('agent_definitions', {
+    id: { type: 'string', nullable: false },
+    title: { type: 'string', nullable: false },
+    description: { type: 'string', nullable: false },
+    prompt_ref: { type: 'string', nullable: false },
+    model_ref: { type: 'string', nullable: false },
+    tool_ids: { type: 'string', nullable: false },
+    context_sources: { type: 'string', nullable: false },
+    memory_policy: { type: 'string', nullable: false },
+    speech_policy: { type: 'string', nullable: false },
+    status: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+    updated_at: { type: 'string', nullable: false },
+  }, { primary: 'id' })
+
+  // 后台身份与 Team users 完全分离；凭据与会话单独持久化。
+  ctx.database.extend('admin_accounts', {
+    id: { type: 'string', nullable: false },
+    username: { type: 'string', nullable: false },
+    password_hash: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+    updated_at: { type: 'string', nullable: false },
+  }, { primary: 'id' })
+  ctx.database.extend('admin_sessions', {
+    token: { type: 'string', nullable: false },
+    admin_id: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+    expires_at: { type: 'string', nullable: false },
+  }, { primary: 'token' })
+  ctx.database.extend('sandbox_approval_requests', {
+    id: { type: 'string', nullable: false }, agent_id: { type: 'string', nullable: false },
+    session_id: { type: 'string', nullable: true }, source_path: { type: 'string', nullable: false },
+    source_size: { type: 'integer', nullable: false }, source_mtime_ms: { type: 'float', nullable: false },
+    source_ctime_ms: { type: 'float', nullable: false }, source_inode: { type: 'integer', nullable: false },
+    reason: { type: 'string', nullable: false }, status: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false }, decided_at: { type: 'string', nullable: true },
+    decided_by: { type: 'string', nullable: true }, decision_note: { type: 'string', nullable: false },
+    delivery_path: { type: 'string', nullable: true },
+  }, { primary: 'id' })
+  ctx.database.extend('session_work_owners', {
+    process_id: { type: 'string', nullable: false }, session_id: { type: 'string', nullable: false },
+    owner: { type: 'string', nullable: false }, expires_at: { type: 'integer', nullable: false },
+  }, { primary: ['process_id', 'session_id', 'owner'] })
+  ctx.database.extend('session_work_queue', {
+    queue_id: { type: 'integer', nullable: false }, process_id: { type: 'string', nullable: false },
+    session_id: { type: 'string', nullable: false }, owner: { type: 'string', nullable: false },
+    enqueued_at: { type: 'integer', nullable: false }, expires_at: { type: 'integer', nullable: false },
+  }, { primary: 'queue_id' })
+  ctx.database.extend('file_attachments', {
+    stored_name: { type: 'string', nullable: false }, session_id: { type: 'string', nullable: false },
+    uploader_id: { type: 'string', nullable: false }, original_name: { type: 'string', nullable: false },
+    size_bytes: { type: 'integer', nullable: false }, created_at: { type: 'string', nullable: false },
+  }, { primary: 'stored_name', indexes: [['session_id', 'created_at']] })
+
   // ── 4. 两个缝的真正实现 ───────────────────────────────────────────────────
   new SqliteSessionStore(ctx, db) // 提供 ctx.session
   new SqliteUserStore(ctx, db) // 提供 ctx.users（身份域，IM 化）
@@ -312,11 +409,15 @@ export function apply(ctx: Context, config: Config = {}) {
   new SqlitePromptStore(ctx, db) // 提供 ctx.prompts
   new SqliteKnowledgeStore(ctx, db) // 提供 ctx.kb（知识库域，2026-10-01）
   new SqliteSettingsStore(ctx, db) // 提供 ctx.settings（运行时设置 KV，2026-10-05）
+  new SqliteAgentCatalog(ctx, db) // 提供 ctx.agentCatalog（团队共享定义，0014）
+  new SqliteAdminAuthStore(ctx, db) // 提供 ctx.adminAuth（后台独立身份，0015）
+  new SqliteSandboxApproval(ctx, db) // 提供后台审批队列与决策记录（0023）
+  const sessionWork = new SqliteSessionWork(ctx, db) // 跨进程会话槽位与租约队列（0024）
 
   console.log(
-    `[${name}] 就绪：${path}（schema v${current}，业务表 sessions / session_members / events / staging_entries / prompt_templates / msg_reactions / kb_documents / kb_chunks + 留痕表 action_log）`,
+    `[${name}] 就绪：${path}（schema v${current}，Team 用户 / 后台管理员身份分离）`,
   )
 
   // 清理：cordis v4 惯用法 —— apply 返回函数即 disposer（卸载/停止时关库连接）。
-  return () => db.close()
+  return () => { sessionWork.dispose(); db.close() }
 }

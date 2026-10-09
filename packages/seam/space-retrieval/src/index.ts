@@ -25,6 +25,12 @@ export interface RetrievalHit {
   source: 'event' | 'memory' | 'kb'
   /** 原始记录 id（events.id / memories.id）。 */
   id: string
+  /** Human-readable source label (document title, event sequence, or memory scope). */
+  title?: string
+  /** KB document id for navigating from a citation to its source document. */
+  documentId?: string
+  /** Durable event sources for event/memory hits, used for withdrawal propagation. */
+  sourceEventIds?: string[]
   sessionId: string
   /** 命中片段文本。 */
   text: string
@@ -33,6 +39,29 @@ export interface RetrievalHit {
   score: number
   /** event 命中的作者（记忆命中为 authorId）。 */
   authorId: string | null
+  /** Memory scope for private/session memory results. */
+  scope?: string
+}
+
+/** Attach a verified source list and remove citations that do not match this call's evidence. */
+export function formatCitedAnswer(answer: string, hits: readonly RetrievalHit[]): string {
+  if (!hits.length) return answer
+  const valid = new Set<string>()
+  for (const hit of hits) {
+    valid.add(`${hit.source}:${hit.id}`)
+    for (const id of hit.sourceEventIds ?? []) valid.add(`event:${id}`)
+  }
+  const checked = answer.replace(/【来源:(event|memory|kb):([^】]+)】/gu, (token, source: string, id: string) =>
+    valid.has(`${source}:${id}`) ? token : '【引用未通过来源核验】')
+  const refs = hits.map((hit) => {
+    const title = hit.title?.trim() || hit.source
+    const docId = hit.documentId ? `，文档 ID ${hit.documentId}` : ''
+    const events = hit.sourceEventIds?.length
+      ? `，依据事件 ${hit.sourceEventIds.map((id) => `event:${id}`).join(', ')}`
+      : ''
+    return `- 【来源:${hit.source}:${hit.id}】${title}${docId}${events}`
+  })
+  return `${checked.trim()}\n\n参考来源（本轮检索命中）：\n${refs.join('\n')}`
 }
 
 /** 检索选项。 */
@@ -41,6 +70,10 @@ export interface SearchOptions {
   limit?: number
   /** 过滤数据源（缺省三个都查：event / memory / kb）。 */
   sources?: ReadonlyArray<'event' | 'memory' | 'kb'>
+  /** Select which memory scopes are searchable when `memory` is enabled. */
+  memoryScopes?: ReadonlyArray<'session' | 'agent'>
+  /** Include this Agent's private durable memories in addition to session memory. */
+  agentId?: string
 }
 
 // ── 错误分类法 ───────────────────────────────────────────────────────────
@@ -66,6 +99,6 @@ export abstract class RetrievalService extends Service {
     super(ctx, 'retrieval')
   }
 
-  /** 在某会话范围内检索（历史 + 记忆），按 score 降序返回。 */
+  /** 在某会话范围内检索（历史 + 会话/Agent 记忆 + 团队知识库），按 score 降序返回。 */
   abstract search(sessionId: string, query: string, opts?: SearchOptions): Promise<RetrievalHit[]>
 }

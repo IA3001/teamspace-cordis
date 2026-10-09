@@ -22,14 +22,21 @@
 // （领地与路径边界）+ space-prompt（提示词内容）+ space-command（/tell 词汇）
 // + space-llm（真模型能力，经 ctx 注入消费）。
 import { writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import type { Context } from 'cordis'
 import { AgentError } from 'space-agent'
 import { AgentRuntimeService } from 'space-agent-runtime'
+import { AgentRunCancelledError } from 'space-agent-runtime'
 import type { CodingReceipt } from 'space-agent-runtime'
+import type { AgentRunContext } from 'space-agent-runtime'
+import type { AgentProgressPhase } from 'space-agent-runtime'
 import { CommandError } from 'space-command'
 import type { CommandCtx } from 'space-command'
 import { LLM_MODEL_ENV } from 'space-llm'
 import type { LlmService } from 'space-llm'
+import { formatCitedAnswer } from 'space-retrieval'
+import type { RetrievalHit } from 'space-retrieval'
+import { runAgentExecutionGraph } from './execution-graph.ts'
 
 /** ctx.llm 缺席（裸 harness）或代理异常 → null（占位模式）。 */
 function llmOrNull(ctx: Context): LlmService | null {
@@ -41,7 +48,40 @@ function llmOrNull(ctx: Context): LlmService | null {
 }
 
 export class AgentRuntime extends AgentRuntimeService {
-  async perform(agentId: string, task: string): Promise<CodingReceipt> {
+  private readonly runsBySource = new Map<string, Set<{ cancel: () => void; done: Promise<unknown> }>>()
+
+  registerSourceRun(sourceEventId: string, cancel: () => void, settled: Promise<unknown>): () => void {
+    const run = { cancel, done: settled }
+    const runs = this.runsBySource.get(sourceEventId) ?? new Set<typeof run>()
+    runs.add(run)
+    this.runsBySource.set(sourceEventId, runs)
+    return () => {
+      runs.delete(run)
+      if (runs.size === 0) this.runsBySource.delete(sourceEventId)
+    }
+  }
+
+  async cancelBySource(sourceEventId: string): Promise<number> {
+    let cancelled = 0
+    while (this.runsBySource.has(sourceEventId)) {
+      const runs = [...this.runsBySource.get(sourceEventId)!]
+      if (!runs.length) break
+      cancelled += runs.length
+      for (const run of runs) run.cancel()
+      await Promise.all(runs.map((run) => run.done))
+    }
+    return cancelled
+  }
+
+  async waitForSource(sourceEventId: string): Promise<void> {
+    while (this.runsBySource.has(sourceEventId)) {
+      const runs = [...this.runsBySource.get(sourceEventId)!]
+      if (!runs.length) break
+      await Promise.all(runs.map((run) => run.done))
+    }
+  }
+
+  async perform(agentId: string, task: string, runContext: AgentRunContext = {}): Promise<CodingReceipt> {
     // 名册制：没入驻就没有干活路径（未知 → not_found，space-agent 错误码）。
     const snap = this.ctx.agents.get(agentId)
     const title = snap.descriptor.title
@@ -54,8 +94,42 @@ export class AgentRuntime extends AgentRuntimeService {
       }
       throw e
     }
+    const sourceEventId = runContext.sourceEventId
+    const runId = randomUUID()
+    const progress = (phase: AgentProgressPhase, toolId?: string, ok?: boolean, delta?: string) => {
+      if (!runContext.sessionId) return
+      try {
+        this.ctx.emit('space/agent-progress', {
+          runId,
+          sessionId: runContext.sessionId,
+          agentId,
+          title,
+          sourceEventId: sourceEventId ?? null,
+          phase,
+          ...(toolId ? { toolId } : {}),
+          ...(ok === undefined ? {} : { ok }),
+          ...(delta ? { delta } : {}),
+          at: new Date().toISOString(),
+        })
+      } catch {
+        // Progress delivery is best-effort and must never decide the Agent result.
+      }
+    }
+    progress('started')
+    const controller = new AbortController()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    const unregister = sourceEventId
+      ? this.registerSourceRun(sourceEventId, () => controller.abort(), done)
+      : () => undefined
+    const assertCurrent = () => {
+      if (controller.signal.aborted) throw new AgentRunCancelledError(sourceEventId ?? '(unknown)')
+    }
     try {
+      assertCurrent()
+      progress('preparing')
       const handle = await this.ctx.workdir.claim(agentId)
+      assertCurrent()
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
       const filename = `task-${stamp}.md`
       const filepath = this.ctx.workdir.resolve(agentId, filename) // execdir 铁则：逃出工作区即炸
@@ -84,31 +158,103 @@ export class AgentRuntime extends AgentRuntimeService {
       const llm = llmOrNull(this.ctx)
       const llmReady = Boolean(llm && llm.configured)
       // 模型名现读 settings（/models 页）> env；面板改完即生效（A1 打磨）。
+      const modelRef = snap.descriptor.modelRef?.trim() || ''
       const model = llmReady
-        ? this.ctx.settings.get<string>('llm.model', '')?.trim() ||
+        ? modelRef || this.ctx.settings.get<string>('llm.model', '')?.trim() ||
           process.env[LLM_MODEL_ENV]?.trim() || '(unset)'
         : null
 
       const files: string[] = [filename]
+      let usedTools: Awaited<ReturnType<typeof runAgentExecutionGraph>>['toolResults'] = []
+      const sourceEventIds = new Set<string>()
+      let retrievalHits: RetrievalHit[] = []
+      let finalAnswer: string | null = null
       if (llm && llmReady) {
         // 真模型模式：promptRef 提示词（未绑定/未预置 → 通用兜底）+ 指令 →
         // 单次调用 → 产物 artifact-<时间>.md 落盘。LlmError 原样上抛
         // （外层 catch 状态回 idle；委托链日志 / 5172 日志页可见）。
         // 占位提示词（「【占位提示词」开头）不当 system —— 会污染模型输出
-        //（实测模型跟着占位词走神，2026-10-06）。按 agent 角色给缺省 system。
-        const ROLE_SYSTEM: Record<string, string> = {
-          'agent.coder': '你是「编码者」。根据指令编写生产质量的代码：完整可运行的实现 + 必要注释 + 单元测试，用 Markdown 代码块输出，不要输出与任务无关的寒暄。',
-          'agent.tester': '你是「测试者」。根据指令与交付物设计测试：给出测试清单（正常/边界/异常）、可执行的断言代码、以及明确的通过/失败判据，用 Markdown 输出。',
-          'agent.reviewer': '你是「代码审查者」。对交付物逐条审查：正确性、边界条件、可读性、安全隐患；每条给出严重级（P0-P3）与修改建议，最后给 结论：通过 / 需修改。用 Markdown 输出。',
-        }
+        //（实测模型跟着占位词走神，2026-10-06）。使用共享定义中的角色数据兜底。
         const placeholderBody = !promptBody || promptBody.includes('【占位提示词')
-        const system = (!placeholderBody && promptBody) ||
-          ROLE_SYSTEM[agentId] ||
-          '你是团队协作系统的 coding agent。按指令完成工作，用 Markdown 输出可直接落库的交付内容。'
-        const answer = await llm.chat([
+        let system = (!placeholderBody && promptBody) ||
+          `你是团队共享 Agent「${title}」。\n职责说明：${snap.descriptor.description?.trim() || '按收到的任务协助团队，并清楚说明结果与依据。'}\n请按职责完成任务，输出可直接供团队使用的 Markdown 内容。`
+        const historyMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = []
+        progress('processing')
+        if (runContext.sessionId) {
+          try {
+            const assembled = await this.ctx.context.assemble(runContext.sessionId, {
+              promptRef: !placeholderBody ? promptRef ?? undefined : undefined,
+              persona: `${title}；${snap.descriptor.description?.trim() || '团队共享 Agent'}`,
+              query: task,
+              agentId,
+              contextSources: snap.descriptor.contextSources,
+              recentLimit: 30,
+              memoryLimit: 8,
+            })
+            system = assembled.system
+            if (assembled.memories.length) {
+              for (const item of assembled.memories) for (const id of item.sourceEventIds ?? []) sourceEventIds.add(id)
+              system += `\n\nAgent 与会话记忆（含来源事件）：\n${assembled.memories.map((item) =>
+                `- [${item.sourceEventIds?.join(',') || item.sourceEventId || 'session-memory'}] ${item.text}`,
+              ).join('\n')}`
+            }
+            if (assembled.retrieval.length) {
+              retrievalHits = assembled.retrieval
+              for (const hit of retrievalHits) {
+                if (hit.source === 'event') sourceEventIds.add(hit.id)
+                for (const id of hit.sourceEventIds ?? []) sourceEventIds.add(id)
+              }
+              system += `\n\n检索材料（只能引用下列来源 ID）：\n${retrievalHits.map((hit) =>
+                `- 【来源:${hit.source}:${hit.id}】${hit.title ?? hit.source}：${hit.text}`,
+              ).join('\n')}`
+              system += '\n引用规则：基于检索材料的事实性结论须在相邻句末使用精确格式【来源:类型:ID】；只能使用上方列出的类型和 ID，不得编造引用。'
+            }
+            historyMessages.push(...assembled.history
+              .filter((event) => event.kind === 'message' && !event.voided)
+              .map((event) => {
+                sourceEventIds.add(event.id)
+                for (const id of event.sourceEventIds ?? []) sourceEventIds.add(id)
+                return ({
+                role: event.authorKind === 'agent' ? 'assistant' as const :
+                  event.authorKind === 'system' ? 'system' as const : 'user' as const,
+                content: event.text,
+                })
+              }))
+          } catch (error) {
+            this.ctx.logger.warn('[agent-runtime] 会话上下文组装失败，使用 Agent 基本提示词（session=%s）：%s',
+              runContext.sessionId, (error as Error).message)
+          }
+        }
+        const configuredTools = (snap.descriptor.toolIds ?? [])
+          .map((id) => this.ctx.tools.list().find((tool) => tool.id === id))
+          .filter((tool) => tool !== undefined)
+        if (configuredTools.length) {
+          system += `\n\n允许使用的工具（只能选以下 ID，参数必须是 JSON）：\n${configuredTools.map((tool) =>
+            `- ${tool.id} — ${tool.title}：${tool.description ?? tool.capabilities.join('、')}`,
+          ).join('\n')}\n需要工具时只返回 {"toolCalls":[{"toolId":"...","args":{...}}]}；完成时返回普通 Markdown 答案。`
+        }
+        system += '\n\n若最终建议需要团队负责人（DRI）作业务决定，请在最终回复中单独加入标记「【需要DRI决策】」，并明确列出待决定事项；不需要 DRI 决定时不要输出该标记。输出此标记会暂停本会话后续 Agent 工作，直到 DRI 使用固定决策命令处理。'
+        const execution = await runAgentExecutionGraph({
+          ctx: this.ctx,
+          agentId,
+          sessionId: runContext.sessionId,
+          model: modelRef || undefined,
+          allowedToolIds: snap.descriptor.toolIds ?? [],
+          signal: controller.signal,
+          onProgress: (phase, toolId, ok, delta) => {
+            if (phase === 'text-delta') progress('text-delta', undefined, undefined, delta)
+            else progress(phase, toolId, ok)
+          },
+          messages: [
           { role: 'system', content: system },
+          ...historyMessages,
           { role: 'user', content: `任务：${task}` },
-        ])
+          ],
+        })
+        assertCurrent()
+        finalAnswer = formatCitedAnswer(execution.answer, retrievalHits)
+        usedTools = execution.toolResults
+        progress('finalizing')
         const artifactName = `artifact-${stamp}.md`
         await writeFile(
           this.ctx.workdir.resolve(agentId, artifactName),
@@ -116,12 +262,15 @@ export class AgentRuntime extends AgentRuntimeService {
             `# 产物（${title}）`,
             '',
             `- 模型：${model}`,
-            `- 提示词：${promptRef ?? '(未绑定)'}${placeholderBody ? '（当前为占位正文，等角色原文 upsert 替换；本轮用内置角色 system）' : ''}`,
+            `- 提示词：${promptRef ?? '(未绑定)'}${placeholderBody ? '（当前正文不可用；本轮使用 Agent 数据说明兜底）' : ''}`,
+            `- Agent 说明：${snap.descriptor.description?.trim() || '(未填写)'}`,
+            ...(snap.descriptor.toolIds?.length ? [`- 工具配置：${snap.descriptor.toolIds.join('、')}`] : []),
+            ...(usedTools.length ? [`- 实际工具调用：${usedTools.map((item) => `${item.toolId}:${item.ok ? '成功' : '失败'}`).join('、')}`] : []),
             `- 时间：${new Date().toISOString()}`,
             '',
             '## LLM 输出',
             '',
-            answer,
+            finalAnswer,
             '',
           ].join('\n'),
           'utf8',
@@ -129,6 +278,7 @@ export class AgentRuntime extends AgentRuntimeService {
         files.push(artifactName)
       }
 
+      assertCurrent()
       const lines: string[] = [
         `# 任务（${title}）`,
         '',
@@ -153,6 +303,13 @@ export class AgentRuntime extends AgentRuntimeService {
           '',
         )
       }
+      if (snap.descriptor.toolIds?.length) {
+        lines.push(
+          '## 工具声明', '',
+          `配置的工具 ID：${snap.descriptor.toolIds.join('、')}`,
+          `本次实际调用：${usedTools.length ? usedTools.map((item) => `${item.toolId}（${item.ok ? '成功' : `失败：${item.code}`}）`).join('、') : '无'}`, '',
+        )
+      }
       lines.push(
         '## 产物说明',
         '',
@@ -163,8 +320,10 @@ export class AgentRuntime extends AgentRuntimeService {
         '',
       )
       await writeFile(filepath, lines.join('\n'), 'utf8')
+      assertCurrent()
       this.ctx.agents.setStatus(agentId, 'done')
       this.ctx.agents.setStatus(agentId, 'idle')
+      progress('completed')
 
       // ── 诚实标注（绝不冒充）：真模型=【真模型】+model；占位=【占位】──────
       // ⚠ LLM_SABOTAGE=1（verify-p8 红测探针，断言 ⑬）：真模型模式谎报【占位】
@@ -177,6 +336,7 @@ export class AgentRuntime extends AgentRuntimeService {
           ? `回执：【${lying ? '占位' : '真模型'}】LLM 已交付（model=${model}）\n`
           : `回执：【占位】写文件级 stub（未接真模型）\n`) +
         (promptTitle ? `【提示词】${promptTitle}（ref=${snap.descriptor.promptRef}）\n` : '') +
+        (llmReady ? `\n## 最终回复\n\n${finalAnswer || '（空输出）'}\n` : '') +
         `【工作区】${handle.root}\n` +
         `【产物清单】${files.join('、')}`
       return {
@@ -190,11 +350,18 @@ export class AgentRuntime extends AgentRuntimeService {
         promptTitle,
         mode,
         model,
+        toolResults: usedTools,
+        sourceEventIds: [...sourceEventIds],
       }
     } catch (e) {
+      progress(controller.signal.aborted ? 'cancelled' : 'failed')
       // 干活中途失败：状态回 idle（任务作废），错误原样上抛给调用方处置。
       try { this.ctx.agents.setStatus(agentId, 'idle') } catch { /* 已是 idle 则忽略 */ }
+      if (controller.signal.aborted) throw new AgentRunCancelledError(sourceEventId ?? '(unknown)')
       throw e
+    } finally {
+      unregister()
+      finish()
     }
   }
 }
@@ -202,7 +369,7 @@ export class AgentRuntime extends AgentRuntimeService {
 export const name = 'space-agent-runtime'
 // cordis 严格注入：agents（名册/状态机）+ workdir（领地落盘）+ commands（/tell）
 // + prompts（提示词内容）+ llm（真模型能力，P8 下半场）。
-export const inject = ['agents', 'workdir', 'commands', 'prompts', 'llm', 'settings']
+export const inject = ['agents', 'workdir', 'commands', 'prompts', 'llm', 'settings', 'context', 'tools', 'eventLog']
 
 export function apply(ctx: Context) {
   const runtime = new AgentRuntime(ctx)

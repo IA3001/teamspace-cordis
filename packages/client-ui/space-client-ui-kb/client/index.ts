@@ -11,29 +11,17 @@
 // 铁律 1：只用外壳全局注册的 el-* / k-*（resolveComponent），零 import
 // element-plus、零手写样式、零内联 style。
 import { defineComponent, h, onMounted, ref, resolveComponent } from 'vue'
+import type { Component } from 'vue'
 import { useRouter, useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
-import { pageHead, status, section, field, actionsRow, note } from 'space-client-ui-shared/client/console.ts'
+import { pageHead, status, section, field, actionsRow, note, ICONS } from 'space-client-ui-shared/client/console.ts'
+import type { KbDocument, KbHit } from 'space-kb'
 
 /** 知识库文档视图（KbDocument 契约子集）。 */
-interface DocRow {
-  id: string
-  title: string
-  source: string
-  size: number
-  chunkCount: number
-  createdAt: string
-}
+type DocRow = KbDocument
 
-/** 检索命中（chunk：所属文档标题 + 命中文本；形状宽松处理）。 */
-interface HitRow {
-  documentId?: string
-  documentTitle?: string
-  title?: string
-  text?: string
-  content?: string
-  score?: number
-}
+/** 检索命中视图，与 knowledge seam 的 KbHit 保持一致。 */
+type HitRow = KbHit
 
 /** 登录 token 的 localStorage 键（/login 页与各 RPC 共用）。 */
 const TOKEN_KEY = 'space_token'
@@ -73,7 +61,7 @@ const KbPage = defineComponent({
       const list = await rpc.value.docs(getToken())
       if (list === null) {
         // 无效 token → 静默跳登录（既有惯例）。
-        void router.replace('/login')
+        void router.replace({ path: '/login' })
         return
       }
       docs.value = list
@@ -87,7 +75,7 @@ const KbPage = defineComponent({
         rpc.value.docs(getToken()),
       ])
       if (list === null) {
-        void router.replace('/login')
+        void router.replace({ path: '/login' })
         return
       }
       embOn.value = emb === true
@@ -102,7 +90,7 @@ const KbPage = defineComponent({
       try {
         const res = await rpc.value.addDoc(getToken(), newTitle.value, newText.value)
         if (res === null) {
-          void router.replace('/login')
+          void router.replace({ path: '/login' })
           return
         }
         if ((res as { error?: string }).error) {
@@ -130,7 +118,7 @@ const KbPage = defineComponent({
       try {
         const res = await rpc.value.searchKb(getToken(), query.value)
         if (res === null) {
-          void router.replace('/login')
+          void router.replace({ path: '/login' })
           return
         }
         hits.value = res
@@ -141,13 +129,10 @@ const KbPage = defineComponent({
 
     /** 命中条目归一化：标题 / 文本字段名做宽松兼容。 */
     function hitTitle(hit: HitRow) {
-      // 服务端 search 返回的字段名是 doc_title（kb.ts 的 SQL 别名）——
-      // 三种命名都认，杜绝「（未知文档）」兜底露脸（2026-10-05）。
-      const any = hit as Record<string, unknown>
-      return (hit.documentTitle ?? any.doc_title ?? hit.title ?? any.docTitle ?? hit.documentId ?? '（未知文档）') as string
+      return hit.docTitle
     }
     function hitText(hit: HitRow) {
-      return hit.text ?? hit.content ?? ''
+      return hit.text
     }
 
     return () => {
@@ -184,7 +169,6 @@ const KbPage = defineComponent({
                 'onUpdate:modelValue': (v: string) => { query.value = v },
                 placeholder: '搜索知识库…',
                 clearable: true,
-                style: 'flex:1',
                 onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') void doSearch() },
               }),
               h(ElButton, {
@@ -194,15 +178,14 @@ const KbPage = defineComponent({
             hits.value === null
               ? null
               : (hits.value.length
-                  ? h('div', { class: 'sp-hint', style: 'margin-top:12px' },
+                  ? h('div', { class: 'sp-hint' },
                       `命中 ${hits.value.length} 块：`)
-                  : h('div', { class: 'sp-hint', style: 'margin-top:12px' }, '没有命中。')),
+                  : h('div', { class: 'sp-hint' }, '没有命中。')),
             ...(hits.value ?? []).map((hit, i) => h('div', {
               key: i, class: 'sp-section',
-              style: 'margin:10px 0 0;box-shadow:none;background:var(--el-fill-color-light)',
             }, [
-              h('div', { class: 'sp-section-title', style: 'font-size:13.5px' }, hitTitle(hit)),
-              h('div', { class: 'sp-hint', style: 'margin-top:6px' }, hitText(hit)),
+              h('div', { class: 'sp-section-title' }, hitTitle(hit)),
+              h('div', { class: 'sp-hint' }, hitText(hit)),
             ])),
           ]),
 
@@ -267,7 +250,7 @@ const KbPage = defineComponent({
 interface PageCtx {
   client: {
     router: {
-      page(options: { path: string; name: string; order?: number; component: unknown }): void
+      page(options: { path: string; name: string; icon?: Component; order?: number; component: unknown }): void
     }
   }
 }

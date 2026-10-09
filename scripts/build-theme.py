@@ -1,9 +1,11 @@
 # build-theme.py —— 生成 packages/client-ui/space-client-ui-shared/client/theme.ts
 # （令牌 light-dark + im.css 内容 JSON 安全内联）。避免 heredoc 转义坑。
 import json, re, sys
+from pathlib import Path
 
-BASE = "/home/ia3000/SPM/teamspace-cordis"
-imcss = open(f"{BASE}/packages/client-ui/space-client-ui-shared/client/im.css", encoding="utf-8").read()
+ROOT = Path(__file__).resolve().parents[1]
+theme_dir = ROOT / "packages/client-ui/space-client-ui-shared/client"
+imcss = (theme_dir / "im.css").read_text(encoding="utf-8")
 
 tokens = """:root {
   color-scheme: light dark;
@@ -69,5 +71,5 @@ content = (
 
 # 校验：恰好两个反引号（模板开合），imcss 只以 JSON 字符串出现
 assert len(re.findall(r"`", content)) == 2, "backtick count != 2"
-open(f"{BASE}/packages/client-ui/space-client-ui-shared/client/theme.ts", "w", encoding="utf-8").write(content)
+(theme_dir / "theme.ts").write_text(content, encoding="utf-8")
 print("theme.ts 已生成，行数:", content.count("\n"), "| backticks: 2 | 含 sp-msg:", ".sp-msg" in content)

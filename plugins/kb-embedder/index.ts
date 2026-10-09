@@ -12,6 +12,12 @@
 import type { Context } from 'cordis'
 import { LlmError } from 'space-llm'
 
+declare module 'cordis' {
+  interface Events {
+    'space/kb-doc-added'(this: Context, payload: { docId: string }): void
+  }
+}
+
 export const name = 'kb-embedder'
 export const inject = ['kb', 'embeddings']
 

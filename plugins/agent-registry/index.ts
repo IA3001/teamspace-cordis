@@ -8,11 +8,67 @@
 import type { Context } from 'cordis'
 import { AGENT_KINDS, AgentError, AgentService, canTransition, isAgentKind } from 'space-agent'
 import type { AgentDescriptor, AgentSnapshot, AgentStatus } from 'space-agent'
+import type { AgentCatalogService, AgentDefinition } from 'space-agent-catalog'
+
+// Cordis delays apply() until the persistent shared catalog service is available.
+export const inject = ['agentCatalog']
 
 export class AgentRegistry extends AgentService {
   // TS private（编译期私有，代理安全）—— 不用 # 私有字段（cordis 服务代理
   // 重绑 this 后品牌校验必炸，2026-09-27 实测，承 ui-registry 同款注释）。
   private readonly agents = new Map<string, AgentSnapshot>()
+  private readonly catalogAgentIds = new Set<string>()
+  private catalog: AgentCatalogService | null = null
+
+  bindCatalog(catalog: AgentCatalogService): void {
+    this.catalog = catalog
+    this.refreshCatalog()
+  }
+
+  refreshCatalog(): void {
+    if (this.catalog) this.hydrateCatalog(this.catalog)
+  }
+
+  /** Reconcile the process-local registry with active, shared definitions. */
+  hydrateCatalog(catalog: AgentCatalogService): void {
+    const definitions = catalog.list().filter((definition) => definition.status === 'active')
+    const activeIds = new Set(definitions.map((definition) => definition.id))
+
+    // Archived/deleted definitions disappear on reconciliation; plugin agents remain untouched.
+    for (const id of this.catalogAgentIds) {
+      if (activeIds.has(id)) continue
+      this.agents.delete(id)
+      this.catalogAgentIds.delete(id)
+    }
+
+    for (const definition of definitions) {
+      const descriptor = this.fromDefinition(definition)
+      const current = this.agents.get(definition.id)
+      if (this.catalogAgentIds.has(definition.id) && current) {
+        current.descriptor = { ...descriptor, capabilities: [...descriptor.capabilities] }
+      } else {
+        // A collision with a code-provided Agent remains a loud registration error.
+        this.register(descriptor)
+        this.catalogAgentIds.add(definition.id)
+      }
+    }
+  }
+
+  private fromDefinition(definition: AgentDefinition): AgentDescriptor {
+    return {
+      id: definition.id,
+      kind: 'custom',
+      title: definition.title,
+      promptRef: definition.promptRef || undefined,
+      capabilities: [...definition.toolIds],
+      description: definition.description,
+      modelRef: definition.modelRef,
+      toolIds: [...definition.toolIds],
+      contextSources: [...definition.contextSources],
+      memoryPolicy: definition.memoryPolicy,
+      speechPolicy: definition.speechPolicy,
+    }
+  }
 
   register(desc: AgentDescriptor): void {
     // 空字段校验沿用 ui-registry 对空 key 的口径（复用 not_found 码 + 明说原因）。
@@ -68,5 +124,6 @@ export class AgentRegistry extends AgentService {
 
 export function apply(ctx: Context) {
   // Service 基类的注册动作：构造即 provide（承 command-bus / ui-registry 同款用法）。
-  new AgentRegistry(ctx)
+  const registry = new AgentRegistry(ctx)
+  registry.bindCatalog(ctx.agentCatalog)
 }

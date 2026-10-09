@@ -33,6 +33,10 @@ export const EVENT_KINDS: readonly EventKind[] = [
   'system',
 ]
 
+/** Timeline protocol markers shared by the DRI review flow and Agent Inbox. */
+export const DECISION_REVIEW_REQUEST_MARKER = '【撤回复核请求】'
+export const AGENT_REVIEW_QUESTION_MARKER = '【复核疑问】'
+
 export function isEventKind(v: string): v is EventKind {
   return (EVENT_KINDS as readonly string[]).includes(v)
 }
@@ -85,11 +89,20 @@ export interface SessionEvent {
   replyMode: string
   /** 引用/回复的目标事件 id（可空；引用系统化 2026-10-02）。 */
   replyTo?: string | null
+  /** Agent 结果依赖的触发/上游事件；独立于用户可见的引用回复。 */
+  sourceEventId: string | null
+  /** Agent 结果实际读取的全部会话事件来源，含 sourceEventId。 */
+  sourceEventIds: string[]
   voided: boolean
   /** 废止留痕三项：谁撤的 / 何时 / 为什么。 */
   voidedBy: string | null
   voidedAt: string | null
   voidedReason: string | null
+}
+
+/** Tool activity is a human-facing trace and must stay out of Agent context. */
+export function isAgentVisibleEvent(event: Pick<SessionEvent, 'kind' | 'toolCalls'>): boolean {
+  return !(event.kind === 'system' && event.toolCalls.length > 0)
 }
 
 /**
@@ -98,8 +111,26 @@ export interface SessionEvent {
  */
 export type EventInput = Omit<
   SessionEvent,
-  'seq' | 'ts' | 'voided' | 'voidedBy' | 'voidedAt' | 'voidedReason'
-> & { ts?: string; seq?: number }
+  'seq' | 'ts' | 'voided' | 'voidedBy' | 'voidedAt' | 'voidedReason' | 'sourceEventId' | 'sourceEventIds'
+> & { ts?: string; seq?: number; sourceEventId?: string | null; sourceEventIds?: string[] }
+
+/** Return Agent final messages causally downstream of a source event, in timeline order. */
+export function collectAgentDescendants(events: readonly SessionEvent[], sourceEventId: string): SessionEvent[] {
+  const affected = new Set([sourceEventId])
+  const descendants: SessionEvent[] = []
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const event of events) {
+      if (affected.has(event.id) || event.voided || event.authorKind !== 'agent' ||
+        event.kind !== 'message' || !event.sourceEventIds.some((sourceId) => affected.has(sourceId))) continue
+      affected.add(event.id)
+      descendants.push(event)
+      changed = true
+    }
+  }
+  return descendants.sort((a, b) => a.seq - b.seq)
+}
 
 // ── 表情回应（IM 化 2026-10-01）───────────────────────────────────────────
 // 回应依附于事件存在（events 只追加不删除，回应表级联删只是防御性兜底）。

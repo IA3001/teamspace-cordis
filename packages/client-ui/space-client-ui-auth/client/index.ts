@@ -11,7 +11,6 @@
 import { defineComponent, h, onMounted, ref, resolveComponent } from 'vue'
 import { useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
-import { ICONS } from 'space-client-ui-shared/client/console.ts'
 
 /** RPC 用户视图（PublicUser 的客户端子集）。 */
 interface PublicUserView {
@@ -118,12 +117,10 @@ const AuthPage = defineComponent({
     return () => {
       const ElButton = resolveComponent('el-button') as unknown as string
       const ElCard = resolveComponent('el-card') as unknown as string
-      const ElCol = resolveComponent('el-col') as unknown as string
       const ElEmpty = resolveComponent('el-empty') as unknown as string
       const ElAlert = resolveComponent('el-alert') as unknown as string
       const ElForm = resolveComponent('el-form') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
-      const ElRow = resolveComponent('el-row') as unknown as string
       const ElTabs = resolveComponent('el-tabs') as unknown as string
       const ElTabPane = resolveComponent('el-tab-pane') as unknown as string
       const ElText = resolveComponent('el-text') as unknown as string
@@ -215,7 +212,7 @@ const AuthPage = defineComponent({
         ],
       })
 
-      const card = () => h(ElCard, { shadow: 'hover' }, {
+      const card = () => h(ElCard, { class: 'sp-auth-card', shadow: 'hover' }, {
         default: () => [
           // 品牌区：名字 + 一句话定位（替代素 header）。
           h('div', { class: 'sp-login-brand' }, [
@@ -241,13 +238,9 @@ const AuthPage = defineComponent({
               onClose: () => { probeError.value = '' },
             })
           : null,
-        h(ElRow, { justify: 'center', align: 'middle' }, {
-          default: () => h(ElCol, { span: 8, xs: 24, md: 10 }, {
-            default: () => (me.value === null
-              ? h(ElEmpty, { description: '正在检查登录状态…' })
-              : me.value ? loggedIn() : card()),
-          }),
-        }),
+        me.value === null
+          ? h(ElEmpty, { description: '正在检查登录状态…' })
+          : me.value ? loggedIn() : card(),
       ])
     }
   },
@@ -267,6 +260,6 @@ export default function main(ctx: PageCtx) {
     path: '/login',
     name: '登录',
     order: 950,
-    icon: ICONS.auth, component: AuthPage,
+    component: AuthPage,
   })
 }

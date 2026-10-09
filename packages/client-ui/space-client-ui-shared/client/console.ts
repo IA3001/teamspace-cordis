@@ -11,6 +11,7 @@
 //   · 操作行：虚线分隔的卡片底部操作区，结果内联显示（不再用大 alert）
 // 样式全在 im.css 的「控制台专业版式」段；这里只有 h() 结构。
 import { defineComponent, h, markRaw } from 'vue'
+import type { VNodeChild } from 'vue'
 
 // ── 侧栏 SVG 图标（2026-10-06：外壳默认图标零辨识度，手搓品牌线条图标）──
 /** 由 path 数据生成 24×24 线性图标组件（外壳导航 20px 渲染，currentColor）。 */
@@ -87,7 +88,7 @@ export function pageHead(
       h('h2', title),
       h('div', { class: 'sp-page-sub' }, sub),
       statuses.length
-        ? h('div', { class: 'sp-status-group', style: 'margin-top:10px' },
+        ? h('div', { class: 'sp-status-group' },
             statuses.map((s) => status(s)))
         : null,
     ]),
@@ -114,8 +115,8 @@ export function status(s: StatusItem) {
 export function section(
   title: string,
   desc: string,
-  children: unknown[],
-  headExtra: unknown = null,
+  children: VNodeChild[],
+  headExtra: VNodeChild = null,
 ) {
   return h('section', { class: 'sp-section' }, [
     h('div', { class: 'sp-section-head' }, [
@@ -130,7 +131,7 @@ export function section(
 }
 
 /** 表单字段：小标签 + 控件 +（可选）提示。放进 .sp-grid 使用。 */
-export function field(label: string, control: unknown, hint?: string, span2 = false) {
+export function field(label: string, control: VNodeChild, hint?: string, span2 = false) {
   return h('div', { class: span2 ? 'sp-span2' : undefined }, [
     h('div', { class: 'sp-field-label' }, label),
     control,
@@ -139,7 +140,7 @@ export function field(label: string, control: unknown, hint?: string, span2 = fa
 }
 
 /** 卡片底部操作行：按钮 + 内联结果文本。 */
-export function actionsRow(buttons: unknown[], result?: { ok: boolean; text: string } | null) {
+export function actionsRow(buttons: VNodeChild[], result?: { ok: boolean; text: string } | null) {
   return h('div', { class: 'sp-actions' }, [
     ...buttons,
     result && result.text
@@ -158,14 +159,14 @@ export function note(msg: string, ok: boolean) {
 /** 登录门（拒绝态）：品牌徽标 + 标题 + 说明 + 表单插槽，居中卡片。
  *  替代原先「空盒插画 + 满宽裸表单」的丑形态（2026-10-07）。 */
 export function loginGate(
-  opts: { brand: string; title: string; desc: string; children: unknown[] },
+  opts: { brand: string; title: string; desc: string; children: VNodeChild[] },
 ) {
   return h('div', { class: 'sp-login-gate' }, [
     h('div', { class: 'sp-section sp-login-box' }, [
-      h('div', { class: 'sp-login-brand' }, opts.brand),
-      h('h2', { style: 'margin:0 0 6px;font-size:18px' }, opts.title),
-      h('div', { class: 'sp-page-sub', style: 'margin-bottom:16px' }, opts.desc),
-      h('div', { style: 'display:flex;flex-direction:column;gap:10px' }, opts.children),
+    h('div', { class: 'sp-admin-login-badge' }, opts.brand),
+      h('h2', { class: 'sp-login-title' }, opts.title),
+      h('div', { class: 'sp-login-sub' }, opts.desc),
+      ...opts.children,
     ]),
   ])
 }

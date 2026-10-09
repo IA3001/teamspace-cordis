@@ -1,14 +1,14 @@
 // brain-llm —— 协调者大脑的**真 LLM 实现**（P8 下半场，2026-09-30）。
 //
-// 定位（用户拍板：本轮只给 coding 链接真 LLM）：LLM_API_KEY 等三件套齐时
+// 定位：文字模型 API 配置就绪时
 // 由本包注册大脑 —— 决策交给模型（NLP 判定授权），原始输出原样交给引擎的
 // 三级兜底解析（policy/space-authz，**零改动**）；调用失败抛 LlmError →
 // 引擎走既有 coordinator_error 暂停路径（不猜、不重试）。
 //
 // 与 brain-stub 互斥（确定性选择，铁律：两包永远至多注册一个大脑）：
-//   .env 三件套齐（LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）→ 本包注册、stub 让位；
-//   不齐 → 本包不注册、stub 上线。谓词与 stub 内 llmReady() 同源（同一批
-//   space-llm 环境变量常量），启动日志明示当前大脑（5172 日志页可见）。
+//   ctx.llm.configured 同时检查后台 settings、插件配置与 .env 回退；已配置时
+//   本包注册、stub 让位；未配置时本包不注册、stub 上线。日志只显示地址和
+//   模型 ID，不记录 API 凭据。
 //   本包 config.enabled=false → 无大脑（coordinator_unconfigured 安全默认）。
 //
 // 协调者系统提示（JSON 输出契约 + 授权名单 + 护栏语义）：先以常量驻本包
@@ -60,9 +60,9 @@ export function apply(ctx: Context, config: Config = {}) {
     ctx.logger.warn('[brain-llm] 已由配置停用（enabled=false）—— 协调者保持 coordinator_unconfigured，等待人类指示')
     return
   }
-  // 选择谓词与 brain-stub 的 llmReady() 同源（三件套齐 = 就绪）。
+  // 与 brain-stub 共用同一个 configured 谓词，确保任何配置来源都只选择一个大脑。
   if (!ctx.llm.configured) {
-    ctx.logger.info('[brain-llm] LLM 三件套未齐 —— 本包不注册大脑（确定性选择：无 key 则 brain-stub）')
+    ctx.logger.info('[brain-llm] 文字模型尚未配置 —— 本包不注册大脑（占位大脑保持启用）')
     return
   }
   const shownBase = ctx.settings.get<string>('llm.baseURL', '')?.trim() || process.env.LLM_BASE_URL || '(unset)'

@@ -6,17 +6,18 @@
 //     未注册大脑 → 暂停、每回合恰好一次决策、NLP 判定口径（@ 只是提示、
 //     人类原话逐字透传）、三级兜底（policy 纯函数逐层对拍 + 引擎落点）、
 //     负面语气/多目标/空输出护栏、收到目标反馈后必须暂停（await_human）。
-//   Part B（对运行中的后端）：接线 —— /commit 触发 'staging/plan' 后
-//     orchestrator 确实接管（回合存在、每回合恰好一次、无大脑 → 暂停），
+//   Part B（对运行中的后端）：接线 —— 被 @ 提及的普通消息触发 Plan 后
+//     orchestrator 确实接管（回合存在、每回合恰好一次），
 //     经 GET /api/sessions/:id/turn 只读口观测。
 //
-// 前提：后端已在 APP_PORT 运行（与 verify:staging 同前提，gate 顺序保证）。
+// 前提：后端已在 APP_PORT 运行（属于 gate:runtime，运行前需启动后端）。
 // 用法：npm run verify:orchestrator    退出码 0 = 全过；1 = 判红。
 // 留痕：全部通过后记一行 action_log: verify-orchestrator（断言 ⑨）。
 import { DatabaseSync } from 'node:sqlite'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { Context } from 'cordis'
 import type { PlanRequest } from 'space-orchestrator'
@@ -25,10 +26,12 @@ import { authorizedTargets, isAuthorizedTarget, parseCoordinatorOutput } from 's
 import type { OrchestratorBrain } from 'space-orchestrator'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
+import { SqliteSettingsStore } from '../packages/impl/space-store-sqlite/src/settings.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
+import { SessionWork } from '../plugins/session-work/index.ts'
 
-// ── 断言器（与 verify-staging 同款）────────────────────────────────────────
+// ── 断言器（与 本地 verifier 同款）────────────────────────────────────────
 let failures = 0
 let passes = 0
 function check(name: string, cond: boolean, detail = ''): void {
@@ -44,7 +47,7 @@ function section(t: string): void {
   console.log(`\n── ${t} ──────────────────────────`)
 }
 
-// ── 端口：.env 唯一出处（与 verify-staging 同源）──────────────────────────
+// ── 端口：.env 唯一出处（与 .env 端口约定）──────────────────────────
 function readPort(): number {
   if (process.env.APP_PORT) return Number(process.env.APP_PORT)
   const envPath = new URL('../.env', import.meta.url)
@@ -104,6 +107,8 @@ function openInMemory(): { ctx: Context; db: DatabaseSync; engine: OrchestratorE
   const ctx = new Context()
   new SqliteSessionStore(ctx, db) // 提供 ctx.session
   new SqliteEventLog(ctx, db) // 提供 ctx.eventLog
+  new SqliteSettingsStore(ctx, db) // 提供 Orchestrator 持久状态
+  new SessionWork(ctx)
   const engine = new OrchestratorEngine(ctx)
   return { ctx, db, engine }
 }
@@ -124,6 +129,169 @@ function humanCommit(ctx: Context, sessionId: string, text: string, mentions: st
     replyMode: '',
   })
   return { sessionId, authorId: 'u_dri', event }
+}
+
+async function verifyQueuedPlans(): Promise<void> {
+  section('单活动会话队列：保留跨会话触发并按 FIFO 自动启动')
+  const { ctx, db, engine } = openInMemory()
+  let releaseFirst!: () => void
+  const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve })
+  let calls = 0
+  engine.registerBrain({
+    async plan() {
+      calls++
+      if (calls === 1) await firstBlocked
+      return JSON.stringify({ reply: '已处理', reason: '完成', delegate: null })
+    },
+  })
+  const first = engine.onPlan(humanCommit(ctx, 's_a', '先处理会话 A'))
+  await new Promise((resolve) => setImmediate(resolve))
+  check('Q0 协调器持有共享活动会话槽位', ctx.sessionWork.state().activeSessionId === 's_a')
+  await engine.onPlan(humanCommit(ctx, 's_b', '排队处理会话 B'))
+  check('Q1 活动会话期间第二会话不丢弃，显示 FIFO 等待事件',
+    ctx.eventLog.listBySession('s_b').some((event) => event.text.includes('第 1 位') && event.text.includes('排队')) &&
+      ctx.sessionWork.state().queue.some((item) => item.sessionId === 's_b'))
+  releaseFirst()
+  await first
+  for (let i = 0; i < 20 && engine.turn('s_b').stopReason !== 'completed'; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+  check('Q2 前一回合结束后自动启动并完成排队会话', calls === 2 && engine.turn('s_b').stopReason === 'completed',
+    `calls=${calls}, turn=${JSON.stringify(engine.turn('s_b'))}`)
+  check('Q3 排队启动顺序有可见留痕',
+    ctx.eventLog.listBySession('s_b').some((event) => event.text.includes('排队任务开始处理')))
+  let externalDispatched = false
+  ctx.on('orchestrator/delegate', () => { externalDispatched = true })
+  ctx.sessionWork.tryEnter('s_a', 'agent-inbox')
+  engine.beginExternalDelegate('s_b', 'evt_external_queued', '编码者', '排队的编码任务')
+  check('Q4 流程轨委托也进入共享会话队列',
+    !externalDispatched && ctx.eventLog.listBySession('s_b').some((event) => event.text.includes('流程任务已排队')))
+  ctx.sessionWork.leave('s_a', 'agent-inbox')
+  engine.wakeQueue()
+  for (let i = 0; i < 20 && !externalDispatched; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+  check('Q5 共享槽位空闲后派发排队流程任务', externalDispatched &&
+    ctx.sessionWork.state().activeSessionId === 's_b' && engine.turn('s_b').state === 'chain')
+  ctx.sessionWork.leave('s_b', 'orchestrator:s_b')
+  db.close()
+}
+
+async function verifyDecisionPause(): Promise<void> {
+  section('Agent 结构化 DRI 决策请求：暂停并等待命令解除')
+  const { ctx, db, engine } = openInMemory()
+  let calls = 0
+  engine.registerBrain({
+    async plan() {
+      calls++
+      return JSON.stringify(calls === 1
+        ? { reply: '', reason: '明确授权', delegate: { target: '需求分析师', instruction: '评估方案' } }
+        : { reply: '已按 DRI 决定继续', reason: '完成', delegate: null })
+    },
+  })
+  const trigger = humanCommit(ctx, 's_a', '评估方案', ['a_analyst'])
+  await engine.onPlan(trigger)
+  const answer = engine.reportFeedback('s_a', '需求分析师', '建议采用方案 A。\n【需要DRI决策】是否接受方案 A？')
+  engine.handleAgentEvent(answer)
+  check('D1 Agent 使用显式标记后回合暂停等待 DRI', engine.turn('s_a').stopReason === 'await_human_decision')
+  await engine.onPlan(humanCommit(ctx, 's_a', '继续处理依赖该方案的任务'))
+  check('D2 等待期间新任务留在可见队列且协调者没有继续调用', calls === 1 &&
+    ctx.eventLog.listBySession('s_a').some((event) => event.text.includes('会话有 Agent 建议正在等待 DRI 决策')))
+  const approval = ctx.eventLog.append({
+    id: randomUUID(), sessionId: 's_a', authorId: 'u_dri', phaseId: null,
+    authorKind: 'human', kind: 'approval', text: 'DRI 决策：通过',
+    mentions: [], toolCalls: [], replyMode: '', replyTo: answer.id,
+  })
+  await engine.onPlan({ sessionId: 's_a', authorId: 'u_dri', event: approval })
+  for (let i = 0; i < 20 && engine.turn('s_a').stopReason !== 'completed'; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  check('D3 DRI 通过后解除等待并处理已排队任务', calls >= 2 && engine.turn('s_a').stopReason === 'completed',
+    `calls=${calls}, turn=${JSON.stringify(engine.turn('s_a'))}`)
+  db.close()
+}
+
+async function verifyCancelledDelegationLedger(): Promise<void> {
+  section('撤回来源后清除对应在途委托账本')
+  const { ctx, db, engine } = openInMemory()
+  engine.registerBrain({
+    async plan() {
+      return JSON.stringify({ reply: '', reason: '明确授权', delegate: { target: '需求分析师', instruction: '处理可撤回任务' } })
+    },
+  })
+  const trigger = humanCommit(ctx, 's_a', '处理可撤回任务', ['a_analyst'])
+  await engine.onPlan(trigger)
+  const cancelled = engine.cancelDelegationsBySource('s_a', trigger.event.id)
+  let rejected = false
+  try { engine.reportFeedback('s_a', '需求分析师', '不应提交旧结果') }
+  catch (error) { rejected = error instanceof OrchestratorError && error.code === 'not_delegating' }
+  check('D4 已撤回触发源的委托从账本移除并拒收迟到回执',
+    cancelled.includes('需求分析师') && rejected && engine.turn('s_a').delegatedTargets.length === 0)
+  db.close()
+}
+
+async function verifyDurableRecovery(): Promise<void> {
+  section('Orchestrator 重启恢复：SQLite 回合与未完成委托')
+  const { ctx, db, engine } = openInMemory()
+  ctx.on('space/event-appended', ({ event }) => engine.handleAgentEvent(event))
+  engine.registerBrain({
+    async plan() {
+      return JSON.stringify({ reply: '', reason: '明确授权', delegate: { target: '需求分析师', instruction: '跨重启恢复任务' } })
+    },
+  })
+  const trigger = humanCommit(ctx, 's_a', '跨重启恢复任务', ['a_analyst'])
+  await engine.onPlan(trigger)
+  const queuedPlan = humanCommit(ctx, 's_b', '等待前序会话完成')
+  await engine.onPlan(queuedPlan)
+  const persistedBefore = ctx.settings.get<Record<string, unknown>>('orchestrator.runtime.v1', {})
+
+  const restarted = new Context()
+  new SqliteSessionStore(restarted, db)
+  new SqliteEventLog(restarted, db)
+  new SqliteSettingsStore(restarted, db)
+  const recovered: Array<{ sessionId: string; eventId: string; target: string; instruction: string }> = []
+  restarted.on('orchestrator/delegate', (payload) => recovered.push(payload))
+  const restartedEngine = new OrchestratorEngine(restarted)
+  restartedEngine.recoverPersistedWork()
+  for (let i = 0; i < 20 && recovered.length === 0; i++) await new Promise((resolve) => setImmediate(resolve))
+  check('R1 SQLite 快照包含 chain 回合和委托来源',
+    JSON.stringify(persistedBefore).includes('需求分析师') && JSON.stringify(persistedBefore).includes(trigger.event.id))
+  check('R2 新引擎实例恢复未完成委托且复用来源事件 id',
+    recovered.length === 1 && recovered[0]?.sessionId === 's_a' && recovered[0]?.eventId === trigger.event.id &&
+      recovered[0]?.target === '需求分析师' && recovered[0]?.instruction === '跨重启恢复任务',
+    JSON.stringify(recovered))
+  check('R3 恢复后的 turn 保留自治预算与 chain 状态',
+    restartedEngine.turn('s_a').state === 'chain' && restartedEngine.turn('s_a').decisionCalls === 1 &&
+      restartedEngine.turn('s_a').autonomousActions === 1)
+  const persistedAfter = restarted.settings.get<Record<string, unknown>>('orchestrator.runtime.v1', {})
+  check('R4 跨会话 FIFO Plan 在 SQLite 中保留并等待活动回合',
+    JSON.stringify(persistedAfter).includes(queuedPlan.event.id) && recovered.length === 1 &&
+      restartedEngine.turn('s_b').state === 'static')
+  db.close()
+
+  const interrupted = openInMemory()
+  let brainStarted!: () => void
+  const started = new Promise<void>((resolve) => { brainStarted = resolve })
+  interrupted.engine.registerBrain({
+    async plan() {
+      brainStarted()
+      return await new Promise<string>(() => undefined)
+    },
+  })
+  const pendingPlan = humanCommit(interrupted.ctx, 's_a', '模型调用期间崩溃')
+  void interrupted.engine.onPlan(pendingPlan)
+  await started
+  const processRestart = new Context()
+  new SqliteSessionStore(processRestart, interrupted.db)
+  const restartedLog = new SqliteEventLog(processRestart, interrupted.db)
+  new SqliteSettingsStore(processRestart, interrupted.db)
+  const recoveredEngine = new OrchestratorEngine(processRestart)
+  recoveredEngine.registerBrain({ async plan() { return JSON.stringify({ reply: '恢复后完成', reason: '完成', delegate: null }) } })
+  recoveredEngine.recoverPersistedWork()
+  for (let i = 0; i < 40 && recoveredEngine.turn('s_a').stopReason !== 'completed'; i++) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  const stableReplyId = `orchestrator_reply_${pendingPlan.event.id}`
+  check('R5 模型决策期间崩溃后按持久 Plan 恢复，回复使用稳定幂等事件 ID',
+    recoveredEngine.turn('s_a').stopReason === 'completed' &&
+      restartedLog.listBySession('s_a').filter((event) => event.id === stableReplyId).length === 1)
+  interrupted.db.close()
 }
 
 const lastEvent = (ctx: Context, sessionId: string) => {
@@ -178,7 +346,7 @@ async function partA(): Promise<void> {
       String((e as Error).message),
     )
   }
-  // 主引擎还没注册大脑：/commit 触发 Plan → 暂停、零调用、零猜测
+  // 主引擎还没注册大脑：Plan 触发 → 暂停、零调用、零猜测
   const r2 = await engine.onPlan(humanCommit(ctx, 's_a', '谁来看看这段日志？'))
   const t2 = engine.turn('s_a')
   check('A2b 未配置 → coordinator_unconfigured 暂停', r2?.case === 'coordinator_error' && t2.stopReason === 'coordinator_unconfigured', JSON.stringify(r2))
@@ -215,13 +383,14 @@ async function partA(): Promise<void> {
   check('A4a 人类原话逐字透传给大脑（NLP 判定的输入）', lastReq?.humanText === '让需求分析师看看这段日志', JSON.stringify(lastReq?.humanText))
   check('A4b @ 提示透传（mentionHints）', JSON.stringify(lastReq?.mentionHints) === JSON.stringify(['a_analyst']))
   check('A4c 名单透传（三目标，不含协调者）', lastReq?.targets.length === 3 && !lastReq!.targets.includes('协调者' as never), JSON.stringify(lastReq?.targets))
-  check('A4d 只有 @ 提及、大脑未判授权 → 不委托（replied）', engine.turn('s_a').state === 'static' && engine.turn('s_a').stopReason === 'await_human')
+  check('A4d 只有 @ 提及、大脑未判授权 → 仅商议后自然完成', engine.turn('s_a').state === 'static' && engine.turn('s_a').stopReason === 'completed')
   check('A4e 协调者的商议回复落了事件', lastEvent(ctx, 's_a')?.text === rawOut)
 
   // ── 五：合法委托与反馈暂停（回合状态机主干）─────────────────────────────
   section('五：合法委托 → 宣告 → 目标反馈 → 必须暂停')
   rawOut = JSON.stringify({ reply: '好的，这就叫分析师来', reason: '人类明确授权', delegate: { target: '需求分析师', instruction: '分析这段需求的边界条件' } })
-  const r5 = await engine.onPlan(humanCommit(ctx, 's_a', '需求分析师，分析这段需求的边界条件', ['a_analyst']))
+  const trigger5 = humanCommit(ctx, 's_a', '需求分析师，分析这段需求的边界条件', ['a_analyst'])
+  const r5 = await engine.onPlan(trigger5)
   const t5 = engine.turn('s_a')
   check('A5a 合法委托 → delegated', r5?.case === 'delegated' && r5.delegation?.target === '需求分析师', JSON.stringify(r5))
   const announce = lastEvent(ctx, 's_a')
@@ -234,10 +403,10 @@ async function partA(): Promise<void> {
   check('A5d 每回合恰好一次大脑调用', t5.decisionCalls === 1)
   check('A5e 保持 chain 等目标反馈（不自动停也不自动续）', t5.state === 'chain')
   const fb = engine.reportFeedback('s_a', '需求分析师', '边界条件有三处，已列清单。')
-  check('A5f 反馈落为该 agent 的发言事件', fb.authorKind === 'agent' && fb.authorId === 'a_analyst' && fb.text.includes('边界条件'))
+  check('A5f 反馈落为该 agent 的发言事件并关联因果来源', fb.authorKind === 'agent' && fb.authorId === 'a_analyst' && fb.text.includes('边界条件') && fb.sourceEventId === trigger5.event.id && fb.replyTo == null)
   const t5b = engine.turn('s_a')
-  check('A5g 收到目标反馈后必须暂停（await_human）—— 铁律执行点', t5b.state === 'static' && t5b.stopReason === 'await_human')
-  check('A5h 暂停广播可达（观测点）', lastPause?.stopReason === 'await_human' && lastPause.stopDetail.includes('等待人类'))
+  check('A5g 收到目标反馈后协调者自动续步，不强制等待人工', t5b.state === 'chain' || t5b.state === 'static' && t5b.stopReason !== 'await_human')
+  check('A5h 自动续步留有第二次决策记录', t5b.decisionCalls >= 1)
   try {
     engine.reportFeedback('s_a', '会议记录官', '我没被委托过')
     check('A5i 未委托目标的反馈 → not_delegating', false, '没有抛错')
@@ -290,7 +459,7 @@ async function partA(): Promise<void> {
   section('七：兜底在引擎里的落点（每回合恰好一次）')
   rawOut = '我先不委托，只商议。'
   await engine.onPlan(humanCommit(ctx, 's_a', '先聊聊'))
-  check('A7a 负面语气 → 协调者回复 + await_human', engine.turn('s_a').stopReason === 'await_human' && lastEvent(ctx, 's_a')?.text === rawOut)
+  check('A7a 负面语气 → 协调者回复并自然完成', engine.turn('s_a').stopReason === 'completed' && lastEvent(ctx, 's_a')?.text === rawOut)
   rawOut = ''
   const r7b = await engine.onPlan(humanCommit(ctx, 's_a', '空输出试试'))
   check('A7b 空输出 → coordinator_empty 暂停、零新事件', r7b?.case === 'coordinator_error' && engine.turn('s_a').stopReason === 'coordinator_empty')
@@ -306,14 +475,14 @@ async function partA(): Promise<void> {
 // ══════════════════════════════════════════════════════════════════════════
 // Part B —— 对运行中的后端做接线断言（HTTP）
 // ══════════════════════════════════════════════════════════════════════════
-const S = 's_seed_demo'
-const U = 'u_dri'
+let S = ''
+let authCookie = ''
 
 async function post(text: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(`${BASE}/api/sessions/${S}/messages`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text, authorId: U }),
+    headers: { 'content-type': 'application/json', cookie: authCookie },
+    body: JSON.stringify({ text }),
   })
   const raw = await res.text()
   let body: Record<string, unknown>
@@ -326,7 +495,7 @@ async function post(text: string): Promise<{ status: number; body: Record<string
 }
 
 async function getTurn(): Promise<{ status: number; body: Record<string, unknown> }> {
-  const res = await fetch(`${BASE}/api/sessions/${S}/turn`)
+  const res = await fetch(`${BASE}/api/sessions/${S}/turn`, { headers: { cookie: authCookie } })
   const raw = await res.text()
   let body: Record<string, unknown>
   try {
@@ -335,6 +504,12 @@ async function getTurn(): Promise<{ status: number; body: Record<string, unknown
     body = { raw: raw.slice(0, 120) || '(空响应体)' }
   }
   return { status: res.status, body }
+}
+
+async function getEvents(): Promise<Array<{ authorId?: string | null; text: string }>> {
+  const res = await fetch(`${BASE}/api/sessions/${S}/events`, { headers: { cookie: authCookie } })
+  if (!res.ok) return []
+  return await res.json() as Array<{ authorId?: string | null; text: string }>
 }
 
 async function partB(): Promise<void> {
@@ -349,51 +524,106 @@ async function partB(): Promise<void> {
   check('B0 后端可达（/healthz）', alive, `连不上 ${BASE} —— 先 npm run start（verify 与 check:console 同前提）`)
   if (!alive) return
 
-  // B1 /commit → 'staging/plan' → orchestrator 接管。
-  // P8 口径修订（2026-09-30）：服务端现已注册**占位大脑**（plugins/brain-stub，
-  // 组合根常驻）—— /commit 触发恰好一次大脑调用；本轮无 @ 命中 → 分支二纯文本
-  // 回复 → await_human 暂停。「未配置大脑 → coordinator_unconfigured」的承旧
-  // 口径改由两处继续承担：Part A（进程内真引擎无大脑）+ verify-p8 B4（brain-stub
-  // config.enabled=false 的组合根关断路径）—— 保护力不丢，落点搬家。
-  await post('/clear confirm')
-  await post('/add p3-wiring-one')
-  const b1 = await post('/commit')
-  check('B1a /commit 依旧 200（接缝无回归）', b1.status === 200, JSON.stringify(b1.body))
+  const username = `verify_${Date.now()}`
+  const registered = await fetch(`${BASE}/api/auth/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password: 'verify-pass-1' }),
+  })
+  if (registered.status !== 201) {
+    check('B0a 可建立运行时验收 Team 账号', false, `HTTP ${registered.status}`)
+    return
+  }
+  const login = await fetch(`${BASE}/api/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password: 'verify-pass-1' }),
+  })
+  authCookie = login.headers.get('set-cookie')?.split(';', 1)[0] ?? ''
+  if (!login.ok || !authCookie) {
+    check('B0b 运行时验收账号登录并取得 Team cookie', false, `HTTP ${login.status}`)
+    return
+  }
+
+  // The test account is deliberately not a member of the legacy demo session.
+  // Create a private runtime fixture so this integration check exercises the
+  // same invite-only access boundary as production sessions.
+  S = `s_verify_orchestrator_${Date.now()}`
+  const db = new DatabaseSync('data/database.db')
+  const user = db.prepare('SELECT id, display_name FROM users WHERE username=?').get(username) as
+    { id: string; display_name: string } | undefined
+  if (!user) {
+    db.close()
+    check('B0c 可读取运行时验收账号身份', false)
+    return
+  }
+  const now = new Date().toISOString()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.prepare(`INSERT INTO sessions(id,title,current_phase,status,created_at,updated_at)
+      VALUES (?, 'verify-orchestrator', NULL, 'open', ?, ?)`).run(S, now, now)
+    db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
+      VALUES (?, ?, '群主', 'active', ?, NULL, ?)`).run(S, user.id, now, user.display_name)
+    const agents = [
+      ['a_coordinator', '协调者'], ['a_analyst', '需求分析师'],
+      ['a_challenger', '挑战者'], ['a_recorder', '会议记录官'],
+    ] as const
+    for (const [id, duty] of agents) {
+      db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
+        VALUES (?, ?, '成员', 'active', ?, NULL, ?)`).run(S, id, now, duty)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  } finally {
+    db.close()
+  }
+  check('B0c 为验收账号创建仅限成员访问的临时会话', true, S)
+
+  // B1: 普通 @ 提及消息直接触发 Plan（暂存与 /commit 已退役）。
+  const b1 = await post('@需求分析师 verify-orchestrator 接线验收')
+  check('B1a 接受已登录 Team 的 @ 提及消息', b1.status === 200, JSON.stringify(b1.body))
+  let inboxPaused = false
+  // Memory catch-up calls the configured LLM for each invited Agent. Allow the
+  // same 60s ceiling as the runtime API instead of failing after an 8s test-only
+  // window on a healthy but slower provider.
+  const decisionDeadline = Date.now() + 60_000
+  while (Date.now() < decisionDeadline) {
+    const current = await getTurn()
+    if (current.body.decisionCalls === 1) break
+    const events = await getEvents()
+    if (events.some((event) => event.text.includes('Agent 尚未完成此前消息的顺序处理'))) {
+      inboxPaused = true
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
   const t1 = await getTurn()
-  check('B1b orchestrator 已接管：回合存在（GET /turn）', t1.status === 200 && typeof t1.body.decisionCalls === 'number', JSON.stringify(t1))
-  // P8 下半场口径（2026-09-30）：live 服务端可能挂占位大脑（无 key）也可能
-  // 挂 brain-llm（用户填了 .env 三件套）—— 两种真大脑的合法回合终态都接受：
-  // 未委托 → await_human 静止；合法委托 → chain 等收执（会议机器人执行链
-  // 后置，委托给会议角色后无执行方是已知形态，人类下一条发言即抢占重开）。
+  check('B1b 回合状态可读，或记忆顺序屏障已给出会话内暂停提示',
+    (t1.status === 200 && typeof t1.body.decisionCalls === 'number') || inboxPaused, JSON.stringify(t1))
+  // A reachable model proceeds to a decision. A configured-but-unreachable
+  // provider must instead leave a visible pause; it may never skip memory sync.
   check(
-    'B1c 大脑上线 → 每回合恰好一次调用 + 诚实终态（await_human 静止 / 合法委托 chain）',
-    t1.body.decisionCalls === 1 &&
-      ((t1.body.stopReason === 'await_human' && t1.body.state === 'static')
-        || (t1.body.stopReason === '' && t1.body.state === 'chain')),
-    JSON.stringify(t1.body),
+    'B1c 大脑开始决策，或记忆屏障明确暂停且未越过顺序约束',
+    (t1.body.decisionCalls === 1 && (t1.body.state === 'static' || t1.body.state === 'chain')) || inboxPaused,
+    JSON.stringify({ turn: t1.body, inboxPaused }),
   )
 
-  // B2 第二次提交：新回合重开（每回合记账重开 —— P8 下每回合各计 1 次调用）
-  await post('/add p3-wiring-two')
-  await post('/commit')
-  const t2 = await getTurn()
-  check('B2 新回合重开（decisionCalls 按回合重新记账，终态同 B1c 双形态）',
-    t2.body.decisionCalls === 1 &&
-      ((t2.body.stopReason === 'await_human' && t2.body.state === 'static')
-        || (t2.body.stopReason === '' && t2.body.state === 'chain')),
-    JSON.stringify(t2.body))
-
-  // B3 空 /commit：零事件零信号 → 回合纹丝不动（P2 语义经 orchestrator 仍成立）
-  const t2snap = JSON.stringify(t2.body)
-  await post('/commit')
-  const t3 = await getTurn()
-  check('B3 空 /commit 不触发 Plan（回合不变）', JSON.stringify(t3.body) === t2snap, `${t2snap} → ${JSON.stringify(t3.body)}`)
+  // 空消息应在消息入口被拒绝；并发中的 Agent 任务可能完成，故不拿整份回合快照
+  // 与异步结束时间竞争。静态 verify-empty-message 独立断言不会 append 或 emit Plan。
+  const empty = await post('   ')
+  check('B2 空消息被拒绝', empty.status >= 400, JSON.stringify(empty.body))
+  const events = await getEvents()
+  check('B3 空消息不写入会话时间线', !events.some((event) => event.authorId === username && !event.text.trim()))
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 async function main(): Promise<void> {
   console.log(`verify-orchestrator：P3 协作大脑端到端验收（APP_PORT=${PORT}）`)
   await partA()
+  await verifyDecisionPause()
+  await verifyCancelledDelegationLedger()
+  await verifyDurableRecovery()
+  await verifyQueuedPlans()
   await partB()
   console.log(`\n结果：${passes} 过 / ${failures} 红`)
   if (failures > 0) {

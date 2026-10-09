@@ -33,6 +33,12 @@ export interface MemoryItem {
   weight: number
   /** 写入者 principal id（审计）。 */
   authorId: string | null
+  /** 产生此记忆的会话事件；用于撤回时定位并失效派生记忆。 */
+  sourceEventId: string | null
+  /** 记忆综合使用的全部来源事件；sourceEventId 是兼容的主要来源。 */
+  sourceEventIds: string[]
+  /** 有任一来源被撤回时的失效时间；失效记录保留用于审计，不再召回。 */
+  invalidatedAt: string | null
   createdAt: string
 }
 
@@ -74,6 +80,8 @@ export abstract class MemoryService extends Service {
   abstract remember(scope: string, kind: string, text: string, opts?: {
     weight?: number
     authorId?: string | null
+    sourceEventId?: string | null
+    sourceEventIds?: string[]
   }): Promise<MemoryItem>
 
   /** 按近因 + 重要性召回某 scope 的记忆（上下文注入层的主入口）。 */
@@ -84,4 +92,10 @@ export abstract class MemoryService extends Service {
 
   /** 遗忘一条记忆（幂等）。 */
   abstract forget(id: string): Promise<void>
+
+  /** 使指定源事件派生的记忆失效；用于撤回/纠错的因果清理。 */
+  abstract forgetBySource(sourceEventId: string): Promise<number>
+
+  /** 使来源记忆失效并返回带完整来源链的审计快照，供有效来源重建使用。 */
+  abstract invalidateBySource(sourceEventId: string): Promise<MemoryItem[]>
 }

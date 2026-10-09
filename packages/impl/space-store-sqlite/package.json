@@ -6,13 +6,17 @@
   "description": "impl：ctx.session / ctx.eventLog / ctx.staging / ctx.prompts 的 sqlite 后端 —— 迁移链（DDL 唯一出处）+ seed/reset + model 注册（5172 数据库页展示）",
   "main": "src/index.ts",
   "dependencies": {
+    "space-agent-catalog": "*",
     "space-event": "*",
+    "space-admin-auth": "*",
     "space-kb": "*",
     "space-identity": "*",
     "space-memory": "*",
     "space-prompt": "*",
     "space-session": "*",
-    "space-staging": "*"
+    "space-staging": "*",
+    "space-sandbox-approval": "*",
+    "space-session-work": "*"
   },
   "peerDependencies": {
     "@cordisjs/plugin-database": "^4.1.1",

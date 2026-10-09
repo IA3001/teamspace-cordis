@@ -1,131 +1,200 @@
-// space-client-ui-admin —— 账号管理页（2026-10-01 新增包）。
-//
-// 入驻：挂在 **5172 调试控制台**（与插件/日志/数据库页同一外壳）。routes
-// ['/admin']；不走 HTTP —— 全部数据方法走 webui RPC（像 sessions 包）。
-//
-// ⚠ isolate 拍板（先 Read 确认过）：debug-webui（@cordisjs/plugin-webui，
-// server: debug，端口 5172）的 isolate 只写了 { server: debug } —— 它提供的
-// webui 是**无名默认实例**；teampspace 那套才显式命名 webui: teamspace。
-// debug-loader-webui / debug-logger-webui / debug-database-webui 都是**不写
-// isolate** 直接消费这个无名 webui 才出现在 5172 控制台。所以本包注册行
-// 同样**不写 isolate**（写 webui: debug 反而找不到同名 webui 服务）。
-//
-// 权限口径：所有 data 方法首参 token（localStorage 'space_token'），
-// verifyToken 成功且 isAdmin 才放行；非管理员统一返回 null（前端据此出
-// 「需要管理员权限」空态）。写操作 IdentityError 被 catch 成 { error, detail }
-// 结构化返回，前端展示在页首 alert。
+// 后台入口：独立 Admin session；所有 RPC 首参必须是 admin token。
 import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
-import type { PublicUser } from 'space-identity'
+import type {} from '@cordisjs/plugin-loader'
+import type { Entry } from '@cordisjs/plugin-loader'
 import { IdentityError } from 'space-identity'
+import type { TeamRole } from 'space-identity'
+import { AdminAuthError } from 'space-admin-auth'
+import type { AdminPrincipal } from 'space-admin-auth'
+import type {} from 'space-sandbox-approval'
 
 export const name = 'space-client-ui-admin'
-// users 是 ctx.users（space-store-sqlite 提供）—— RPC 数据函数里摸到的
-// 每个服务都要进 inject（P4 教训）。
-export const inject = ['webui', 'users', 'settings']
+export const inject = ['webui', 'users', 'settings', 'adminAuth', 'sandboxApproval', 'sandboxApprovalDelivery', 'llm', 'embeddings', 'loader']
 
-/** token → PublicUser；无效返回 null（不抛，RPC 层零异常面）。 */
-async function auth(ctx: Context, token: string): Promise<PublicUser | null> {
-  try {
-    return await ctx.users.verifyToken(String(token ?? ''))
-  } catch {
-    return null
-  }
+async function auth(ctx: Context, token: string): Promise<AdminPrincipal | null> {
+  try { return await ctx.adminAuth.verifyToken(String(token ?? '')) }
+  catch { return null }
+}
+function fail(e: unknown): { error: string; detail: string } {
+  if (e instanceof IdentityError || e instanceof AdminAuthError) return { error: e.code, detail: e.message }
+  return { error: 'internal', detail: e instanceof Error ? e.message : String(e) }
+}
+function saveApi(ctx: Context, prefix: string, cfg: { baseURL?: string; model?: string; apiKey?: string }) {
+  if (typeof cfg.baseURL === 'string') ctx.settings.set(`${prefix}.baseURL`, cfg.baseURL.trim())
+  if (typeof cfg.model === 'string') ctx.settings.set(`${prefix}.model`, cfg.model.trim())
+  if (cfg.apiKey === '-') ctx.settings.set(`${prefix}.apiKey`, undefined)
+  else if (typeof cfg.apiKey === 'string' && cfg.apiKey.trim()) ctx.settings.set(`${prefix}.apiKey`, cfg.apiKey.trim())
+}
+function audit(ctx: Context, adminId: string, action: string, target: string) {
+  ctx.logger.info('[admin-audit] admin=%s action=%s target=%s', adminId, action, target)
 }
 
-/** IdentityError → { error, detail } 结构化失败（前端 alert 直接展示）。 */
-function fail(e: unknown): { error: string; detail: string } {
-  if (e instanceof IdentityError) return { error: e.code, detail: e.message }
-  return { error: 'internal', detail: e instanceof Error ? e.message : String(e) }
+function safeConfig(value: unknown, key = ''): unknown {
+  if (/(secret|password|token|api.?key|credential|private.?key)/i.test(key)) {
+    return value ? '已配置（已隐藏）' : '未配置'
+  }
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value
+  if (Array.isArray(value)) return value.map((item) => safeConfig(item))
+  if (typeof value === 'object') {
+    if ('__jsExpr' in value) return '动态配置（启动时求值）'
+    return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, safeConfig(child, childKey)]))
+  }
+  return String(value)
+}
+
+function pluginStatus(entry: Entry): string {
+  if (entry.disabled) return '配置停用'
+  if (!entry.fiber) return '未加载'
+  if (entry.fiber.state === 2) return '运行中'
+  return '已加载，未就绪'
 }
 
 export function apply(ctx: Context) {
-  ctx.webui.addEntry(
-    {
-      baseUrl: import.meta.url,
-      source: '../client/index.ts', // 开发态用 —— 我们不启用（A2 构建口径）
-      manifest: '../dist/manifest.json', // 生产态用 —— 只走这条
-      routes: ['/admin'],
+  ctx.webui.addEntry<Record<string, (...args: any[]) => unknown>>({
+    baseUrl: import.meta.url,
+    source: '../client/index.ts',
+    manifest: '../dist/manifest.json',
+    routes: ['/admin'],
+  }, {
+    async me(token: string) { return auth(ctx, token) },
+    async login(username: string, password: string) {
+      try {
+        const grant = await ctx.adminAuth.login(username, password)
+        return { user: await ctx.adminAuth.verifyToken(grant.token), token: grant.token }
+      } catch (e) { return fail(e) }
     },
-    {
-      /** 当前登录用户（verifyToken）；页面据此判断 isAdmin。 */
-      async me(token: string) {
-        return auth(ctx, token)
-      },
-
-      /** 全部用户（human + agent）。仅管理员。 */
-      /** 登录（/admin 内置登录表单用 —— 5172 无登录页，拒绝态就地登录）。 */
-      async login(username: string, password: string) {
-        try {
-          const grant = await ctx.users.login(username, password)
-          const user = await ctx.users.verifyToken(grant.token)
-          return { user, token: grant.token }
-        } catch (e) {
-          const err = e as { code?: string; message?: string; name?: string }
-          return { error: err.code ?? 'login_failed', detail: err.message ?? '登录失败' }
-        }
-      },
-      /** 团队空间页端口（5174，拒绝态引导跳登录用）。 */
-      async uiPort(token: string) {
-        const u = await auth(ctx, token).catch(() => null)
-        return u ? Number(process.env.TEAMSPACE_PORT ?? 5174) : null
-      },
-      async users(token: string) {
-        const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
-        return ctx.users.listAll()
-      },
-
-      /** 重置密码。仅管理员；IdentityError → { error, detail }。 */
-      async resetPassword(token: string, userId: string, password: string) {
-        const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
-        try {
-          await ctx.users.resetPassword(String(userId), String(password))
-          return { ok: true }
-        } catch (e) {
-          return fail(e)
-        }
-      },
-
-      /** 设/撤管理员（禁止自降逻辑在服务端已做）。仅管理员。 */
-      async setAdmin(token: string, userId: string, v: boolean) {
-        const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
-        try {
-          await ctx.users.setAdmin(String(userId), Boolean(v))
-          return { ok: true }
-        } catch (e) {
-          return fail(e)
-        }
-      },
-
-      /** 读注册开关（settings auth.registerEnabled；缺省 true）。 */
-      async getRegisterEnabled(token: string) {
-        const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
-        return { enabled: ctx.settings.get<boolean>('auth.registerEnabled', true) }
-      },
-
-      /** 设注册开关（仅管理员）。 */
-      async setRegisterEnabled(token: string, v: boolean) {
-        const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
-        ctx.settings.set('auth.registerEnabled', Boolean(v))
-        return { ok: true }
-      },
-
-      /** 删除账号。仅管理员。 */
-      async removeUser(token: string, userId: string) {
-        const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
-        try {
-          await ctx.users.removeUser(String(userId))
-          return { ok: true }
-        } catch (e) {
-          return fail(e)
-        }
-      },
+    async logout(token: string) { try { await ctx.adminAuth.logout(token) } catch { /* idempotent */ } return { ok: true } },
+    async users(token: string) {
+      if (!(await auth(ctx, token))) return null
+      return ctx.users.listAll()
     },
-  )
+    async plugins(token: string) {
+      if (!(await auth(ctx, token))) return null
+      return [...ctx.loader.entries()].map((entry) => ({
+        id: entry.options.id,
+        name: entry.options.name,
+        status: pluginStatus(entry),
+        config: safeConfig(entry.options.config ?? {}),
+      })).sort((a, b) => a.id.localeCompare(b.id))
+    },
+    async createUser(token: string, input: { username: string; password: string; displayName?: string; teamRole: TeamRole }) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      try {
+        const user = await ctx.users.register(
+          String(input.username ?? ''), String(input.password ?? ''),
+          String(input.displayName ?? ''), input.teamRole,
+        )
+        audit(ctx, admin.id, 'create_team_user', `${user.id}:${user.teamRole ?? input.teamRole}`)
+        return { ok: true, user }
+      } catch (e) { return fail(e) }
+    },
+    async resetPassword(token: string, userId: string, password: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      try { await ctx.users.resetPassword(String(userId), String(password)); audit(ctx, admin.id, 'reset_team_password', String(userId)); return { ok: true } }
+      catch (e) { return fail(e) }
+    },
+    async getRegisterEnabled(token: string) {
+      if (!(await auth(ctx, token))) return null
+      return { enabled: ctx.settings.get<boolean>('auth.registerEnabled', true) }
+    },
+    async setRegisterEnabled(token: string, value: boolean) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      ctx.settings.set('auth.registerEnabled', Boolean(value))
+      audit(ctx, admin.id, 'set_registration', String(Boolean(value)))
+      return { ok: true }
+    },
+    async removeUser(token: string, userId: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      try { await ctx.users.removeUser(String(userId)); audit(ctx, admin.id, 'remove_team_user', String(userId)); return { ok: true } }
+      catch (e) { return fail(e) }
+    },
+    async getApiConfig(token: string) {
+      if (!(await auth(ctx, token))) return null
+      const shape = (prefix: string) => {
+        const key = ctx.settings.get<string>(`${prefix}.apiKey`, '')
+        return { baseURL: ctx.settings.get<string>(`${prefix}.baseURL`, ''), model: ctx.settings.get<string>(`${prefix}.model`, ''), hasKey: Boolean(key), keyTail: key ? key.slice(-4) : '' }
+      }
+      return {
+        text: { ...shape('llm'), timeoutMs: ctx.settings.get<number>('llm.timeoutMs', 60000) },
+        embedding: shape('embed'),
+        webSearch: { ...shape('search'), model: '' },
+        status: { text: ctx.llm.configured, embedding: ctx.embeddings.configured },
+      }
+    },
+    async saveTextApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string; timeoutMs?: number }) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      saveApi(ctx, 'llm', cfg)
+      if (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0) ctx.settings.set('llm.timeoutMs', Math.floor(cfg.timeoutMs))
+      audit(ctx, admin.id, 'save_api_config', 'text')
+      return { ok: true }
+    },
+    async saveEmbeddingApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      saveApi(ctx, 'embed', cfg)
+      audit(ctx, admin.id, 'save_api_config', 'embedding')
+      return { ok: true }
+    },
+    async saveWebSearchApi(token: string, cfg: { baseURL?: string; apiKey?: string }) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      saveApi(ctx, 'search', cfg)
+      audit(ctx, admin.id, 'save_api_config', 'web_search')
+      return { ok: true }
+    },
+    async testTextApi(token: string) {
+      if (!(await auth(ctx, token))) return null
+      const started = Date.now()
+      try {
+        const answer = await ctx.llm.chat([{ role: 'user', content: 'ping，只回复 pong' }], { timeoutMs: 20000 })
+        return { ok: true, detail: `连通正常（${Date.now() - started}ms）：${answer.slice(0, 80)}` }
+      } catch (e) { return { ok: false, ...fail(e) } }
+    },
+    async testEmbeddingApi(token: string) {
+      if (!(await auth(ctx, token))) return null
+      const started = Date.now()
+      try {
+        const vector = await ctx.embeddings.embed(['连通测试'])
+        return { ok: true, detail: `连通正常（${Date.now() - started}ms）：${vector[0]?.length ?? 0} 维` }
+      } catch (e) { return { ok: false, ...fail(e) } }
+    },
+    async testWebSearchApi(token: string) {
+      if (!(await auth(ctx, token))) return null
+      const baseURL = ctx.settings.get<string>('search.baseURL', '').trim().replace(/\/$/, '')
+      const apiKey = ctx.settings.get<string>('search.apiKey', '').trim()
+      if (!baseURL || !apiKey) return { ok: false, error: 'not_configured', detail: '请先保存网页搜索 API 地址和密钥' }
+      try {
+        const response = await fetch(`${baseURL}/search`, {
+          method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ query: 'Teamspace API connectivity check', max_results: 1 }),
+          signal: AbortSignal.timeout(15000),
+        })
+        return response.ok
+          ? { ok: true, detail: `网页搜索 API 连通正常（HTTP ${response.status}）` }
+          : { ok: false, error: 'search_http_error', detail: `网页搜索 API 返回 HTTP ${response.status}` }
+      } catch (e) { return { ok: false, error: 'search_unreachable', detail: e instanceof Error ? e.message : '请求失败' } }
+    },
+    async sandboxApprovals(token: string) {
+      if (!(await auth(ctx, token))) return null
+      return ctx.sandboxApproval.list()
+    },
+    async decideSandboxApproval(token: string, id: string, decision: 'approved' | 'rejected', note = '') {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      try {
+        const request = ctx.sandboxApproval.get(String(id))
+        let deliveryPath: string | undefined
+        if (decision === 'approved') deliveryPath = (await ctx.sandboxApprovalDelivery.deliver(request)).relativePath
+        const resolved = ctx.sandboxApproval.decide(String(id), decision, admin.id, String(note), deliveryPath)
+        audit(ctx, admin.id, `sandbox_request_${decision}`, `${resolved.id}:${resolved.agentId}`)
+        return { ok: true, request: resolved }
+      } catch (e) { return fail(e) }
+    },
+  })
 }

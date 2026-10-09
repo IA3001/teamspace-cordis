@@ -19,6 +19,8 @@ declare module 'cordis' {
   interface Events {
     /** 任何事件落库后恰好一次（人类消息 / agent 消息 / 系统事件同源）。 */
     'space/event-appended'(this: Context, payload: { event: SessionEvent }): void
+    /** Ephemeral typing indicator routed only to active members by the Teamspace push adapter. */
+    'space/typing'(this: Context, payload: { sessionId: string; name: string }): void
     /**
      * 人类消息直达时间线后发出（IM 化后的 AI 触发源，替代「暂存→/commit」
      * 的 staging/plan 成为默认路径；staging/plan 仍随 /commit 发出，双轨兼容）。
@@ -34,6 +36,12 @@ export interface PlanSignal {
   /** 服务端按在册成员解析出的 @ 目标（空数组 = 纯聊天，不打扰 AI）。 */
   mentions: string[]
   event: SessionEvent
+}
+
+export interface MessageMetadata {
+  /** Direct human @ trigger; used to classify a passive Agent reply. */
+  sourceEventId?: string | null
+  sourceEventIds?: string[]
 }
 
 /** 自治回合的收敛语义（orchestrator 的 StopReason 同步扩充）。 */
@@ -76,5 +84,6 @@ export abstract class MessageService extends Service {
     text: string,
     mentions?: string[],
     replyTo?: string | null,
+    metadata?: MessageMetadata,
   ): Promise<SessionEvent>
 }

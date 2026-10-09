@@ -14,15 +14,15 @@
 //   4. 自治预算：settings 键 agent.autonomyBudget（orchestrator 每次闸门
 //      现读，改完即生效）。
 //
-// 权限口径：所有 data 方法首参 token，verifyToken 成功且 isAdmin 才放行。
+// 权限口径：所有 data 方法首参独立 Admin token；Team 用户凭证无权访问。
 import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
-import type { PublicUser } from 'space-identity'
-import { IdentityError } from 'space-identity'
+import type { AdminPrincipal } from 'space-admin-auth'
+import { AdminAuthError } from 'space-admin-auth'
 import type { DelegatePayload } from 'space-orchestrator'
 
 export const name = 'space-client-ui-agents'
-export const inject = ['webui', 'users', 'agents', 'prompts', 'settings', 'llm', 'session', 'messages', 'orchestrator']
+export const inject = ['webui', 'users', 'agents', 'prompts', 'settings', 'llm', 'session', 'messages', 'orchestrator', 'adminAuth']
 
 /** 自定义 Agent：职责是**自由文本**（完全可定制），入会角色固定「成员」，
  *  授权走标题（orchestrator 把自定义标题并入授权名单，2026-10-07）。 */
@@ -77,18 +77,18 @@ function activateCustom(ctx: Context, a: CustomAgent) {
   }
 }
 
-/** token → PublicUser；无效返回 null（不抛，RPC 层零异常面）。 */
-async function auth(ctx: Context, token: string): Promise<PublicUser | null> {
+/** token → Admin principal；无效返回 null（不抛，RPC 层零异常面）。 */
+async function auth(ctx: Context, token: string): Promise<AdminPrincipal | null> {
   try {
-    return await ctx.users.verifyToken(String(token ?? ''))
+    return await ctx.adminAuth.verifyToken(String(token ?? ''))
   } catch {
     return null
   }
 }
 
-/** IdentityError → { error, detail } 结构化失败（前端直接展示）。 */
+/** AdminAuthError → { error, detail } 结构化失败（前端直接展示）。 */
 function fail(e: unknown): { error: string; detail: string } {
-  if (e instanceof IdentityError) return { error: e.code, detail: e.message }
+  if (e instanceof AdminAuthError) return { error: e.code, detail: e.message }
   return { error: 'internal', detail: e instanceof Error ? e.message : String(e) }
 }
 
@@ -106,7 +106,7 @@ export function apply(ctx: Context) {
       routes: ['/agents'],
     },
     {
-      /** 当前登录用户（verifyToken）；页面据此判断 isAdmin。 */
+      /** 当前 Admin session。 */
       async me(token: string) {
         return auth(ctx, token)
       },
@@ -114,7 +114,7 @@ export function apply(ctx: Context) {
       /** 登录（拒绝态就地登录用）。 */
       async login(username: string, password: string) {
         try {
-          const grant = await ctx.users.login(username, password)
+          const grant = await ctx.adminAuth.login(username, password)
           return { token: grant.token }
         } catch (e) {
           const err = e as { code?: string; message?: string }
@@ -125,7 +125,7 @@ export function apply(ctx: Context) {
       /** 名册 + 提示词 + 预算 + LLM 可用性（一次拉全，页面单请求渲染）。 */
       async getConfig(token: string) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const s = ctx.settings
         return {
           roster: ctx.agents.list().map((a) => ({
@@ -149,7 +149,7 @@ export function apply(ctx: Context) {
       /** upsert 提示词模板（整体替换 title/body；ref 幂等）。 */
       async savePrompt(token: string, ref: string, title: string, body: string) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         if (!ref.trim() || !title.trim() || !body.trim()) {
           return { error: 'empty_field', detail: 'ref / 标题 / 正文都不能为空' }
         }
@@ -164,7 +164,7 @@ export function apply(ctx: Context) {
       /** per-agent promptRef 重定向（空串 = 清除重定向，回描述符缺省）。 */
       async saveAgentPrompt(token: string, agentId: string, promptRef: string) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const key = `agent.${String(agentId)}.promptRef`
         if (!String(promptRef).trim()) {
           ctx.settings.set(key, undefined)
@@ -183,7 +183,7 @@ export function apply(ctx: Context) {
       /** 新建自定义会议 Agent（A-反馈①）：id 自动生成，入全部 open 会话。 */
       async createAgent(token: string, cfg: { title: string; roleLabel?: string; promptRef?: string }) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const title = String(cfg.title ?? '').trim()
         const roleLabel = String(cfg.roleLabel ?? '').trim().slice(0, 60)
         if (!title) return { error: 'empty_title', detail: '标题不能为空（标题即 @ 目标，请用独特命名）' }
@@ -208,7 +208,7 @@ export function apply(ctx: Context) {
       /** 删除自定义会议 Agent（退会 + 注销 + 移除持久化）。 */
       async removeAgent(token: string, id: string) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const custom = listCustom(ctx)
         const a = custom.find((x) => x.id === String(id))
         if (!a) return { error: 'not_found', detail: '只支持删除在此页创建的自定义 Agent' }
@@ -224,7 +224,7 @@ export function apply(ctx: Context) {
       /** 自治预算（>0 生效；0 = 回启动 Config 缺省）。 */
       async saveBudget(token: string, budget: number) {
         const me = await auth(ctx, token)
-        if (!me?.isAdmin) return null
+        if (!me) return null
         const n = Math.floor(Number(budget))
         if (!Number.isFinite(n) || n < 0 || n > 50) {
           return { error: 'invalid_budget', detail: '预算需在 0–50 之间（0 = 用缺省 8）' }

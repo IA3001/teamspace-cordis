@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "client-ui：登录/注册页（/login）。走 HTTP /api/auth/*（cookie 会话），成功写 localStorage 'space_token' 后跳 /teamspace",
+  "description": "client-ui：团队登录/注册页（/login），通过 WebUI RPC 完成 Team 身份认证并进入 /teamspace",
   "main": "src/index.ts",
   "dependencies": {
     "space-ui": "*"

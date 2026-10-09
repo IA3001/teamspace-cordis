@@ -11,12 +11,17 @@ set +e
 HOST="$APP_HOST"; [ "$HOST" = "0.0.0.0" ] && HOST=127.0.0.1
 BASE="http://${HOST}:${APP_PORT}"
 JAR="$(mktemp)"
-U="smoke_$(date +%s)"
+# 固定验收账号：注册冲突视为幂等，通过后续登录复用；会话每轮唯一，避免旧事件污染断言。
+U="smoke_gate"
 PASS=0; FAIL=0
 ok()   { printf '  ✓ %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  ✗ %s\n' "$*"; FAIL=$((FAIL+1)); }
 
 printf '冒烟测试：%s\n' "$BASE"
+if [ "${NODE_ENV:-development}" = "production" ]; then
+  printf '✗ 拒绝在 production 环境运行 smoke（会创建验收会话并发送测试消息）\n' >&2
+  exit 2
+fi
 
 # 1. 健康检查
 curl -sf -m 5 "$BASE/healthz" | grep -q '"ok":true' && ok "healthz" || bad "healthz"
@@ -30,16 +35,19 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST "$BASE/api/auth/regi
 login="$(curl -s -m 5 -c "$JAR" -X POST "$BASE/api/auth/login" \
   -H 'Content-Type: application/json' -d "{\"username\":\"$U\",\"password\":\"smoke-pass-1\"}")"
 echo "$login" | grep -q '"kind":"human"' && ok "login" || { bad "login：$login"; }
+uid="$(echo "$login" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).id??"")}catch{console.log("")}})')"
+if [ -z "$uid" ]; then bad "login response has no Team user id"; fi
 
 # 4. me（cookie 身份注入闭环）
 curl -sf -m 5 -b "$JAR" "$BASE/api/auth/me" | grep -q "$U" && ok "me（cookie 注入）" || bad "me"
 
-# 5. 会话清单（取第一个 open 会话；没有则跳过发言验证）
-sid="$(curl -sf -m 5 -b "$JAR" "$BASE/api/sessions" | node -e '
+# 5. 建立专用私有 smoke 会话，再经成员过滤后的 API 确认可见。
+sid="$(node scripts/prepare-smoke-session.mjs "$uid")"
+visible="$(curl -sf -m 5 -b "$JAR" "$BASE/api/sessions" | node -e '
   let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
-    try{const s=JSON.parse(d).find(x=>x.status==="open");console.log(s?s.id:"")}catch{console.log("")}})')"
-if [ -n "$sid" ]; then
-  ok "sessions（会话 $sid）"
+    try{console.log(JSON.parse(d).some(x=>x.id===process.argv[1])?"yes":"no")}catch{console.log("no")}})' "$sid")"
+if [ "$visible" = "yes" ]; then
+  ok "sessions（成员可见 $sid）"
   # 6. 发消息（直达时间线；未登录应 401 的对照也验一下）
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST "$BASE/api/sessions/$sid/messages" \
     -H 'Content-Type: application/json' -d '{"text":"x"}')"
@@ -51,7 +59,7 @@ if [ -n "$sid" ]; then
   curl -sf -m 5 -b "$JAR" "$BASE/api/sessions/$sid/events" | grep -q '\[smoke\]' \
     && ok "时间线回读含冒烟消息" || bad "时间线回读"
 else
-  printf '  · 无 open 会话，跳过发言/回读验证（先在页面建一个会话）\n'
+  bad "成员会话清单未返回 smoke fixture"
 fi
 
 # 9. @AI 真模型防回归（D2）：@需求分析师 提问 → 60s 内等【真模型】回复。
@@ -62,10 +70,16 @@ if [ -n "$sid" ]; then
   hit=0
   for i in $(seq 1 30); do
     sleep 2
-    if curl -sf -m 5 -b "$JAR" "$BASE/api/sessions/$sid/events" | grep -q '【真模型】'; then hit=1; break; fi
-    curl -sf -m 5 -b "$JAR" "$BASE/api/sessions/$sid/events" | grep -q '【占位】' && { printf '  · 模型未配置（占位留痕链路通）\n'; hit=1; break; }
+    events="$(curl -sf -m 5 -b "$JAR" "$BASE/api/sessions/$sid/events")"
+    if printf '%s' "$events" | grep -q '【真模型】'; then hit=1; break; fi
+    printf '%s' "$events" | grep -q '【占位】' && { printf '  · 模型未配置（占位留痕链路通）\n'; hit=1; break; }
+    if printf '%s' "$events" | grep -q 'Agent 尚未完成此前消息的顺序处理'; then
+      bad "@AI 记忆顺序屏障暂停；请检查文字模型连通配置"
+      hit=1
+      break
+    fi
   done
-  [ "$hit" = "1" ] && ok "@AI 链路（真模型或占位留痕）" || bad "@AI 链路 60s 无回应"
+  [ "$hit" = "1" ] && [ "$FAIL" -eq 0 ] && ok "@AI 链路（真模型或占位留痕）" || { [ "$hit" = "1" ] || bad "@AI 链路 60s 无回应"; }
 fi
 
 rm -f "$JAR"

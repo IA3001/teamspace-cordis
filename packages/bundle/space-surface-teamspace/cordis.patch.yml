@@ -58,15 +58,8 @@
   isolate:
     webui: teamspace
 
-# 5174 /admin 桥接页（2026-10-05，新包）：管理页实体在 5172 控制台；本页
-# 装载即带 token 跳转，消除 5174 直访 /admin 的 404。isolate.webui = teamspace。
-- id: client-ui-bridge
-  name: './packages/client-ui/space-client-ui-bridge/src/index.ts'
-  isolate:
-    webui: teamspace
-
-# 登录/注册页（IM 化，2026-09-30，新包）：独立页面 /login（order 950），
-# 登录成功后跳 /teamspace。isolate.webui 指到 teamspace realm。
+# 团队登录/注册页（/login）：仅负责 Team 身份认证并进入 Teamspace；后台
+# 管理入口由独立 Admin UI 提供，不在 Teamspace 中展示或转发。
 - id: client-ui-auth
   name: './packages/client-ui/space-client-ui-auth/src/index.ts'
   isolate:

@@ -1,8 +1,8 @@
 // space-llm-openai —— space-llm 缝的 OpenAI 兼容实现（P8 下半场，2026-09-30）。
 //
 // 语义（seam 契约照表执法）：
-//   · configured：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL 三件套齐且 key 非空
-//     （每次读取现算 —— verify 可在进程内翻转 env，门禁不依赖真 key）。
+//   · configured：后台 settings、插件配置或 LLM_BASE_URL / LLM_API_KEY /
+//     LLM_MODEL 环境变量中有一套完整配置（每次读取现算）。
 //   · chat：单次 POST {base}/chat/completions（Authorization: Bearer <key>，
 //     body = {model, messages}），返回 choices[0].message.content 原文。
 //     **不自动重试**（承「不猜」）；超时缺省 60s（AbortSignal.timeout）；
@@ -81,7 +81,8 @@ export class OpenAiChatLlm extends LlmService {
   }
 
   async chat(messages: readonly ChatMessage[], options?: ChatOptions): Promise<string> {
-    const { base, key, model } = this.resolve()
+    const { base, key, model: configuredModel } = this.resolve()
+    const model = options?.model?.trim() || configuredModel
     if (!base || !key || !model) {
       throw new LlmError(
         'not_configured',
@@ -96,11 +97,16 @@ export class OpenAiChatLlm extends LlmService {
       res = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model, messages }),
-        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({ model, messages, ...(options?.onToken ? { stream: true } : {}) }),
+        signal: options?.signal
+          ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal])
+          : AbortSignal.timeout(timeoutMs),
       })
     } catch (e) {
       const err = e as Error
+      if (options?.signal?.aborted) {
+        throw new LlmError('cancelled', 'LLM 调用因 Agent 任务已撤回而取消')
+      }
       if (err.name === 'TimeoutError' || err.name === 'AbortError' || /timeout|aborted/i.test(err.message)) {
         throw new LlmError('timeout', `LLM 调用超时（${timeoutMs}ms，单次不重试）`)
       }
@@ -109,6 +115,52 @@ export class OpenAiChatLlm extends LlmService {
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new LlmError('http_error', `LLM 返回 ${res.status}（单次不重试）：${text.slice(0, 200)}`)
+    }
+    if (options?.onToken && res.headers.get('content-type')?.includes('text/event-stream')) {
+      if (!res.body) throw new LlmError('empty_response', 'LLM 流式响应没有 body')
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let pending = ''
+      let content = ''
+      const consume = (line: string) => {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) return
+        const data = trimmed.slice(5).trim()
+        if (!data || data === '[DONE]') return
+        let parsed: { choices?: Array<{ delta?: { content?: unknown } }> }
+        try {
+          parsed = JSON.parse(data) as typeof parsed
+        } catch {
+          throw new LlmError('http_error', 'LLM 流式响应包含无效事件')
+        }
+        const delta = parsed.choices?.[0]?.delta?.content
+        if (typeof delta !== 'string' || !delta) return
+        content += delta
+        try { options.onToken?.(delta) } catch { /* UI progress is best effort. */ }
+      }
+      try {
+        while (true) {
+          const { value, done } = await reader.read()
+          pending += decoder.decode(value, { stream: !done })
+          const lines = pending.split(/\r?\n/u)
+          pending = lines.pop() ?? ''
+          for (const line of lines) consume(line)
+          if (done) break
+        }
+        if (pending.trim()) consume(pending)
+      } catch (error) {
+        if (error instanceof LlmError) throw error
+        if (options.signal?.aborted) throw new LlmError('cancelled', 'LLM 调用因 Agent 任务已撤回而取消')
+        const err = error as Error
+        if (err.name === 'TimeoutError' || err.name === 'AbortError' || /timeout|aborted/i.test(err.message)) {
+          throw new LlmError('timeout', `LLM 流式调用超时（${timeoutMs}ms，单次不重试）`)
+        }
+        throw new LlmError('http_error', `LLM 流式读取失败：${err.message}`)
+      } finally {
+        reader.releaseLock()
+      }
+      if (!content) throw new LlmError('empty_response', 'LLM 流式响应没有文本内容')
+      return content
     }
     let payload: { choices?: { message?: { content?: unknown } }[] }
     try {
@@ -119,6 +171,9 @@ export class OpenAiChatLlm extends LlmService {
     const content = payload?.choices?.[0]?.message?.content
     if (typeof content !== 'string') {
       throw new LlmError('empty_response', 'LLM 响应缺 choices[0].message.content')
+    }
+    if (content && options?.onToken) {
+      try { options.onToken(content) } catch { /* UI progress is best effort. */ }
     }
     return content
   }

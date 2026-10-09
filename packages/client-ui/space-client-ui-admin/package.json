@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "client-ui：账号管理页（/admin，挂 5172 调试控制台）。走 webui RPC data（users/resetPassword/setAdmin/removeUser/me，全部首参 token 且仅管理员放行）",
+  "description": "client-ui：后台管理页（/admin，5172 独立管理员会话；配置系统 API 与管理 Team 账号）",
   "main": "src/index.ts",
   "dependencies": {
     "space-ui": "*",
-    "space-identity": "*"
+    "space-identity": "*",
+    "space-admin-auth": "*",
+    "space-sandbox-approval": "*"
   },
   "peerDependencies": {
     "cordis": "^4.0.0-rc.10"

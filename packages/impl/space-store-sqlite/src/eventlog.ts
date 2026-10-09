@@ -30,6 +30,8 @@ function toEvent(r: Row): SessionEvent {
     toolCalls: parse(r.tool_calls, []) as ToolCall[],
     replyMode: (r.reply_mode as string) ?? '',
     replyTo: (r.reply_to as string | null) ?? null,
+    sourceEventId: (r.source_event_id as string | null) ?? null,
+    sourceEventIds: [],
     voided: Number(r.voided) === 1,
     voidedBy: (r.voided_by as string | null) ?? null,
     voidedAt: (r.voided_at as string | null) ?? null,
@@ -47,6 +49,17 @@ export class SqliteEventLog extends EventLogService {
 
   append(input: EventInput): SessionEvent {
     validateEvent(input)
+    const sourceEventIds = [...new Set([...(input.sourceEventIds ?? []), input.sourceEventId].filter((id): id is string => Boolean(id)))]
+    const primarySourceEventId = input.sourceEventId ?? sourceEventIds[0] ?? null
+    for (const sourceEventId of sourceEventIds) {
+      const source = this.db.prepare('SELECT session_id, voided FROM events WHERE id = ?').get(sourceEventId) as Row | undefined
+      if (!source || source.session_id !== input.sessionId || Number(source.voided) === 1) {
+        throw new EventLogError('invalid', `事件 ${input.id} 的因果来源不存在、已撤回或属于其他会话`)
+      }
+      if (sourceEventId === input.id) {
+        throw new EventLogError('invalid', `事件 ${input.id} 不能以自身作为因果来源`)
+      }
+    }
     const ts = input.ts ?? now()
     const next = this.nextSeq(input.sessionId)
 
@@ -61,11 +74,12 @@ export class SqliteEventLog extends EventLogService {
       seq = input.seq
     }
 
+    this.db.exec('BEGIN IMMEDIATE')
     try {
       this.db
         .prepare(
-          `INSERT INTO events(id, session_id, seq, phase_id, ts, author_id, author_kind, kind, text, mentions, tool_calls, reply_mode, reply_to, voided)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          `INSERT INTO events(id, session_id, seq, phase_id, ts, author_id, author_kind, kind, text, mentions, tool_calls, reply_mode, reply_to, source_event_id, voided)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
         )
         .run(
           input.id,
@@ -81,8 +95,15 @@ export class SqliteEventLog extends EventLogService {
           JSON.stringify(input.toolCalls ?? []),
           input.replyMode ?? '',
           input.replyTo ?? null,
+          primarySourceEventId,
         )
+      const link = this.db.prepare('INSERT INTO event_sources(event_id, source_event_id, relation) VALUES (?, ?, ?)')
+      for (const sourceEventId of sourceEventIds) {
+        link.run(input.id, sourceEventId, sourceEventId === primarySourceEventId ? 'trigger' : 'context')
+      }
+      this.db.exec('COMMIT')
     } catch (e) {
+      this.db.exec('ROLLBACK')
       const msg = String((e as Error).message)
       if (/UNIQUE.*events\.id|PRIMARY KEY/i.test(msg)) {
         throw new EventLogError('duplicate_id', `事件 ID 重复：${input.id}（ID 是幂等键，不能重放同一条）`)
@@ -118,7 +139,7 @@ export class SqliteEventLog extends EventLogService {
   listBySession(sessionId: string): SessionEvent[] {
     return (
       this.db.prepare(`SELECT * FROM events WHERE session_id = ? ORDER BY seq ASC`).all(sessionId) as Row[]
-    ).map(toEvent)
+    ).map((row) => this.withSources(toEvent(row)))
   }
 
   lastSeq(sessionId: string): number {
@@ -142,7 +163,7 @@ export class SqliteEventLog extends EventLogService {
            ORDER BY e.seq ASC`,
         )
         .all(phrase, sessionId) as Row[]
-      return rows.map(toEvent)
+      return rows.map((row) => this.withSources(toEvent(row)))
     }
     const escaped = q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
     return (
@@ -151,7 +172,7 @@ export class SqliteEventLog extends EventLogService {
           `SELECT * FROM events WHERE session_id = ? AND text LIKE ? ESCAPE '\\' ORDER BY seq ASC`,
         )
         .all(sessionId, `%${escaped}%`) as Row[]
-    ).map(toEvent)
+    ).map((row) => this.withSources(toEvent(row)))
   }
 
   // ── 表情回应（IM 化 2026-10-01）：SQL 细节在 reactions.ts，这里只组合 ────
@@ -177,6 +198,13 @@ export class SqliteEventLog extends EventLogService {
 
   private getRaw(id: string): SessionEvent | undefined {
     const r = this.db.prepare(`SELECT * FROM events WHERE id = ?`).get(id) as Row | undefined
-    return r ? toEvent(r) : undefined
+    return r ? this.withSources(toEvent(r)) : undefined
+  }
+
+  private withSources(event: SessionEvent): SessionEvent {
+    const rows = this.db.prepare(
+      'SELECT source_event_id FROM event_sources WHERE event_id = ? ORDER BY source_event_id',
+    ).all(event.id) as Array<{ source_event_id: string }>
+    return { ...event, sourceEventIds: rows.map((row) => row.source_event_id) }
   }
 }

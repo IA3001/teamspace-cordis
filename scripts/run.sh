@@ -18,14 +18,6 @@ source "$(dirname "$0")/env.sh"
 
 cd "$REPO_ROOT"
 
-# New API 网关 best-effort 拉起（2026-10-07）：系统默认经网关接模型，网关
-# 不在线则尝试 docker 拉起；失败不阻塞（系统仍可在 /models 页改回直连）。
-if command -v docker >/dev/null 2>&1; then
-  if ! curl -sf -m 2 http://127.0.0.1:3000/api/status >/dev/null 2>&1; then
-    (docker start teamspace-new-api >/dev/null 2>&1 || docker compose -f deploy/docker-compose.newapi.yml up -d >/dev/null 2>&1) &
-  fi
-fi
-
 # 依赖预检：没跑过 npm install 时给一句话指引，而不是 tsx/loader 原始报错。
 if [ ! -d "$REPO_ROOT/node_modules" ]; then
   printf '✗ 还没有安装依赖 —— 先执行一次：\n\n    cd %s && npm install\n\n' "$REPO_ROOT" >&2

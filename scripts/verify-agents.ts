@@ -13,7 +13,7 @@
 //   Part B（对运行中的后端）：HTTP 面接线 —— /tell @名字、@id、未知清单、
 //     非 / 消息仍走暂存（**开会功能不回退**的直观测点）。
 //
-// 前提：后端已在 APP_PORT 运行（与 verify:staging 同前提，gate 顺序保证）。
+// 前提：后端已在 APP_PORT 运行（属于 gate:runtime，运行前需启动后端）。
 // 用法：npm run verify:agents    退出码 0 = 全过；1 = 判红。
 // 留痕：全部通过后记一行 action_log: verify-agents（断言 ⑨）。
 import { readdirSync, readFileSync, statSync } from 'node:fs'

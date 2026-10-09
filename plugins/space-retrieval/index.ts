@@ -8,7 +8,8 @@
 //   · kb 侧：ctx.kb.search(query, { topK: limit })；粗排分恒 0.9 —— kb 是
 //     **人工灌入**的权威知识，优先级介于 event 发言（1.0）与 memory（≤1.0
 //     但基线 0.6）之间（2026-10-01 约定）。
-//   · memory 侧：ctx.memory.search(`session:<id>`, query, limit)；粗排分：
+//   · memory 侧：检索 session scope；调用方提供 agentId 时同时检索该 Agent 私有 scope；
+//     粗排分：
 //     0.6 + weight*0.4（记忆是旁注性质，天然低于发言正文，weight 高者靠前）。
 //   · 三源命中合并按 score 降序、截 limit（缺省 8）—— 同一次查询内可比即可。
 //   · 检索是**纯读**：绝不产生写副作用（铁律，见 seam 类注释）。
@@ -19,20 +20,21 @@ import type { MemoryItem } from 'space-memory'
 import type { KbHit } from 'space-kb'
 import { vectorRerank } from 'space-kb'
 import type { SessionEvent } from 'space-event'
+import { isAgentVisibleEvent } from 'space-event'
 
 export const name = 'space-retrieval'
 // 严格注入：session（会话存在性校验）+ eventLog（历史检索）+ memory（记忆检索）
 // + kb（知识库检索，2026-10-01）。严格注入下依赖不满足则本插件不加载，
 // 所以检索时 ctx.kb 必然就绪 —— 不需要运行时容错。
-// embeddings（2026-10-06 A2）：知识库向量重排 —— kb 分块有向量时按余弦
-// 相似度排序（语义相近、用词不同也能命中），无向量/服务不可用回落关键词。
+// embeddings：知识库向量混合排序 —— 同时保留关键词命中并纳入语义相似候选；
+// 无向量/服务不可用时回落关键词结果。
 export const inject = ['session', 'eventLog', 'memory', 'kb', 'embeddings']
 
 export class RetrievalServiceImpl extends RetrievalService {
   /**
    * 知识库向量重排（A2，2026-10-06）：kb_chunks 已回填向量且 Embedding
-   * 可用时，查询向量化后按余弦相似度取 topK，替换关键词粗排结果 ——
-   * 语义相近、用词不同的内容也能命中。任何一步失败回落 keywordHits。
+   * 可用时合并关键词名次与语义分数，既保留精确命中也纳入语义相近的候选。
+   * 任何一步失败回落 keywordHits。
    */
   private async kbVectorRerank(query: string, keywordHits: KbHit[], limit: number): Promise<KbHit[]> {
     // 重排逻辑在 seam 纯函数（kb 插件的 /kb 页搜索共用同一份，2026-10-06）。
@@ -64,10 +66,12 @@ export class RetrievalServiceImpl extends RetrievalService {
     // 3) event 侧：历史消息全文检索（FTS/LIKE 都在 eventLog 实现里）。
     if (sources.includes('event')) {
       const events: SessionEvent[] = this.ctx.eventLog.search(sessionId, query)
-      for (const e of events) {
+      for (const e of events.filter((event) => !event.voided && isAgentVisibleEvent(event))) {
         hits.push({
           source: 'event',
           id: e.id,
+          title: `会话消息 #${e.seq}`,
+          sourceEventIds: [e.id, ...e.sourceEventIds],
           sessionId: e.sessionId,
           text: e.text,
           ts: e.ts,
@@ -87,6 +91,8 @@ export class RetrievalServiceImpl extends RetrievalService {
           hits.push({
             source: 'kb',
             id: h.chunkId,
+            title: h.docTitle,
+            documentId: h.docId,
             sessionId,
             text: h.text,
             // ts：知识库命中无时间语义（KbHit 不带 createdAt），置空串。
@@ -105,16 +111,22 @@ export class RetrievalServiceImpl extends RetrievalService {
     //    错误 —— 单侧数据源故障不该炸掉整个检索，包 try 记 warn 后跳过。
     if (sources.includes('memory')) {
       try {
-        const items: MemoryItem[] = await this.ctx.memory.search(
-          `session:${sessionId}`,
-          query,
-          limit,
-        )
+        const memoryScopes = opts?.memoryScopes ?? ['session', 'agent']
+        const scopes = [
+          ...(memoryScopes.includes('session') ? [`session:${sessionId}`] : []),
+          ...(memoryScopes.includes('agent') && opts?.agentId ? [`agent:${opts.agentId}`] : []),
+        ]
+        const items = (await Promise.all(scopes.map((scope) => this.ctx.memory.search(scope, query, limit))))
+          .flat()
+          .filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index) as MemoryItem[]
         for (const m of items) {
           hits.push({
             source: 'memory',
             id: m.id,
+            title: m.scope.startsWith('agent:') ? 'Agent 持久记忆' : '会话记忆',
+            sourceEventIds: m.sourceEventIds,
             sessionId,
+            scope: m.scope,
             text: m.text,
             ts: m.createdAt,
             // 粗排：记忆基线 0.6，weight（0~1）越高越靠前，封顶 1.0。

@@ -178,6 +178,9 @@ export abstract class SessionService extends Service {
   /** 加入会议（含重新激活）。语义见类注释。 */
   abstract join(input: JoinInput): Membership
 
+  /** Change the role of an active member; does not alter membership timestamps or duty. */
+  abstract setRole(sessionId: string, principalId: string, role: Role): Membership
+
   /** 离开会议。未在册抛 not_found。 */
   abstract leave(sessionId: string, principalId: string): void
 

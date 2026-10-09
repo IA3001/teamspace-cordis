@@ -26,10 +26,10 @@ declare module 'cordis' {
 
 // ── 类别词汇 ──────────────────────────────────────────────────────────────
 
-/** 机器人类别：meeting = 会议角色机器人；coding = Coding Agent（开发/测试/审查等）。 */
-export type AgentKind = 'meeting' | 'coding'
+/** Built-ins may declare a meeting/coding role; Team-created Agents use the generic kind. */
+export type AgentKind = 'meeting' | 'coding' | 'custom'
 
-export const AGENT_KINDS: readonly AgentKind[] = ['meeting', 'coding']
+export const AGENT_KINDS: readonly AgentKind[] = ['meeting', 'coding', 'custom']
 
 export function isAgentKind(v: string): v is AgentKind {
   return (AGENT_KINDS as readonly string[]).includes(v)
@@ -45,13 +45,13 @@ export const AGENT_STATUSES: readonly AgentStatus[] = ['idle', 'working', 'pause
 /**
  * 状态迁移表（合法迁移白名单，表外一律 invalid_transition）：
  *   idle    → working（领任务）/ paused（人类提前叫停）
- *   working → paused（暂停点 await_human）/ done（交付）
+ *   working → paused（暂停点 await_human）/ done（交付）/ idle（来源撤回取消）
  *   paused  → working（人类放行）/ idle（任务作废回待命）
  *   done    → idle（可领下一个任务）
  */
 export const STATUS_TRANSITIONS: Record<AgentStatus, readonly AgentStatus[]> = {
   idle: ['working', 'paused'],
-  working: ['paused', 'done'],
+  working: ['paused', 'done', 'idle'],
   paused: ['working', 'idle'],
   done: ['idle'],
 }
@@ -71,6 +71,13 @@ export interface AgentDescriptor {
   title: string
   /** 提示词引用（待定 10：接入形态等用户给原文；缺省 = 无提示词，stub 行为）。 */
   promptRef?: string
+  /** Shared-template metadata; consumers may use supported fields generically. */
+  description?: string
+  modelRef?: string
+  toolIds?: readonly string[]
+  contextSources?: readonly string[]
+  memoryPolicy?: string
+  speechPolicy?: string
   /** 能力清单（开放词表：'minutes' / 'coding' / 'testing' / 'review' …）。 */
   capabilities: readonly string[]
 }
@@ -133,4 +140,7 @@ export abstract class AgentService extends Service {
   abstract get(id: string): AgentSnapshot
 
   abstract list(kind?: AgentKind): AgentSnapshot[]
+
+  /** Reconcile data-backed Agent definitions into the process-local runtime registry. */
+  abstract refreshCatalog(): void
 }

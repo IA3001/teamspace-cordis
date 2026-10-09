@@ -32,6 +32,7 @@
 | L11 | **显示层** | —— | `packages/client-ui/space-client-ui-shared` | EventItem / IconBtn / labels：纯展示原语，零业务 |
 | L12 | **交互层** | —— | `packages/client-ui/{teamspace,sessions,auth}` | 页面组合、RPC 消费、键盘状态机；只认 token 与 seam 数据形状 |
 | X | **横切：身份与授权** | `space-identity` | `impl/space-store-sqlite`（users）`plugins/space-auth`；策略 `policy/space-authz` | 登录/token 注入 + 授权名单纯函数；任何层可用，任何层不可绕过 |
+| X | **横切：会话活动调度** | `space-session-work` | `impl/space-store-sqlite` | SQLite 租约与 FIFO 等待意图跨进程共享；同一会话内可并行；确定性流程由事件时间线恢复，Orchestrator 回合、预算、待处理决策与委托队列由 SQLite settings 持久化并恢复 |
 | X | **横切：可观测** | —— | `plugins/health` `plugins/app` 5172 控制台 | 铁律 2 的落点：健康检查、调试控制台、action_log |
 
 ## 三、依赖规则（可机械检查）

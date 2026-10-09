@@ -21,6 +21,13 @@ import { pathToFileURL } from 'node:url'
 import { loadAppConfig } from './config.ts'
 import { composeTo } from './compose.ts'
 
+declare module 'cordis' {
+  interface Events {
+    /** Emitted only after the composed plugin manifest has finished loading. */
+    'app/ready'(this: Context): void
+  }
+}
+
 const config = loadAppConfig()
 
 // 入口阶段用 console.log 而不是 ctx.logger：
@@ -45,5 +52,6 @@ await ctx.loader.create({
   name: '@cordisjs/plugin-include',
   config: { path: config.loader.configPath },
 })
+ctx.emit('app/ready')
 
 console.log(`[${config.app.name}] 框架启动完成（插件清单：${config.loader.configPath}）`)

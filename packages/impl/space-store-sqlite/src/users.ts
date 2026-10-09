@@ -4,7 +4,7 @@
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { IdentityError, UserService } from 'space-identity'
-import type { PublicUser, TokenGrant } from 'space-identity'
+import type { PublicUser, TeamRole, TokenGrant } from 'space-identity'
 
 type Row = Record<string, unknown>
 
@@ -31,10 +31,9 @@ function toPublic(r: Row): PublicUser {
   return {
     id: r.id as string,
     username: r.username as string,
-    displayName: (r.display_name as string) || r.username,
+    displayName: (r.display_name as string) || (r.username as string),
     kind: r.kind as 'human' | 'agent',
-    // is_admin 存的是 INTEGER 0/1 —— 转成布尔。
-    isAdmin: (r.is_admin as number) === 1,
+    ...(r.kind === 'human' ? { teamRole: (r.team_role as TeamRole) || 'member' } : {}),
     createdAt: r.created_at as string,
   }
 }
@@ -47,7 +46,7 @@ export class SqliteUserStore extends UserService {
     super(ctx)
   }
 
-  register(username: string, password: string, displayName = ''): PublicUser {
+  async register(username: string, password: string, displayName = '', teamRole: TeamRole = 'member'): Promise<PublicUser> {
     const name = username.trim()
     if (!name || !password) {
       throw new IdentityError('invalid_input', '用户名和密码都不能为空')
@@ -55,32 +54,27 @@ export class SqliteUserStore extends UserService {
     if (name.length > 32 || /\s/.test(name)) {
       throw new IdentityError('invalid_input', '用户名不能含空白且不超过 32 字符')
     }
+    if (teamRole !== 'dri' && teamRole !== 'member') {
+      throw new IdentityError('invalid_input', '团队角色必须是 DRI 或普通成员')
+    }
     const id = `u_${randomUUID().slice(0, 8)}`
     try {
       this.db
         .prepare(
-          `INSERT INTO users(id, username, password_hash, display_name, kind, created_at)
-           VALUES (?, ?, ?, ?, 'human', ?)`,
+          `INSERT INTO users(id, username, password_hash, display_name, kind, created_at, team_role)
+           VALUES (?, ?, ?, ?, 'human', ?, ?)`,
         )
-        .run(id, name, hashPassword(password), displayName.trim() || name, now())
+        .run(id, name, hashPassword(password), displayName.trim() || name, now(), teamRole)
     } catch (e) {
       if (/UNIQUE/i.test(String((e as Error).message))) {
         throw new IdentityError('username_taken', `用户名 ${name} 已被占用`)
       }
       throw e
     }
-    // 无邀请制下的初始化规则：第一个注册的用户自动成为管理员 ——
-    // 否则开放注册的系统里没人能管理账号（不存在"预置管理员"的时机）。
-    const adminCount = (
-      this.db.prepare(`SELECT count(*) AS n FROM users WHERE is_admin = 1`).get() as { n: number }
-    ).n
-    if (adminCount === 0) {
-      this.db.prepare(`UPDATE users SET is_admin = 1 WHERE id = ?`).run(id)
-    }
-    return this.byId(id)!
+    return (await this.byId(id))!
   }
 
-  login(username: string, password: string): TokenGrant {
+  async login(username: string, password: string): Promise<TokenGrant> {
     const row = this.db
       .prepare(`SELECT * FROM users WHERE username = ?`)
       .get(username.trim()) as Row | undefined
@@ -94,7 +88,7 @@ export class SqliteUserStore extends UserService {
     return this.issueToken(row.id as string)
   }
 
-  verifyToken(token: string): PublicUser {
+  async verifyToken(token: string): Promise<PublicUser> {
     const row = this.db
       .prepare(
         `SELECT u.* FROM login_tokens t JOIN users u ON u.id = t.user_id WHERE t.token = ?`,
@@ -130,16 +124,16 @@ export class SqliteUserStore extends UserService {
       }
       throw e
     }
-    return { id, username: id, displayName: displayName.trim() || id, kind: 'agent', isAdmin: false, createdAt: now() } as PublicUser
+    return { id, username: id, displayName: displayName.trim() || id, kind: 'agent', createdAt: now() } as PublicUser
   }
 
 
-  byId(id: string): PublicUser | null {
+  async byId(id: string): Promise<PublicUser | null> {
     const row = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(id) as Row | undefined
     return row ? toPublic(row) : null
   }
 
-  listHumans(): PublicUser[] {
+  async listHumans(): Promise<PublicUser[]> {
     return (
       this.db
         .prepare(`SELECT * FROM users WHERE kind = 'human' ORDER BY created_at ASC`)
@@ -149,7 +143,7 @@ export class SqliteUserStore extends UserService {
 
   // ── 账号管理（admin 面，2026-10-01）────────────────────────────────────
 
-  listAll(): PublicUser[] {
+  async listAll(): Promise<PublicUser[]> {
     // 先人类后 agent（kind ASC：'agent' < 'human'，所以倒过来 DESC），组内按创建时间。
     return (
       this.db
@@ -160,7 +154,7 @@ export class SqliteUserStore extends UserService {
     ).map(toPublic)
   }
 
-  resetPassword(id: string, password: string): void {
+  async resetPassword(id: string, password: string): Promise<void> {
     const row = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(id) as Row | undefined
     if (!row) throw new IdentityError('unknown_user', `用户 ${id} 不存在`)
     if (row.kind !== 'human') {
@@ -172,16 +166,8 @@ export class SqliteUserStore extends UserService {
     this.db.prepare(`DELETE FROM login_tokens WHERE user_id = ?`).run(id)
   }
 
-  setAdmin(id: string, v: boolean): void {
-    const row = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(id) as Row | undefined
-    if (!row) throw new IdentityError('unknown_user', `用户 ${id} 不存在`)
-    if (row.kind !== 'human') {
-      throw new IdentityError('forbidden_kind', 'agent 身份不可设为管理员')
-    }
-    this.db.prepare(`UPDATE users SET is_admin = ? WHERE id = ?`).run(v ? 1 : 0, id)
-  }
 
-  removeUser(id: string): void {
+  async removeUser(id: string): Promise<void> {
     const row = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(id) as Row | undefined
     if (!row) throw new IdentityError('unknown_user', `用户 ${id} 不存在`)
     if (row.kind !== 'human') {

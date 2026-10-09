@@ -11,7 +11,6 @@ set -uo pipefail
 source "$(dirname "$0")/env.sh"
 set +e
 
-NODE_BIN="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}/node"
 HOST="$APP_HOST"
 [ "$HOST" = "0.0.0.0" ] && HOST=127.0.0.1
 BASE="http://${HOST}:${TEAMSPACE_PORT}"

@@ -20,6 +20,8 @@ import type { CommandCtx, CommandService } from 'space-command'
 import { IdentityError } from 'space-identity'
 import { StagingError } from 'space-staging'
 import type { StagingService } from 'space-staging'
+import { collectAgentDescendants } from 'space-event'
+import type { SessionEvent } from 'space-event'
 
 /**
  * 从 space-auth 签发的 cookie 里取 token。space-auth 是插件不是包
@@ -27,7 +29,8 @@ import type { StagingService } from 'space-staging'
  * 同口径的解析，规则与 plugins/space-auth/index.ts 的 readToken 一致：
  * 只认 space_token=。
  */
-function readToken(req: Request): string {
+type HeaderRequest = { headers: { get(name: string): string | null } }
+function readToken(req: HeaderRequest): string {
   // 2026-10-02：除 cookie 外支持 Authorization: Bearer（浏览器页面与后端
   // 不同端口，fetch 需带头的场景：撤回/上传）。
   const bearer = req.headers.get('authorization')
@@ -45,14 +48,69 @@ function readToken(req: Request): string {
 }
 
 /** cookie 换当前登录用户；无效/过期 → 401（调用方直接返回）。 */
-async function requireUser(ctx: Context, req: Request) {
+async function requireUser(ctx: Context, req: HeaderRequest) {
   return ctx.users.verifyToken(readToken(req))
 }
 
+function isSessionMember(ctx: Context, sessionId: string, userId: string): boolean {
+  try { return ctx.session.listMembers(sessionId, true).some((member) => member.principalId === userId) }
+  catch { return false }
+}
+
 export const name = 'staging-commands'
-export const inject = ['server', 'commands', 'staging', 'session', 'eventLog', 'users']
+export const inject = ['server', 'commands', 'staging', 'session', 'eventLog', 'users', 'agents', 'agentInbox', 'agentRuntime', 'orchestrator', 'memory']
 
 export interface Config {}
+
+/** Invalidate the complete causal chain of one human recall and rebuild surviving mixed memories. */
+export async function invalidateRecallConsequences(ctx: Context, sessionId: string, event: SessionEvent, userId: string) {
+  const consequences = new Map<string, SessionEvent>()
+  let stable = false
+  for (let round = 0; round < 32; round++) {
+    const history = ctx.eventLog.listBySession(sessionId)
+    for (const item of [event, ...collectAgentDescendants(history, event.id)]) consequences.set(item.id, item)
+    for (const item of consequences.values()) {
+      ctx.orchestrator.cancelDelegationsBySource(sessionId, item.id)
+      await ctx.agentRuntime.cancelBySource(item.id)
+    }
+    const throughSeq = Math.max(...[...consequences.values()].map((item) => item.seq))
+    await Promise.all(ctx.session.listMembers(sessionId, true).flatMap((member) => {
+      try { ctx.agents.get(member.principalId); return [ctx.agentInbox.waitThrough(member.principalId, sessionId, throughSeq)] }
+      catch { return [] }
+    }))
+    const latest = [event, ...collectAgentDescendants(ctx.eventLog.listBySession(sessionId), event.id)]
+    const added = latest.filter((item) => !consequences.has(item.id))
+    for (const item of added) consequences.set(item.id, item)
+    if (!added.length) { stable = true; break }
+  }
+  if (!stable) throw new Error('撤回影响链在等待期间持续变化，请稍后重试')
+
+  const snapshots = new Map<string, Awaited<ReturnType<Context['memory']['invalidateBySource']>>[number]>()
+  let voided = 0
+  for (const item of [...consequences.values()].sort((a, b) => a.seq - b.seq)) {
+    const changed = ctx.eventLog.void(item.id, userId, 'author_recall')
+    if (!changed) continue
+    voided += changed
+    for (const memory of await ctx.memory.invalidateBySource(item.id)) snapshots.set(memory.id, memory)
+  }
+  if (!voided) throw new Error('消息已撤回或其状态已变化')
+
+  let rebuilt = 0
+  const valid = ctx.eventLog.listBySession(sessionId).filter((item) => !item.voided)
+  for (const memory of snapshots.values()) {
+    if (!memory.scope.startsWith('agent:') || memory.sourceEventIds.length < 2) continue
+    const surviving = memory.sourceEventIds.flatMap((id) => {
+      const source = valid.find((item) => item.id === id)
+      return source ? [source] : []
+    })
+    if (!surviving.length) continue
+    try { rebuilt += await ctx.agentInbox.rebuildInvalidatedMemory(memory, surviving) }
+    catch (error) {
+      ctx.logger.warn('[space-message] 混合来源记忆重建失败（memory=%s）：%s', memory.id, (error as Error).message)
+    }
+  }
+  return { voided, invalidated: snapshots.size, rebuilt }
+}
 
 /**
  * 注册指令族。从 apply 里拆出来：scripts/verify-staging.ts 的进程内
@@ -209,21 +267,25 @@ export function apply(ctx: Context) {
     const sessionId = req.params.id
     // IM 化：身份由 cookie 注入（space-auth 签发的 space_token），
     // 忽略 body.authorId —— 客户端不能自称别人。
-    let authorId: string
+    let user: { id: string; kind?: string }
     try {
-      authorId = (await requireUser(ctx, req)).id
+      user = await requireUser(ctx, req)
     } catch (e) {
       if (e instanceof IdentityError) {
         return Response.json({ error: 'unauthorized', detail: '请先登录' }, { status: 401 })
       }
       throw e
     }
+    if (user.kind !== 'human') return Response.json({ error: 'unauthorized' }, { status: 401 })
+    if (!ctx.session.getSession(sessionId) || !isSessionMember(ctx, sessionId, user.id)) {
+      return Response.json({ error: 'not_found', detail: '会话不存在或你不是在册成员' }, { status: 404 })
+    }
     const body = await req.json().catch(() => null as Record<string, unknown> | null)
     const text = typeof body?.text === 'string' ? body.text : ''
     const mentions = Array.isArray(body?.mentions) ? body.mentions.map(String) : []
     const replyTo = typeof body?.replyTo === 'string' ? body.replyTo : null
 
-    const result = await handleInbound(ctx, sessionId, authorId, text, mentions, replyTo).catch((e) => {
+    const result = await handleInbound(ctx, sessionId, user.id, text, mentions, replyTo).catch((e) => {
       console.error('[staging-commands] 入站处理异常：', e)
       throw e
     })
@@ -239,7 +301,7 @@ export function apply(ctx: Context) {
   // 撤回 = eventLog.void(id, 当前用户id, 'author_recall')，留痕不删行。
   ctx.server.post('/api/sessions/:id/events/:eventId/recall', async (req) => {
     const { id: sessionId, eventId } = req.params
-    let user: { id: string }
+    let user: { id: string; kind?: string }
     try {
       user = await requireUser(ctx, req)
     } catch (e) {
@@ -247,6 +309,10 @@ export function apply(ctx: Context) {
         return Response.json({ error: 'unauthorized', detail: '请先登录' }, { status: 401 })
       }
       throw e
+    }
+    if (user.kind !== 'human') return Response.json({ error: 'unauthorized' }, { status: 401 })
+    if (!ctx.session.getSession(sessionId) || !isSessionMember(ctx, sessionId, user.id)) {
+      return Response.json({ error: 'not_found', detail: '会话不存在或你不是在册成员' }, { status: 404 })
     }
     // 事件必须属于该会话且存在（跨会话/不存在一律 404，避免探测）。
     const ev = ctx.eventLog.listBySession(sessionId).find((e) => e.id === eventId)
@@ -256,8 +322,14 @@ export function apply(ctx: Context) {
       return Response.json({ error: 'forbidden', detail: '只能撤回自己的消息' }, { status: 403 })
     }
     try {
-      ctx.eventLog.void(eventId, user.id, 'author_recall')
+      const { voided, invalidated, rebuilt } = await invalidateRecallConsequences(ctx, sessionId, ev, user.id)
+      ctx.logger.info('[space-message] 作者撤回使 %d 条 Agent 事件、%d 条来源记忆失效并重建 %d 条（event=%s）',
+        voided, invalidated, rebuilt, eventId)
+      return Response.json({ ok: true, voided, invalidated, rebuilt })
     } catch (e) {
+      if (/已撤回或其状态已变化/.test(String((e as Error).message))) {
+        return Response.json({ error: 'already_voided', detail: (e as Error).message }, { status: 409 })
+      }
       return Response.json({ error: 'recall_failed', detail: String((e as Error).message ?? e) }, { status: 400 })
     }
     return Response.json({ ok: true })
@@ -265,6 +337,15 @@ export function apply(ctx: Context) {
 
   // ── 暂存区只读清单（写操作一律走 / 指令，承旧契约）──────────────────
   ctx.server.get('/api/sessions/:id/staging', async (req) => {
+    let user: { id: string; kind?: string }
+    try { user = await requireUser(ctx, req) }
+    catch (e) {
+      if (e instanceof IdentityError) return Response.json({ error: 'unauthorized' }, { status: 401 })
+      throw e
+    }
+    if (user.kind !== 'human' || !ctx.session.getSession(req.params.id) || !isSessionMember(ctx, req.params.id, user.id)) {
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }
     return Response.json(ctx.staging.list(req.params.id))
   })
 }

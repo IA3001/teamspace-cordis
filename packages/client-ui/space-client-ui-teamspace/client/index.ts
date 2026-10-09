@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 // 团队空间整页（客户端）—— IM 化改造（2026-09-30，用户拍板）。
 //
 // 布局（k-layout 外壳 chrome + 外壳共享布局类，零手写样式）：
@@ -25,6 +27,7 @@
 // @ 联想浮层与完整键盘导航（↑↓/Enter/Tab/Esc/Shift+Enter）、右面板数据口径、
 // closable el-tag 暂存条目（仅非空时显示）。
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, resolveComponent, watch } from 'vue'
+import type { Component, VNodeChild } from 'vue'
 import { useRpc, useContext, useRoute, useRouter } from '@cordisjs/client'
 import EventItem from 'space-client-ui-shared/client/EventItem.ts'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
@@ -34,8 +37,14 @@ import { renderMarkdown } from 'space-client-ui-shared/client/md.ts'
 import IconBtn from 'space-client-ui-shared/client/IconBtn.ts'
 import { authorLabel, formatTime, memberLabel } from 'space-client-ui-shared/client/labels.ts'
 import type { EventLite, MemberLite } from 'space-client-ui-shared/client/labels.ts'
+import { AgentManagementPage, AGENT_PAGE_ICON } from './agents.ts'
 
 interface SessionLite { id: string; title: string; status: string; updatedAt?: string }
+interface SessionWorkLite {
+  activeSessionId: string | null
+  owners: string[]
+  queue: Array<{ sessionId: string; owner: string; position: number }>
+}
 interface StagingEntry { id: string; seq: number; text: string; authorId: string }
 interface TurnLite {
   state: string
@@ -44,13 +53,53 @@ interface TurnLite {
   stopReason: string
   stopDetail: string
   autonomousActions?: number
+  sessionWork?: SessionWorkLite
 }
 type SendResult = { reply?: string; event?: EventLite } | { error: string; detail: string }
 /**
  * 本地事件视图：在 shared 的 EventLite 之上补撤回字段（shared 不动，避免跨包冲突；
  * sqlite eventLog 的 toEvent 已带 voided，服务端返回的对象天然多这个字段，加 (?) 即对齐）。
  */
-type TEvent = EventLite & { voided?: boolean }
+type TEvent = EventLite & {
+  sessionId?: string
+  sourceEventId?: string | null
+  replyTo?: string | null
+  sourceEventIds?: string[]
+  voided?: boolean
+  toolCalls?: Array<{ name: string; args: string; result?: string; err?: string }>
+}
+type AgentProgressLite = {
+  runId: string
+  sessionId: string
+  agentId: string
+  title: string
+  sourceEventId: string | null
+  phase: 'started' | 'preparing' | 'processing' | 'tool-start' | 'tool-finish' | 'text-delta' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+  toolId?: string
+  ok?: boolean
+  delta?: string
+  at: string
+  steps: Array<{ label: string; at: string }>
+  streamText?: string
+}
+
+function downstreamAgentCounts(events: readonly TEvent[]): Map<string, number> {
+  const ancestorsByEvent = new Map<string, Set<string>>()
+  const counts = new Map<string, number>()
+  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+    if (event.voided) continue
+    const ancestors = new Set<string>()
+    for (const sourceId of event.sourceEventIds ?? []) {
+      ancestors.add(sourceId)
+      for (const ancestor of ancestorsByEvent.get(sourceId) ?? []) ancestors.add(ancestor)
+    }
+    ancestorsByEvent.set(event.id, ancestors)
+    if (event.authorKind === 'agent' && event.kind === 'message') {
+      for (const sourceId of ancestors) counts.set(sourceId, (counts.get(sourceId) ?? 0) + 1)
+    }
+  }
+  return counts
+}
 /** 表情回应汇总（本地镜像 seam space-event 的 ReactSummary，shared 不动照 voided 惯例）。 */
 interface ReactSummaryLite { emoji: string; count: number; users: string[] }
 type ReactResult = ReactSummaryLite[] | { error: string }
@@ -72,6 +121,7 @@ const STATE_LABEL: Record<string, string> = {
 const STATE_TAG: Record<string, string> = { chain: 'warning', static: 'info' }
 const STOP_LABEL: Record<string, string> = {
   await_human: '等待人类下一步指示',
+  await_human_decision: '等待 DRI 决策',
   completed: '回合完成',
   budget_exhausted: '自治预算已用完，等待人类',
   invalid_target: '委托目标不在授权名单',
@@ -216,6 +266,7 @@ const TeamspacePage = defineComponent({
       sessions(token: string): Promise<SessionLite[]>
       commands(token: string): Promise<CommandLite[]>
       events(token: string, sessionId: string): Promise<EventLite[] | null>
+      event(token: string, sessionId: string, eventId: string): Promise<TEvent | null>
       search(token: string, sessionId: string, query: string): Promise<EventLite[] | null>
       members(token: string, sessionId: string): Promise<MemberLite[] | null>
       staging(token: string, sessionId: string): Promise<StagingEntry[] | null>
@@ -223,13 +274,16 @@ const TeamspacePage = defineComponent({
       memories(token: string, sessionId: string): Promise<Array<{ text: string }> | null>
       todos(token: string, sessionId: string): Promise<TodoView[] | null>
       agents(token: string): Promise<AgentView[] | null>
-      apiPort(token: string): Promise<number | null>
+      apiConfig(token: string): Promise<{ publicBaseUrl: string | null; port: number } | null>
       humans(token: string): Promise<Array<{ id: string; username: string; displayName: string }> | null>
       send(token: string, sessionId: string, text: string, mentions?: string[], replyTo?: string | null): Promise<SendResult>
       typing(token: string, sessionId: string, name: string): Promise<void>
       react(token: string, sessionId: string, eventId: string, emoji: string): Promise<ReactResult>
       unreact(token: string, sessionId: string, eventId: string, emoji: string): Promise<ReactResult>
       reactions(token: string, sessionId: string): Promise<Record<string, ReactSummaryLite[]> | { error: string } | null>
+      inviteAgent(token: string, sessionId: string, agentId: string): Promise<
+        { ok: true; joined: boolean; title: string; detail: string } | { error: string; detail: string } | null
+      >
     }>()
     const appCtx = useContext()
     const router = useRouter()
@@ -238,8 +292,10 @@ const TeamspacePage = defineComponent({
     const sessions = ref([]) as { value: SessionLite[] }
     const members = ref([]) as { value: MemberLite[] }
     const events = ref([]) as { value: TEvent[] }
+    const progressRuns = ref([]) as { value: AgentProgressLite[] }
     const staging = ref([]) as { value: StagingEntry[] }
     const turn = ref(null) as { value: TurnLite | null }
+    const sessionWork = ref({ activeSessionId: null, owners: [], queue: [] }) as { value: SessionWorkLite }
     const activeId = ref('')
     const draft = ref('')
     const reply = ref('')
@@ -252,6 +308,8 @@ const TeamspacePage = defineComponent({
     const commands = ref([]) as { value: CommandLite[] }
     /** AI 成员工作状态（agents RPC；随每次 load 刷新）。 */
     const agents = ref([]) as { value: AgentView[] }
+    const inviteAgentId = ref('')
+    const invitingAgent = ref(false)
     const humans = ref([]) as { value: Array<{ id: string; username: string; displayName: string }> }
     /** 本会话 AI 沉淀记忆（memories RPC；随每次 load 刷新）。 */
     const memories = ref([]) as { value: Array<{ text: string }> }
@@ -273,8 +331,12 @@ const TeamspacePage = defineComponent({
       ['挑战者', '挑刺这个方案'],
       ['会议记录官', '记一下要点'],
     ]
-    const panelOpen = ref(!window.matchMedia('(max-width: 768px)').matches)
-    const railOpen = ref(!window.matchMedia('(max-width: 768px)').matches)
+    const mobileViewport = window.matchMedia('(max-width: 760px)')
+    const isMobileViewport = ref(mobileViewport.matches)
+    const panelOpen = ref(!mobileViewport.matches)
+    const panelTab = ref('info')
+    const activityLimit = ref(100)
+    const railOpen = ref(!mobileViewport.matches)
     /** 「回到最新」按钮：偏离底部（>80px）且有时间线内容时显示。 */
     const nearBottom = ref(true)
     const hasRail = computed(() => (appCtx.client.router.views['space-teamspace-sidebar']?.length ?? 0) > 0)
@@ -287,6 +349,10 @@ const TeamspacePage = defineComponent({
     const closed = computed(() => activeSession.value?.status === 'closed')
 
     const mentionCandidates = () => members.value.filter((m) => MENTION_ROLES.has(m.role))
+    const invitableAgents = () => {
+      const invited = new Set(members.value.map((member) => member.principalId))
+      return agents.value.filter((agent) => !invited.has(agent.id))
+    }
 
     // ── @所有人：合成候选（不在成员表里，哨兵 id = __all__）─────────────
     // 当 @token 匹配 all/所有人/everyone 时菜单多出「@所有人」一项，选中插入 '@所有人 '；
@@ -344,7 +410,7 @@ const TeamspacePage = defineComponent({
     function unauthed() {
       replyOk.value = false
       reply.value = '请先登录'
-      void router.push('/login')
+      void router.replace({ path: '/login' })
     }
 
     // ── 搜索（时间线 ⇄ 命中列表两种渲染模式）────────────────────────────
@@ -435,27 +501,18 @@ const TeamspacePage = defineComponent({
       const usable = turns.filter((t) => t.q || t.rows.length)
       const body = usable.map((t, i) => {
         const head = t.q
-          ? `<div class="q"><div class="qt">议题 ${i + 1} · ${esc(t.q.author)} · ${esc(t.q.time)}</div><div class="qb">${esc(t.q.text)}</div></div>`
-          : '<div class="q"><div class="qt">开场</div></div>'
+          ? `<section><h2>议题 ${i + 1} · ${esc(t.q.author)} · ${esc(t.q.time)}</h2><p><strong>${esc(t.q.text)}</strong></p>`
+          : '<section><h2>开场</h2>'
         const answers = t.rows.map((r) =>
           r.kind === 'system'
-            ? `<div class="sys">${esc(r.text)}</div>`
-            : `<div class="a"><span class="aa">${esc(r.author)}：</span>${esc(r.text).replace(/\n/g, '<br/>')}</div>`,
+            ? `<p><em>系统：${esc(r.text)}</em></p>`
+            : `<p><strong>${esc(r.author)}：</strong>${esc(r.text).replace(/\n/g, '<br/>')}</p>`,
         ).join('')
-        return head + answers
-      }).join('<hr class="sep"/>')
-      const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-        body{font-family:'Microsoft YaHei',sans-serif;margin:36px;line-height:1.7;color:#222}
-        h1{font-size:20px;border-bottom:2px solid #2f54eb;padding-bottom:8px}
-        .meta{color:#888;font-size:12px;margin-bottom:18px}
-        .q{margin-top:14px}.qt{color:#2f54eb;font-weight:bold;font-size:13px}
-        .qb{font-weight:bold;margin:4px 0 8px}
-        .a{margin:6px 0 6px 14px}.aa{color:#555}
-        .sys{color:#999;font-size:12px;margin:4px 0 4px 14px}
-        .sep{border:none;border-top:1px dashed #ccc;margin:16px 0}
-      </style></head><body>
+        return `${head}${answers}</section>`
+      }).join('')
+      const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>
         <h1>会议纪要 —— ${esc(title)}</h1>
-        <div class="meta">导出时间：${new Date().toLocaleString('zh-CN')}　·　共 ${usable.length} 个议题</div>
+        <p>导出时间：${new Date().toLocaleString('zh-CN')}　·　共 ${usable.length} 个议题</p>
         ${body}
       </body></html>`
       try {
@@ -564,6 +621,7 @@ const TeamspacePage = defineComponent({
         if (mb) members.value = mb
         if (st) staging.value = st
         turn.value = tn
+        if (tn?.sessionWork) sessionWork.value = tn.sessionWork
         if (ag) agents.value = ag
         rpc.value.humans(token).then((h) => { if (h) humans.value = h }).catch(() => {})
         if (mm && !isUnauth(mm)) memories.value = mm
@@ -607,19 +665,50 @@ const TeamspacePage = defineComponent({
           onHumanTyping(String(msg.body?.sessionId ?? ''), String(msg.body?.name ?? ''))
           return
         }
+        if (msg?.type === 'space:session-work') {
+          if (msg.body && typeof msg.body === 'object') sessionWork.value = msg.body as SessionWorkLite
+          return
+        }
+        if (msg?.type === 'space:agent-progress') {
+          const update = msg.body as Omit<AgentProgressLite, 'steps'> | undefined
+          if (!update || !update.sessionId || !update.runId || !update.agentId) return
+          const label = update.phase === 'started' ? '开始处理任务'
+            : update.phase === 'preparing' ? '准备专属工作区'
+              : update.phase === 'processing' ? '处理任务与上下文'
+                : update.phase === 'tool-start' ? `调用工具：${update.toolId ?? '未知工具'}`
+                  : update.phase === 'tool-finish' ? `${update.toolId ?? '工具'}${update.ok ? '完成' : '失败'}`
+                    : update.phase === 'text-delta' ? '正在生成回复'
+                    : update.phase === 'finalizing' ? '整理最终答复'
+                      : update.phase === 'completed' ? '已完成'
+                        : update.phase === 'cancelled' ? '已取消' : '执行失败'
+          const previous = progressRuns.value.find((run) => run.runId === update.runId)
+          const steps = previous?.steps ?? []
+          const delta = update.phase === 'text-delta' && typeof update.delta === 'string' ? update.delta : ''
+          const streamText = `${previous?.streamText ?? ''}${delta}`.slice(-16_000)
+          if (steps.at(-1)?.label !== label) steps.push({ label, at: update.at })
+          progressRuns.value = [
+            ...progressRuns.value.filter((run) => run.runId !== update.runId),
+            { ...previous, ...update, steps: steps.slice(-30), streamText },
+          ].slice(-40)
+          return
+        }
         if (msg?.type !== 'space:event') return
-        const event = msg.body?.event as EventLite | undefined
-        if (!event) return
-        // 会话切换期间 event.sessionId 不等于当前视图 —— 忽略（切回时全量刷新）。
-        if (event.sessionId !== activeId.value) return
-        mergeEvent(event)
-        notifyIfHidden(event)
+        const sessionId = String(msg.body?.sessionId ?? '')
+        const eventId = String(msg.body?.eventId ?? '')
+        // Push frames carry only a pointer; the authenticated session RPC checks
+        // membership again before event content reaches this browser.
+        if (!eventId || sessionId !== activeId.value) return
+        void rpc.value.event(getToken(), sessionId, eventId).then((event) => {
+          if (!event || sessionId !== activeId.value) return
+          mergeEvent(event)
+          notifyIfHidden(event)
+        })
       } catch {
         // 非法帧忽略（socket 上还有 rpc:response 等其它类型）。
       }
     }
     /** 按 id 去重、seq 升序合并一条事件（socket 推送与乐观回执共用）。 */
-    function mergeEvent(event: EventLite) {
+    function mergeEvent(event: TEvent) {
       if (events.value.some((e) => e.id === event.id)) return
       events.value = [...events.value, event].sort((a, b) => a.seq - b.seq)
       // 当前打开的会话 = 已读：同步本地已读时刻，会话栏红点即灭（跨 entry 共享 localStorage）。
@@ -638,6 +727,7 @@ const TeamspacePage = defineComponent({
     watch(() => route.query.session, (v) => {
       if (v && v !== activeId.value) {
         activeId.value = v
+        if (isMobileViewport.value) railOpen.value = false
         events.value = []
         reactions.value = {} // 切会话清掉回应汇总（随 load 重拉）
         reactPickerId.value = ''
@@ -715,6 +805,23 @@ const TeamspacePage = defineComponent({
       menu.value = null
     }
 
+    async function inviteSelectedAgent() {
+      if (!activeId.value || !inviteAgentId.value || invitingAgent.value) return
+      invitingAgent.value = true
+      try {
+        const result = await rpc.value.inviteAgent(getToken(), activeId.value, inviteAgentId.value)
+        if (!result) { window.location.assign('/login'); return }
+        if ('error' in result) { showReply(`邀请失败：${result.detail || result.error}`, false); return }
+        showReply(result.detail, true)
+        inviteAgentId.value = ''
+        await load()
+      } catch (error) {
+        showReply(`邀请失败：${String((error as Error).message ?? error)}`, false)
+      } finally {
+        invitingAgent.value = false
+      }
+    }
+
     /** 成功回执 3s 自动消隐（错误常显，可手动关）。 */
     function showReply(text: string, ok: boolean) {
       reply.value = text
@@ -740,9 +847,10 @@ const TeamspacePage = defineComponent({
     }
     async function uploadFile(file: File) {
       if (fileUploading.value || closed.value) return
+      if (!activeId.value) { showReply('请先选择一个会话，再上传附件', false); return }
       fileUploading.value = true
       try {
-        const res = await fetch(`${getApiBase()}/api/upload?name=${encodeURIComponent(file.name)}`, {
+        const res = await fetch(`${getApiBase()}/api/upload?sessionId=${encodeURIComponent(activeId.value)}&name=${encodeURIComponent(file.name)}`, {
           method: 'POST', body: file, credentials: 'same-origin',
           headers: { authorization: `Bearer ${getToken()}` },
         })
@@ -757,6 +865,25 @@ const TeamspacePage = defineComponent({
         showReply(`上传失败：${String((e as Error).message ?? e)}`, false)
       } finally {
         fileUploading.value = false
+      }
+    }
+
+    async function importAttachment(file: { title: string; url: string }) {
+      if (!activeId.value || closed.value) return
+      const url = new URL(file.url, getApiBase())
+      const name = url.pathname.split('/').at(-1)
+      if (!name) return
+      try {
+        const res = await fetch(`${getApiBase()}/api/uploads/${encodeURIComponent(name)}/import?sessionId=${encodeURIComponent(activeId.value)}`, {
+          method: 'POST', credentials: 'same-origin',
+          headers: { authorization: `Bearer ${getToken()}` },
+        })
+        if (res.status === 401) { unauthed(); return }
+        const result = await res.json().catch(() => null as { error?: string; detail?: string; title?: string } | null)
+        if (!res.ok) { showReply(result?.detail ?? `导入失败（${result?.error ?? res.status}）`, false); return }
+        showReply('附件已导入团队知识库，团队成员和 Agent 均可检索', true)
+      } catch (error) {
+        showReply(`导入失败：${String((error as Error).message ?? error)}`, false)
       }
     }
 
@@ -807,6 +934,20 @@ const TeamspacePage = defineComponent({
       }
     }
 
+    function chooseQuickReply(text: string) {
+      const target = events.value.slice().reverse().find((event) =>
+        event.kind === 'message' && !event.voided)
+      if (!target || target.authorKind !== 'agent' || closed.value) return
+      replyTo.value = {
+        author: authorLabel(target.authorId, members.value),
+        summary: target.text.slice(0, 50),
+        seq: target.seq,
+        id: target.id,
+      }
+      onDraft(text)
+      void nextTick(() => inputEl.value?.focus())
+    }
+
     // 滚动跟随（修复 UX 评审第 1 条）：贴底才自动跟随；偏离给「回到最新」。
     function onScroll() {
       const wrap = document.querySelector('.content-body .el-scrollbar__wrap') as HTMLElement | null
@@ -848,6 +989,7 @@ const TeamspacePage = defineComponent({
       }
       if (nearBottom.value) scrollToBottom()
     })
+    watch(activeId, () => { activityLimit.value = 100 })
 
     // ── 可见即已读兜底：页面从后台回到可见时，把当前会话写一次已读时刻 ──
     // 防止「看过但红点还在」的边缘态（切走瞬间推来的消息未落 seen）。
@@ -857,8 +999,16 @@ const TeamspacePage = defineComponent({
       }
     }
 
+    function onViewportChange(event: MediaQueryListEvent) {
+      isMobileViewport.value = event.matches
+      // 两侧面板在手机上是抽屉；进入窄屏时先收起，离开窄屏恢复桌面双栏。
+      railOpen.value = !event.matches
+      panelOpen.value = !event.matches
+    }
+
     onMounted(async () => {
       document.addEventListener('visibilitychange', onVisibilityChange)
+      mobileViewport.addEventListener('change', onViewportChange)
       const meRes = await rpc.value.me(getToken())
       if (!meRes || isUnauth(meRes)) { unauthed(); return }
       me.value = meRes
@@ -870,13 +1020,15 @@ const TeamspacePage = defineComponent({
       if (document.hidden && typeof Notification !== 'undefined') {
         try { void Notification.requestPermission().catch(() => {}) } catch { /* 静默 */ }
       }
-      // 后端 HTTP 基址（撤回/上传用）：端口由 RPC 下发（env APP_PORT）。
+      // 后端 HTTP 基址（撤回/上传用）：优先使用 HTTPS 反代公网 origin。
       try {
-        const port = await rpc.value.apiPort(getToken())
-        if (port) apiBase = `${location.protocol}//${location.hostname}:${port}`
+        const config = await rpc.value.apiConfig(getToken())
+        if (config?.publicBaseUrl) apiBase = config.publicBaseUrl
+        else if (config?.port) apiBase = `${location.protocol}//${location.hostname}:${config.port}`
       } catch { /* 保持 :8080 兜底 */ }
       // client.socket 是 Vue ref（可能为 null）—— 取 .value 并守卫。
-      const rawSocket = (appCtx.client.socket as { value?: WebSocket } | undefined)?.value
+      const clientWithSocket = appCtx.client as typeof appCtx.client & { socket?: { value?: WebSocket } }
+      const rawSocket = clientWithSocket.socket?.value
       socket = rawSocket && typeof rawSocket.addEventListener === 'function' ? rawSocket : undefined
       if (!socket) console.warn('[space] client.socket 不可监听（外壳版本差异），实时推送降级为手动刷新')
       socket?.addEventListener('message', onSocketMessage)
@@ -884,6 +1036,7 @@ const TeamspacePage = defineComponent({
     })
     onUnmounted(() => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      mobileViewport.removeEventListener('change', onViewportChange)
       document.querySelector('.content-body .el-scrollbar__wrap')
         ?.removeEventListener('scroll', onScroll)
       socket?.removeEventListener('message', onSocketMessage)
@@ -898,6 +1051,8 @@ const TeamspacePage = defineComponent({
       const ElCard = resolveComponent('el-card') as unknown as string
       const ElRow = resolveComponent('el-row') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
+      const ElSelect = resolveComponent('el-select') as unknown as string
+      const ElOption = resolveComponent('el-option') as unknown as string
       const ElTag = resolveComponent('el-tag') as unknown as string
       const ElEmpty = resolveComponent('el-empty') as unknown as string
       const ElScrollbar = resolveComponent('el-scrollbar') as unknown as string
@@ -923,34 +1078,60 @@ const TeamspacePage = defineComponent({
       const ElImage = resolveComponent('el-image') as unknown as string
       const ElSteps = resolveComponent('el-steps') as unknown as string
       const ElStep = resolveComponent('el-step') as unknown as string
+      const ElTabs = resolveComponent('el-tabs') as unknown as string
+      const ElTabPane = resolveComponent('el-tab-pane') as unknown as string
+      const ElCollapse = resolveComponent('el-collapse') as unknown as string
+      const ElCollapseItem = resolveComponent('el-collapse-item') as unknown as string
 
-      const activeStatus = activeSession.value ? sessionStatus(activeSession.value) : null
+      const work = sessionWork.value
+      const busySession = work?.activeSessionId
+      const busyTitle = sessions.value.find((session) => session.id === busySession)?.title ?? busySession
+      const waitingHere = work?.queue.some((item) => item.sessionId === activeSession.value?.id) ?? false
+      const activeStatus = !activeSession.value ? null
+        : busySession === activeSession.value.id
+          ? { label: '聊天中…', tag: 'warning' }
+          : busySession && waitingHere
+            ? { label: `排队中 · ${busyTitle} 正在处理`, tag: 'info' }
+            : sessionStatus(activeSession.value)
       const topbarLeft = () => [
         hasRail.value
           ? h(ElButton, {
-              key: 'rail-toggle', text: true, onClick: () => { railOpen.value = !railOpen.value },
+              key: 'rail-toggle', text: true, onClick: () => {
+                railOpen.value = !railOpen.value
+                if (isMobileViewport.value && railOpen.value) panelOpen.value = false
+              },
             }, { default: () => h(KIcon, { name: railOpen.value ? 'chevron-left' : 'chevron-right' }) })
           : null,
-        h('span', { class: 'layout-header-title', key: 'title' },
-          activeSession.value?.title ?? '未选择会议'),
+        h('span', {
+          class: 'layout-header-title sp-session-title', key: 'title',
+          title: activeSession.value?.title ?? '未选择会议',
+        }, activeSession.value?.title ?? '未选择会议'),
         activeStatus
           ? h(ElTag, { key: 'status', size: 'small', type: activeStatus.tag },
               { default: () => activeStatus.label })
           : null,
       ]
       const topbarRight = () => [
+        h(ElButton, {
+          key: 'agents-catalog', text: true, size: 'small', class: 'sp-mobile-secondary',
+          onClick: () => window.location.assign('/teamspace/agents'),
+        }, { default: () => '团队 Agent' }),
         turn.value?.state === 'static'
-          ? h(ElTag, { key: 'paused', size: 'small', type: 'warning' }, { default: () => '已暂停' })
+          ? h(ElTag, { key: 'paused', size: 'small', type: 'warning', class: 'sp-mobile-secondary' }, { default: () => '已暂停' })
           : null,
         h(ElButton, {
           key: 'panel', text: true, type: panelOpen.value ? 'primary' : 'info',
-          onClick: () => { panelOpen.value = !panelOpen.value },
-        }, { default: () => '协作面板' }),
+          class: 'sp-collab-toggle', title: '打开或关闭协作面板',
+          onClick: () => {
+            panelOpen.value = !panelOpen.value
+            if (isMobileViewport.value && panelOpen.value) railOpen.value = false
+          },
+        }, { default: () => isMobileViewport.value ? '面板' : '协作面板' }),
       ]
 
       // 文本渲染：@提及 → 小号 primary el-tag，其余原样（人类气泡 + 搜索结果共用）。
       // 文件消息（[文件] 开头）：图片扩展名 → el-image；否则 el-link 新窗打开下载。
-      const renderText = (text: string) => {
+      const renderText = (text: string): VNodeChild => {
         // 引用深度融合（2026-10-02）：消息头部的「> 引用 #seq 作者：摘要」行
         // 渲染为引用块（竖线 + 灰底小字），其余为正文 —— 发送格式不变
         //（服务端零改动），展示层升级。
@@ -965,20 +1146,29 @@ const TeamspacePage = defineComponent({
             : rawAuthor
           return [
             h('div', { class: 'sp-quote', title: qm[3] }, `↳ 回复 #${qm[1]} ${pretty}：${qm[3]}`),
-            h('div', renderText(qm[4] ?? '')),
+            h('div', null, [renderText(qm[4] ?? '')]),
           ]
         }
         const file = splitFileMessage(text)
         if (file) {
           // 标题形如「[文件] 名 (123 KB)」；链接文本取纯文件名。
           const label = file.title.replace(/^\[文件\]\s*/, '').replace(/\s*\([^)]*\)$/, '') || file.title
-          const isImage = IMAGE_RE.test(file.url)
+          const url = new URL(file.url, getApiBase())
+          // Existing timeline items predate session-bound file URLs. Resolve
+          // their session from the currently open conversation for compatibility.
+          if (!url.searchParams.has('sessionId') && activeId.value) url.searchParams.set('sessionId', activeId.value)
+          const isImage = IMAGE_RE.test(url.pathname)
           return [
             h('div', { key: 'file-title' }, file.title),
             isImage
-              ? h(ElImage, { key: 'file-image', src: file.url, fit: 'scale-down', lazy: true })
-              : h(ElLink, { key: 'file-link', type: 'primary', href: file.url, target: '_blank' },
+              ? h(ElImage, { key: 'file-image', src: url.href, fit: 'scale-down', lazy: true })
+              : h(ElLink, { key: 'file-link', type: 'primary', href: url.href, target: '_blank' },
                   { default: () => label }),
+            h(ElButton, {
+              key: 'file-import', text: true, type: 'primary', size: 'small',
+              title: '点击后文件内容会对全体团队成员和 Agent 可检索',
+              onClick: () => void importAttachment(file),
+            }, { default: () => '导入团队知识库（全队可见）' }),
           ]
         }
         return splitMentions(text).map((seg, i) => seg.at
@@ -1019,7 +1209,7 @@ const TeamspacePage = defineComponent({
         }, `↳ ${head}：${body}`)
       }
 
-      const messageRow = (ev: TEvent, flowView?: FlowEventView | null) => {
+      const messageRow = (ev: TEvent, flowView?: FlowEventView | null, causalCounts: ReadonlyMap<string, number> = new Map()) => {
         const isFlow = ev.authorKind === 'system' && !ev.voided && !!flowView
         // 服务流程进度卡片：el-card 内 el-text 说明行 + el-steps（active = 已完成步数）。
         const flowCard = flowView
@@ -1038,6 +1228,20 @@ const TeamspacePage = defineComponent({
         // 撤回入口：仅自己的（authorKind='human'）未撤回消息悬停时出现，在「引用」旁。
         const canRecall = !ev.voided && ev.kind === 'message' &&
           ev.authorKind === 'human' && ev.authorId === me.value?.id
+        const canDecide = ev.kind === 'message' && ev.authorKind === 'agent' &&
+          members.value.some((member) => member.principalId === me.value?.id && member.role === 'DRI')
+        const downstreamCount = canDecide ? (causalCounts.get(ev.id) ?? 0) : 0
+        const decisionActions = canDecide && ev.voided ? [
+          { action: 'redo', label: '重新执行此历史影响项' },
+          { action: 'modify', label: '修改要求并重新执行' },
+        ] : canDecide ? [
+          { action: 'pass', label: '通过（先复核）' },
+          { action: 'reject', label: `否决（下游 ${downstreamCount} 条）` },
+          { action: 'modify', label: `修改（下游 ${downstreamCount} 条）` },
+          { action: 'defer', label: '暂缓并发起复核' },
+          { action: 'recall', label: `撤回（下游 ${downstreamCount} 条）` },
+          { action: 'redo', label: `要求重做（下游 ${downstreamCount} 条）` },
+        ] : []
         // 回应汇总标签：count>0 才渲染；users 含我 → primary 高亮。
         const myId = me.value?.id ?? ''
         const summaryTags = (reactions.value[ev.id] ?? []).map((s) => h(ElTag, {
@@ -1071,17 +1275,17 @@ const TeamspacePage = defineComponent({
     // 聊天名字只显示显示名（id 收进悬停 title，不占版面）。
     const m0 = membersView.find((x) => x.principalId === ev.authorId)
     const name = m0 ? (m0.duty?.trim() ? m0.duty : m0.role) : (ev.authorId ?? '系统')
-        const bubble = ev.voided
+        const bubble: VNodeChild = ev.voided
           ? h(ElText, { size: 'small', type: 'info' }, { default: () => '消息已撤回' })
           : isFlow
             ? flowCard
             : ev.authorKind === 'human'
               ? renderText(ev.text)
               : renderMarkdown(ev.text, h, { ElText })
-        const metaRow = !ev.voided
+        const metaRow = !ev.voided || canDecide
           ? h('div', { class: 'sp-msg-meta' }, [
               h('span', formatTime(ev.ts)),
-              ev.kind === 'message' && !ev.voided
+                    ev.kind === 'message' && (!ev.voided || canDecide)
                 ? h(ElDropdown, { trigger: 'click', onCommand: (cmd: string) => {
                     if (cmd === 'quote') {
                       replyTo.value = {
@@ -1098,14 +1302,26 @@ const TeamspacePage = defineComponent({
                       return
                     }
                     if (cmd === 'recall') return void recallEvent(ev)
+                  if (cmd.startsWith('decision:')) {
+                    const action = cmd.slice('decision:'.length)
+                    const needsReason = action !== 'pass'
+                    draft.value = `/decision ${action} ${ev.id}${needsReason ? ' 请填写原因或新要求' : ''}`
+                    inputEl.value?.focus()
+                    return
+                  }
                   } }, {
                     default: () => h(ElButton, { text: true, size: 'small' }, { default: () => '⋯' }),
                     dropdown: () => [
-                      h(ElDropdownItem, { command: 'quote' }, { default: () => '引用' }),
-                      h(ElDropdownItem, { command: 'react' }, { default: () => '回应' }),
+                      !ev.voided ? h(ElDropdownItem, { command: 'quote' }, { default: () => '引用' }) : null,
+                      !ev.voided ? h(ElDropdownItem, { command: 'react' }, { default: () => '回应' }) : null,
                       canRecall
                         ? h(ElDropdownItem, { command: 'recall', divided: true }, { default: () => '撤回' })
                         : null,
+                      ...decisionActions.map(({ action, label }) => h(ElDropdownItem, {
+                        key: `decision-${ev.id}-${action}`,
+                        command: `decision:${action}`,
+                        divided: action === 'pass',
+                      }, { default: () => label })),
                     ],
                   })
                 : null,
@@ -1114,6 +1330,24 @@ const TeamspacePage = defineComponent({
         const reactionsRow = summaryTags.length
           ? h('div', { class: 'sp-reactions' }, summaryTags)
           : null
+        const sourceIds = new Set([ev.sourceEventId, ...(ev.sourceEventIds ?? [])].filter(Boolean))
+        const matchingRuns = ev.authorKind === 'agent'
+          ? progressRuns.value.filter((run) => run.sessionId === ev.sessionId && run.agentId === ev.authorId &&
+              Boolean(run.sourceEventId && sourceIds.has(run.sourceEventId)))
+          : []
+        const progressCards = matchingRuns.map((run) => h(ElCollapse, { key: `run-${run.runId}` }, {
+          default: () => h(ElCollapseItem, { name: run.runId }, {
+            title: () => `工作记录 · ${run.steps.length} 步`,
+            default: () => h(ElSpace, { direction: 'vertical', fill: true, size: 4 }, {
+              default: () => [
+                ...run.steps.map((step, index) => h(ElText, {
+                  key: `${run.runId}-${index}`, size: 'small', type: 'info',
+                }, { default: () => `${formatTime(step.at)} · ${step.label}` })),
+                run.streamText ? h(ElText, { key: `${run.runId}-stream` }, { default: () => `回复草稿（生成中）\n${run.streamText}` }) : null,
+              ],
+            }),
+          }),
+        }))
         return h('div', { key: ev.id, 'data-ev-id': ev.id, class: `sp-msg${self ? ' self' : ''}` }, [
           h(ElAvatar, { size: 32 }, { default: () => name.charAt(0) }),
           h('div', { class: 'sp-msg-body' }, [
@@ -1121,7 +1355,8 @@ const TeamspacePage = defineComponent({
             ev.replyTo ? quoteBlock(ev.replyTo) : null,
             h('div', {
               class: `sp-bubble${ev.authorKind === 'agent' && !ev.voided && !isFlow ? ' agent' : ''}`,
-            }, bubble),
+            }, [bubble]),
+            ...progressCards,
             metaRow,
             reactionsRow,
             reactionPanel,
@@ -1131,7 +1366,8 @@ const TeamspacePage = defineComponent({
 
       // ── 时间分隔线（groupByDay 渲染辅助）：相邻消息日期变化处插 el-divider ──
       const renderTimeline = () => {
-        const nodes: unknown[] = []
+        const nodes: VNodeChild[] = []
+        const causalCounts = downstreamAgentCounts(events.value)
         let lastDay = ''
         // 服务流程上下文（零状态）：顺序遍历时维护最近一条「启动/完成」行的
         // 流程名与 steps，推进行没有 steps 就地取用；重放事件流天然恢复上下文。
@@ -1152,16 +1388,17 @@ const TeamspacePage = defineComponent({
             lastFlowName = fv.flowName
             lastFlowSteps = fv.steps
           }
-          nodes.push(messageRow(ev, fv))
+          nodes.push(messageRow(ev, fv, causalCounts))
         }
         return nodes
       }
 
       // ── 搜索行（时间线区域顶部）：回车即搜，「清除」恢复全量 ─────────────
-      const searchBar = h(ElRow, { justify: 'center' }, {
+      const searchBar = h(ElRow, { justify: 'center', class: 'sp-chat-search' }, {
         default: () => h(ElSpace, {}, {
           default: () => [
             h(ElInput, {
+              class: 'sp-search-input',
               modelValue: searchQuery.value,
               'onUpdate:modelValue': (v: string) => { searchQuery.value = v },
               onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') void doSearch() },
@@ -1172,10 +1409,10 @@ const TeamspacePage = defineComponent({
               { default: () => '搜索' }),
             h(ElButton, { size: 'small', onClick: clearSearch }, { default: () => '清除' }),
             // 导出 Markdown：当前时间线 events 落成 .md 文件下载（纯前端）。
-            h(ElButton, { text: true, size: 'small', disabled: events.value.length === 0, onClick: exportMarkdown },
+            h(ElButton, { class: 'sp-search-secondary', text: true, size: 'small', disabled: events.value.length === 0, onClick: exportMarkdown },
               { default: () => '导出' }),
             h(ElButton, {
-              text: true, size: 'small', disabled: events.value.length === 0,
+              class: 'sp-search-secondary', text: true, size: 'small', disabled: events.value.length === 0,
               title: '按回合折叠生成会议纪要（Word 可打开）',
               onClick: exportMinutes,
             }, { default: () => '纪要' }),
@@ -1197,7 +1434,7 @@ const TeamspacePage = defineComponent({
           default: () => [
             h(ElText, { size: 'small', type: 'info' },
               { default: () => `${authorLabel(ev.authorId, members.value)} · ${formatTime(ev.ts)}` }),
-            h('div', renderSearchText(ev.text)),
+            h('div', null, [renderSearchText(ev.text)]),
           ],
         })),
       ])
@@ -1221,6 +1458,29 @@ const TeamspacePage = defineComponent({
             }),
           })
         : null
+      const liveProgressRows = progressRuns.value
+        .filter((run) => run.sessionId === activeId.value &&
+          !events.value.some((ev) => ev.authorKind === 'agent' && ev.authorId === run.agentId &&
+            new Set([ev.sourceEventId, ...(ev.sourceEventIds ?? [])].filter(Boolean)).has(run.sourceEventId)))
+        .map((run) => h('div', { key: `live-run-${run.runId}`, class: 'sp-msg' }, [
+          h(ElAvatar, { size: 32 }, { default: () => run.title.charAt(0) }),
+          h('div', { class: 'sp-msg-body' }, [
+            h('div', { class: 'sp-msg-name' }, `${run.title} · ${run.phase === 'completed' ? '已完成' : run.phase === 'failed' ? '执行失败' : run.phase === 'cancelled' ? '已取消' : '正在工作'}`),
+            h(ElCollapse, {}, {
+              default: () => h(ElCollapseItem, { name: run.runId }, {
+                title: () => `工作记录 · ${run.steps.length} 步`,
+                default: () => h(ElSpace, { direction: 'vertical', fill: true, size: 4 }, {
+                  default: () => [
+                    ...run.steps.map((step, index) => h(ElText, {
+                      key: `${run.runId}-live-${index}`, size: 'small', type: 'info',
+                    }, { default: () => `${formatTime(step.at)} · ${step.label}` })),
+                    run.streamText ? h(ElText, { key: `${run.runId}-live-stream` }, { default: () => `回复草稿（生成中）\n${run.streamText}` }) : null,
+                  ],
+                }),
+              }),
+            }),
+          ]),
+        ]))
       // 人类「正在输入」行（AI 行之上）：3s 内有 typing 帧才显示。
       const humanTypingLine = humanTyping.value.name
         ? h(ElRow, { justify: 'center', key: 'human-typing' }, {
@@ -1249,7 +1509,7 @@ const TeamspacePage = defineComponent({
                       })
                     : null,
                 ])
-              : h('div', { class: 'sp-list' }, [...renderTimeline(), humanTypingLine, typingLine]),
+              : h('div', { class: 'sp-list' }, [...renderTimeline(), ...liveProgressRows, humanTypingLine, typingLine]),
       ])
 
       // ── 协作面板 v2（2026-10-02 用户拍板「实事求是」）──────────────────
@@ -1259,8 +1519,46 @@ const TeamspacePage = defineComponent({
       //   ② 成员（含 AI 状态）：能 @ 谁，AI 忙闲一目了然；
       //   ③ 团队待办：/todo 的只读清单。
       const t = turn.value
-      const panelCard = h(ElCard, { shadow: 'hover' }, {
+      const queueSessions = [...new Map(sessionWork.value.queue.map((item) => [item.sessionId, item])).values()]
+      const sessionInfo = () => h(ElCard, { shadow: 'hover' }, {
         default: () => [
+          h(ElRow, { justify: 'space-between', align: 'middle' }, {
+            default: () => [
+              h(ElText, { tag: 'strong', truncated: true, title: activeSession.value?.title ?? '' }, {
+                default: () => activeSession.value?.title ?? '未选择会话',
+              }),
+              activeStatus
+                ? h(ElTag, { size: 'small', type: activeStatus.tag }, { default: () => activeStatus.label })
+                : null,
+            ],
+          }),
+          h(ElText, { size: 'small', type: 'info', class: 'sp-panel-block' }, {
+            default: () => `${members.value.length} 位成员 · ${events.value.filter((event) => event.kind === 'message').length} 条消息`,
+          }),
+          h(ElSpace, { wrap: true, class: 'sp-panel-block' }, {
+            default: () => [
+              h(ElButton, { size: 'small', onClick: scrollToBottom }, { default: () => '回到最新' }),
+              h(ElButton, { size: 'small', disabled: !events.value.some((event) => !event.voided), onClick: exportMinutes }, {
+                default: () => '导出纪要',
+              }),
+            ],
+          }),
+          sessionWork.value.activeSessionId || queueSessions.length
+            ? h('div', { class: 'sp-panel-block' }, [
+                h('div', { class: 'sp-panel-title' }, 'Agent 处理队列'),
+                sessionWork.value.activeSessionId
+                  ? h(ElText, { size: 'small', type: 'success', class: 'sp-panel-block' }, {
+                      default: () => `正在处理：${sessions.value.find((item) => item.id === sessionWork.value.activeSessionId)?.title ?? sessionWork.value.activeSessionId}`,
+                    })
+                  : null,
+                ...queueSessions.map((item) => h(ElButton, {
+                  key: `queue-${item.sessionId}`, text: true, size: 'small',
+                  onClick: () => { void router.replace({ query: { session: item.sessionId } }) },
+                }, {
+                  default: () => `第 ${item.position} 位 · ${sessions.value.find((session) => session.id === item.sessionId)?.title ?? item.sessionId}`,
+                })),
+              ])
+            : null,
           // ⓪ 协作进行时（B2，2026-10-06）：回合链路上 = AI 在干活，人话
           // 呈现「谁手头有活」；完成/暂停各自有对应的一行状态。
           t?.state === 'chain'
@@ -1273,8 +1571,8 @@ const TeamspacePage = defineComponent({
                 { default: () => `回合已暂停：${STOP_LABEL[t.stopReason] ?? t.stopReason}` })
             : null,
           // ② 成员（人类 + AI 合并，AI 带忙闲状态）。
-          h('div', { class: 'sp-panel-title' }, '成员（点击头像下方名字可 @）'),
-          mentionCandidates().length || agents.value.length
+          h('div', { class: 'sp-panel-title' }, '会话成员（点击名字可 @）'),
+          mentionCandidates().length
             ? h('div', { class: 'sp-member-list' }, [
                 ...mentionCandidates().map((m) => {
                   const ag = agents.value.find((a) => a.id === m.principalId)
@@ -1282,20 +1580,39 @@ const TeamspacePage = defineComponent({
                   // chip 只放短名（分工/角色 + 忙闲），完整「名（id）」进悬浮
                   // title —— 2026-10-05：长 id 曾把面板右缘顶裁切。
                   const short = `${m.duty?.trim() || m.role}${status}`
-                  return h(ElTag, {
-                    key: m.principalId, size: 'small', class: 'sp-chip',
+                  return h(ElButton, {
+                    key: m.principalId, size: 'small', text: true,
                     type: m.role === 'DRI' || m.role === '群主' ? 'success' : 'primary',
                     title: `${memberLabel(m)}${status ? ` —— AI 状态：${status.replace(' · ', '')}` : ''}`,
+                    onClick: () => { insertMention(m.principalId); inputEl.value?.focus() },
                   }, { default: () => short })
                 }),
-                ...agents.value
-                  .filter((a) => !mentionCandidates().some((m) => m.principalId === a.id))
-                  .map((a) => h(ElTag, {
-                    key: a.id, size: 'small', class: 'sp-chip', type: 'info',
-                    title: '直接 @ 或 /tell 可派活',
-                  }, { default: () => `${a.title} · ${a.status === 'working' ? '工作中' : '空闲'}` })),
               ])
-            : h(ElText, { size: 'small', type: 'info' }, { default: () => '暂无在册成员' }),
+            : h(ElText, { size: 'small', type: 'info' }, { default: () => '暂无可 @ 的会话成员' }),
+          h('div', { class: 'sp-panel-title' }, '邀请 Agent（加入后可读取完整会话历史）'),
+          invitableAgents().length
+            ? h(ElSpace, { fill: true }, {
+                default: () => [
+                  h(ElSelect, {
+                    modelValue: inviteAgentId.value,
+                    'onUpdate:modelValue': (value: string) => { inviteAgentId.value = value },
+                    placeholder: '选择团队 Agent',
+                    disabled: !activeId.value || closed.value || invitingAgent.value,
+                    clearable: true,
+                  }, {
+                    default: () => invitableAgents().map((agent) => h(ElOption, {
+                      key: agent.id, label: agent.title, value: agent.id,
+                    })),
+                  }),
+                  h(ElButton, {
+                    type: 'primary', size: 'small',
+                    disabled: !activeId.value || closed.value || !inviteAgentId.value,
+                    loading: invitingAgent.value,
+                    onClick: () => void inviteSelectedAgent(),
+                  }, { default: () => '邀请加入' }),
+                ],
+              })
+            : h(ElText, { size: 'small', type: 'info' }, { default: () => '所有团队 Agent 已加入本会话' }),
           // ③ 团队待办（/todo 只读清单，写路径走指令）。
           h('div', { class: 'sp-panel-title' }, '团队待办'),
           todos.value.length
@@ -1309,6 +1626,89 @@ const TeamspacePage = defineComponent({
               }, { default: () => `${td.done ? '[x]' : '[ ]'} ${td.done ? '' : (i + 1) + '. '}${td.text}` }))
             : h(ElText, { size: 'small', type: 'info', class: 'sp-panel-block' },
               { default: () => '暂无待办 —— 用 /todo <文本> 记一条' }),
+        ],
+      })
+      // 活动日志消费会话事件与 runtime 写入的脱敏 toolCalls；事件经同一 socket
+      // 实时送达。Agent 上下文层会过滤这些人类专属过程事件。
+      const activityLog = () => {
+        const activityEvents = events.value.slice().reverse()
+        const visibleEvents = activityEvents.slice(0, activityLimit.value)
+        const liveRuns = progressRuns.value.filter((run) =>
+          run.sessionId === activeId.value &&
+          !['completed', 'failed', 'cancelled'].includes(run.phase) &&
+          !events.value.some((ev) => ev.authorKind === 'agent' && ev.authorId === run.agentId &&
+            new Set([ev.sourceEventId, ...(ev.sourceEventIds ?? [])].filter(Boolean)).has(run.sourceEventId)))
+        return events.value.length || liveRuns.length
+          ? h(ElSpace, { direction: 'vertical', fill: true, size: 8 }, {
+            default: () => [
+              ...liveRuns.map((run) => h(ElCard, {
+                key: `activity-run-${run.runId}`, shadow: 'never',
+              }, {
+                default: () => [
+                  h(ElRow, { justify: 'space-between', align: 'middle' }, {
+                    default: () => [
+                      h(ElText, { tag: 'strong' }, { default: () => run.title }),
+                      h(ElTag, { size: 'small', type: 'warning' }, { default: () => '正在处理' }),
+                    ],
+                  }),
+                  h(ElText, { size: 'small', type: 'info', class: 'sp-panel-block' }, {
+                    default: () => run.steps.at(-1)?.label ?? '正在准备',
+                  }),
+                ],
+              })),
+              activityEvents.length > visibleEvents.length
+                ? h(ElButton, {
+                    text: true,
+                    type: 'primary',
+                    onClick: () => { activityLimit.value += 100 },
+                  }, { default: () => `加载更早活动（还有 ${activityEvents.length - visibleEvents.length} 条）` })
+                : null,
+              ...visibleEvents.map((ev) => {
+                const jumpToEvent = () => {
+                  panelTab.value = 'info'
+                  if (isMobileViewport.value) panelOpen.value = false
+                  nextTick(() => {
+                    const el = document.querySelector(`[data-ev-id="${ev.id}"]`)
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    el?.classList.add('sp-flash')
+                    setTimeout(() => el?.classList.remove('sp-flash'), 1400)
+                  })
+                }
+                const calls = ev.toolCalls ?? []
+                const summary = ev.voided ? '消息已撤回' : ev.text
+                const preview = summary.length > 140 ? `${summary.slice(0, 140)}…` : summary
+                return h(ElCard, { key: `activity-${ev.id}`, shadow: 'never', class: 'sp-activity-card' }, {
+                  default: () => [
+                    h(ElButton, { text: true, type: 'primary', size: 'small', class: 'sp-activity-meta', onClick: jumpToEvent }, {
+                      default: () => `#${ev.seq} ${authorLabel(ev.authorId, members.value)} · ${formatTime(ev.ts)}`,
+                    }),
+                    h(ElText, { size: 'small', title: summary }, {
+                      default: () => `${ev.kind === 'message' ? '发言' : ev.kind}：${preview}`,
+                    }),
+                    ...calls.map((call, i) => {
+                      const outcome = call.err ? `失败：${call.err}` : call.result ? `结果：${call.result}` : '已调用'
+                      const shortOutcome = outcome.length > 140 ? `${outcome.slice(0, 140)}…` : outcome
+                      return h('div', { key: `${ev.id}-tool-${i}` }, [
+                        h(ElTag, { size: 'small', type: call.err ? 'danger' : 'info' }, {
+                          default: () => `调用工具：${call.name}`,
+                        }),
+                        h(ElText, { size: 'small', title: outcome }, { default: () => shortOutcome }),
+                      ])
+                    }),
+                  ],
+                })
+              }),
+            ],
+          })
+          : h(ElEmpty, { description: '本会话还没有活动记录' })
+      }
+      const panelCard = h(ElTabs, {
+        modelValue: panelTab.value,
+        'onUpdate:modelValue': (value: string) => { panelTab.value = value },
+      }, {
+        default: () => [
+          h(ElTabPane, { label: '会话信息', name: 'info' }, { default: sessionInfo }),
+          h(ElTabPane, { label: `活动 (${events.value.length})`, name: 'activity' }, { default: activityLog }),
         ],
       })
       const collabPanel = () => panelOpen.value
@@ -1366,6 +1766,7 @@ const TeamspacePage = defineComponent({
       ])
 
       // ── composer 悬浮卡片（贴底居中；已结束会话禁用）────────────────────
+      const replySnapshot = replyTo.value
       const composer = h('div', [
         h('div', {
           class: CENTERED,
@@ -1373,13 +1774,27 @@ const TeamspacePage = defineComponent({
         suggestionPopover(),
         h(KCard, { class: 'sp-composer' }, {
           default: () => [
+            // 快捷回复针对最后一条 Agent 消息，先填草稿并建立引用关系，用户仍可编辑后发送。
+            (() => {
+              const latestMessage = events.value.slice().reverse().find((event) =>
+                event.kind === 'message' && !event.voided)
+              if (draft.value.trim() || latestMessage?.authorKind !== 'agent' || closed.value) return null
+              const replies = ['收到，我来跟进。', '同意，按这个方案继续。', '请补充依据和具体步骤。']
+              return h(ElSpace, { key: 'quick-replies', wrap: true }, {
+                default: () => replies.map((text) => h(ElButton, {
+                  key: text, round: true, size: 'small', disabled: sending.value,
+                  title: '填入草稿并引用最近的 Agent 回复，可编辑后发送',
+                  onClick: () => chooseQuickReply(text),
+                }, { default: () => text })),
+              })
+            })(),
             // 引用条：composer 输入框上方（仅 replyTo 存在时显示；× 清除）。
-            replyTo.value
+            replySnapshot
               ? h('span', { key: 'reply-bar' }, [
                   h(ElTag, {
                     size: 'small', type: 'info', closable: true,
                     onClose: () => { replyTo.value = null },
-                  }, { default: () => `引用 #${replyTo.value.seq} ${replyTo.value.author}：${replyTo.value.summary}` }),
+                  }, { default: () => `引用 #${replySnapshot.seq} ${replySnapshot.author}：${replySnapshot.summary}` }),
                 ])
               : null,
             h(ElInput, {
@@ -1388,9 +1803,9 @@ const TeamspacePage = defineComponent({
               onKeydown,
               onBlur,
               disabled: closed.value,
+              autosize: { minRows: 1, maxRows: 8 },
               ref: (inst) => { inputEl.value = (inst as { textarea?: HTMLTextAreaElement } | null)?.textarea ?? null },
               type: 'textarea',
-              rows: 3,
               placeholder: closed.value
                 ? '会话已结束，不能继续发言'
                 : '输入消息，Enter 发送…',
@@ -1441,11 +1856,17 @@ const TeamspacePage = defineComponent({
         ]),
       ])
 
-      return h(KLayout, { main: 'page-teamspace' }, {
+      return h(KLayout, { main: 'page-teamspace', class: 'sp-team-layout' }, {
         header: topbarLeft,
         menu: topbarRight,
         default: () => [
           h(ThemeStyle),
+          isMobileViewport.value && (railOpen.value || panelOpen.value)
+            ? h('button', {
+                class: 'sp-drawer-backdrop', type: 'button',
+                'aria-label': '关闭侧栏', onClick: () => { railOpen.value = false; panelOpen.value = false },
+              })
+            : null,
           railOpen.value && hasRail.value
             ? h('aside', { class: 'page-sidebar' }, [
                 h(KSlot, { name: 'space-teamspace-sidebar', single: true }),
@@ -1476,7 +1897,7 @@ const TeamspacePage = defineComponent({
 interface PageCtx {
   client: {
     router: {
-      page(options: { path: string; name: string; icon?: string; order?: number; component: unknown }): void
+      page(options: { path: string; name: string; icon?: Component | string; order?: number; component: unknown }): void
     }
   }
 }
@@ -1488,5 +1909,12 @@ export default function main(ctx: PageCtx) {
     icon: ICONS.teamspace,
     order: 900,
     component: TeamspacePage,
+  })
+  ctx.client.router.page({
+    path: '/teamspace/agents',
+    name: '团队 Agent',
+    icon: AGENT_PAGE_ICON,
+    order: 901,
+    component: AgentManagementPage,
   })
 }

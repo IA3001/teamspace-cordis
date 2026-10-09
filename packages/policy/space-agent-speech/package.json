@@ -1,0 +1,14 @@
+{
+  "name": "space-agent-speech",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "policy：Agent 被动回复与连续主动发言限制；纯函数",
+  "main": "src/index.ts",
+  "dependencies": {
+    "space-event": "*"
+  },
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

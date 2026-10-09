@@ -6,7 +6,9 @@
   "description": "client-ui：团队空间整页（时间线 + 轮次状态/成员 + 输入区）。页面只做组合（铁律 1）",
   "main": "src/index.ts",
   "dependencies": {
+    "space-agent-catalog": "*",
     "space-client-ui-shared": "*",
+    "space-prompt": "*",
     "space-ui": "*"
   },
   "peerDependencies": {

@@ -20,9 +20,31 @@ declare module 'cordis' {
   interface Context {
     agentRuntime: AgentRuntimeService
   }
+  interface Events {
+    /** Ephemeral, human-facing execution updates; never persisted to the session timeline. */
+    'space/agent-progress'(this: Context, update: AgentProgressUpdate): void
+  }
 }
 
 // ── 数据形状 ──────────────────────────────────────────────────────────────
+
+export type AgentProgressPhase =
+  | 'started' | 'preparing' | 'processing' | 'tool-start' | 'tool-finish'
+  | 'text-delta' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+
+export interface AgentProgressUpdate {
+  runId: string
+  sessionId: string
+  agentId: string
+  title: string
+  sourceEventId: string | null
+  phase: AgentProgressPhase
+  toolId?: string
+  ok?: boolean
+  /** Final answer text for human UI streaming only; never persisted or sent to other Agents. */
+  delta?: string
+  at: string
+}
 
 /** 一次干活路径的回执。receipt 是给人看的时间线文本；其余字段给断言与未来 UI。 */
 export interface CodingReceipt {
@@ -50,6 +72,23 @@ export interface CodingReceipt {
   mode: 'llm' | 'stub'
   /** 真模型模式下的模型名（.env LLM_MODEL）；stub 模式 null。 */
   model: string | null
+  /** Tools that actually ran during this task, including failures. */
+  toolResults?: Array<{ toolId: string; ok: boolean; output: string; code?: string; costMs: number }>
+  /** Session events and memories that informed this result. */
+  sourceEventIds?: string[]
+}
+
+export interface AgentRunContext {
+  sessionId?: string
+  /** Causal source that can invalidate and cancel this run. */
+  sourceEventId?: string
+}
+
+export class AgentRunCancelledError extends Error {
+  constructor(sourceEventId: string) {
+    super(`Agent run cancelled because source event ${sourceEventId} was withdrawn`)
+    this.name = 'AgentRunCancelledError'
+  }
 }
 
 // ── 服务缝 ────────────────────────────────────────────────────────────────
@@ -65,5 +104,14 @@ export abstract class AgentRuntimeService extends Service {
   }
 
   /** 走完一条干活路径并返回回执。调用方决定回执去向（/tell 直接回复；委托链走收执口）。 */
-  abstract perform(agentId: string, task: string): Promise<CodingReceipt>
+  abstract perform(agentId: string, task: string, context?: AgentRunContext): Promise<CodingReceipt>
+
+  /** Abort active runs whose delegation source is being withdrawn. */
+  abstract cancelBySource(sourceEventId: string): Promise<number>
+
+  /** Wait for runs already registered under this cause without cancelling them. */
+  abstract waitForSource(sourceEventId: string): Promise<void>
+
+  /** Register any plugin-backed Agent work under its causal source for coordinated cancellation. */
+  abstract registerSourceRun(sourceEventId: string, cancel: () => void, settled: Promise<unknown>): () => void
 }

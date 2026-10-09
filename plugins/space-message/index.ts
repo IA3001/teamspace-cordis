@@ -11,6 +11,8 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from 'cordis'
 import type { SessionEvent } from 'space-event'
 import { MessageError, MessageService } from 'space-message'
+import type { MessageMetadata } from 'space-message'
+import { blockedSpeechNotice, decideAgentSpeech } from 'space-agent-speech'
 
 export const name = 'space-message'
 export const inject = ['session', 'eventLog', 'agents']
@@ -38,6 +40,7 @@ export class MessageServiceImpl extends MessageService {
     text: string,
     mentions: string[] = [],
     replyTo?: string | null,
+    metadata: MessageMetadata = {},
   ): Promise<SessionEvent> {
     // 1) 会话必须存在。
     if (!this.ctx.session.getSession(sessionId)) {
@@ -82,6 +85,22 @@ export class MessageServiceImpl extends MessageService {
       }
     }
 
+    if (authorKind === 'agent') {
+      let descriptor
+      try { descriptor = this.ctx.agents.get(authorId).descriptor }
+      catch { descriptor = undefined }
+      const history = this.ctx.eventLog.listBySession(sessionId)
+      const decision = decideAgentSpeech(authorId, descriptor?.speechPolicy, metadata.sourceEventId, history)
+      if (!decision.allowed) {
+        return this.ctx.eventLog.append({
+          id: randomUUID(), sessionId, authorId: null, phaseId: null,
+          authorKind: 'system', kind: 'system',
+          text: blockedSpeechNotice(descriptor?.title ?? authorId, decision.reason!),
+          mentions: [], toolCalls: [], replyMode: '',
+        })
+      }
+    }
+
     // 6) 落库（append 内部恰好 emit 一次 'space/event-appended'，这里不再 emit）。
     return this.ctx.eventLog.append({
       id: randomUUID(),
@@ -95,6 +114,8 @@ export class MessageServiceImpl extends MessageService {
       toolCalls: [],
       replyMode: '',
       replyTo: targetReplyTo,
+      sourceEventId: metadata.sourceEventId,
+      sourceEventIds: metadata.sourceEventIds,
     })
   }
 }

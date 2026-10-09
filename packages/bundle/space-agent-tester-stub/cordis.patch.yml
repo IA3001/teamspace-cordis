@@ -4,3 +4,4 @@
 # 停用：用户层写同 id 行 disabled: true 即可。
 - id: agent-tester-stub
   name: './plugins/agent-tester-stub/index.ts'
+  disabled: true

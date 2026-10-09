@@ -1,7 +1,7 @@
 // seam/space-bus —— 输出层（L10）外发通道词汇缝。
 //
 // 这一层**只有词汇**：Service 声明 + 类型 + 错误分类法。零实现、零 IO。
-// 现实现是 plugins/space-push 对 webui.broadcast 的封装位（本阶段仍是空壳
+// 现实现是 plugins/space-push 对 WebUI 成员单播的封装位（本阶段仍是空壳
 // 声明，先立契约）；出口只有这一个 —— 输出侧另开第二个广播口即违章程
 // （ARCHITECTURE 反模式 ④）。
 //

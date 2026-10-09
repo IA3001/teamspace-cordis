@@ -1,0 +1,12 @@
+{
+  "name": "space-agent-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam: persistent, team-shared Agent definitions",
+  "main": "src/index.ts",
+  "dependencies": {},
+  "peerDependencies": {
+    "cordis": "^4.0.0-rc.10"
+  }
+}

@@ -18,6 +18,10 @@ function assertScope(scope: string): void {
 }
 
 function toItem(r: Row): MemoryItem {
+  let sourceEventIds: string[] = []
+  try { sourceEventIds = JSON.parse(String(r.source_event_ids ?? '[]')) as string[] } catch { /* legacy row */ }
+  const sourceEventId = (r.source_event_id as string | null) ?? null
+  if (sourceEventId && !sourceEventIds.includes(sourceEventId)) sourceEventIds.unshift(sourceEventId)
   return {
     id: r.id as string,
     scope: r.scope as string,
@@ -25,6 +29,9 @@ function toItem(r: Row): MemoryItem {
     text: r.text as string,
     weight: Number(r.weight),
     authorId: (r.author_id as string | null) ?? null,
+    sourceEventId,
+    sourceEventIds,
+    invalidatedAt: (r.invalidated_at as string | null) ?? null,
     createdAt: r.created_at as string,
   }
 }
@@ -41,7 +48,7 @@ export class SqliteMemoryStore extends MemoryService {
     scope: string,
     kind: string,
     text: string,
-    opts?: { weight?: number; authorId?: string | null },
+    opts?: { weight?: number; authorId?: string | null; sourceEventId?: string | null; sourceEventIds?: string[] },
   ): Promise<MemoryItem> {
     assertScope(scope)
     if (!text.trim()) {
@@ -51,6 +58,21 @@ export class SqliteMemoryStore extends MemoryService {
     if (!Number.isFinite(weight) || weight < 0 || weight > 1) {
       throw new MemoryError('invalid_weight', `记忆权重必须在 [0,1]：收到 ${weight}`)
     }
+    const sourceEventIds = [...new Set([...(opts?.sourceEventIds ?? []), opts?.sourceEventId].filter((id): id is string => Boolean(id)))]
+    for (const id of sourceEventIds) {
+      const source = this.db.prepare('SELECT voided FROM events WHERE id = ?').get(id) as { voided: number } | undefined
+      if (!source || Number(source.voided) === 1) {
+        throw new MemoryError('not_found', `记忆来源事件 ${id} 不存在或已撤回`)
+      }
+    }
+    let sourceEventId: string | null = opts?.sourceEventId ?? sourceEventIds[0] ?? null
+    if (sourceEventId) {
+      const existing = this.db.prepare(
+        'SELECT * FROM memories WHERE scope = ? AND kind = ? AND source_event_id = ? ORDER BY invalidated_at IS NULL DESC LIMIT 1',
+      ).get(scope, kind, sourceEventId) as Row | undefined
+      if (existing && existing.invalidated_at == null) return this.withSources(existing)
+      if (existing) sourceEventId = null // keep the invalidated record immutable; a rebuild is a new memory row.
+    }
     const item: MemoryItem = {
       id: randomUUID(),
       scope,
@@ -58,14 +80,19 @@ export class SqliteMemoryStore extends MemoryService {
       text,
       weight,
       authorId: opts?.authorId ?? null,
+      sourceEventId,
+      sourceEventIds,
+      invalidatedAt: null,
       createdAt: now(),
     }
     this.db
       .prepare(
-        `INSERT INTO memories(id, scope, kind, text, weight, author_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO memories(id, scope, kind, text, weight, author_id, created_at, source_event_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(item.id, item.scope, item.kind, item.text, item.weight, item.authorId, item.createdAt)
+      .run(item.id, item.scope, item.kind, item.text, item.weight, item.authorId, item.createdAt, item.sourceEventId)
+    const link = this.db.prepare('INSERT OR IGNORE INTO memory_sources(memory_id, source_event_id) VALUES (?, ?)')
+    for (const id of sourceEventIds) link.run(item.id, id)
     return item
   }
 
@@ -77,17 +104,17 @@ export class SqliteMemoryStore extends MemoryService {
     // 用 julianday 归一到 0~1 近似）；同权后到先得。
     const rows = this.db
       .prepare(
-        `SELECT *, (
-           weight * 0.7 +
+        `SELECT m.*, (SELECT json_group_array(ms.source_event_id) FROM memory_sources ms WHERE ms.memory_id = m.id) AS source_event_ids, (
+           m.weight * 0.7 +
            0.3 * MAX(0, MIN(1, (julianday(created_at) - (
-             SELECT MIN(julianday(created_at)) FROM memories WHERE scope = ?
+             SELECT MIN(julianday(created_at)) FROM memories WHERE scope = ? AND invalidated_at IS NULL
            )) / MAX(1e-9, julianday('now') - (
-             SELECT MIN(julianday(created_at)) FROM memories WHERE scope = ?
+             SELECT MIN(julianday(created_at)) FROM memories WHERE scope = ? AND invalidated_at IS NULL
            ))))
          ) AS rank_score
-         FROM memories
-         WHERE scope = ? AND weight >= ? ${opts?.kind ? 'AND kind = ?' : ''}
-         ORDER BY rank_score DESC, created_at DESC
+         FROM memories m
+         WHERE m.scope = ? AND m.invalidated_at IS NULL AND m.weight >= ? ${opts?.kind ? 'AND m.kind = ?' : ''}
+         ORDER BY rank_score DESC, m.created_at DESC
          LIMIT ?`,
       )
       .all(...(opts?.kind ? [scope, scope, scope, minWeight, opts.kind, limit] : [scope, scope, scope, minWeight, limit])) as Row[]
@@ -102,8 +129,9 @@ export class SqliteMemoryStore extends MemoryService {
     return (
       this.db
         .prepare(
-          `SELECT * FROM memories
-           WHERE scope = ? AND text LIKE ? ESCAPE '\\'
+        `SELECT m.*, (SELECT json_group_array(ms.source_event_id) FROM memory_sources ms WHERE ms.memory_id = m.id) AS source_event_ids
+           FROM memories m
+           WHERE m.scope = ? AND m.invalidated_at IS NULL AND m.text LIKE ? ESCAPE '\\'
            ORDER BY weight DESC, created_at DESC
            LIMIT ?`,
         )
@@ -114,5 +142,33 @@ export class SqliteMemoryStore extends MemoryService {
   async forget(id: string): Promise<void> {
     // 幂等：不存在也静默返回（与"遗忘"语义一致，不炸不报 not_found）。
     this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id)
+  }
+
+  async forgetBySource(sourceEventId: string): Promise<number> {
+    return (await this.invalidateBySource(sourceEventId)).length
+  }
+
+  async invalidateBySource(sourceEventId: string): Promise<MemoryItem[]> {
+    const rows = this.db.prepare(`SELECT m.*,
+        (SELECT json_group_array(ms.source_event_id) FROM memory_sources ms WHERE ms.memory_id = m.id) AS source_event_ids
+      FROM memories m
+      WHERE m.invalidated_at IS NULL AND (m.source_event_id = ? OR m.id IN (
+        SELECT memory_id FROM memory_sources WHERE source_event_id = ?
+      ))`).all(sourceEventId, sourceEventId) as Row[]
+    if (rows.length === 0) return []
+    const invalidatedAt = now()
+    const update = this.db.prepare('UPDATE memories SET invalidated_at = ? WHERE id = ? AND invalidated_at IS NULL')
+    const result: MemoryItem[] = []
+    for (const row of rows) {
+      const changed = update.run(invalidatedAt, String(row.id)).changes
+      if (Number(changed) > 0) result.push(toItem({ ...row, invalidated_at: invalidatedAt }))
+    }
+    return result
+  }
+
+  private withSources(row: Row): MemoryItem {
+    const sources = this.db.prepare('SELECT source_event_id FROM memory_sources WHERE memory_id = ? ORDER BY source_event_id')
+      .all(String(row.id)) as Array<{ source_event_id: string }>
+    return toItem({ ...row, source_event_ids: JSON.stringify(sources.map((item) => item.source_event_id)) })
   }
 }

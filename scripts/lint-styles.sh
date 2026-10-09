@@ -39,12 +39,24 @@ fi
 EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build --exclude-dir=.git)
 SRC_INCLUDES=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx'
               --include='*.mjs' --include='*.cjs' --include='*.vue' --include='*.html')
+# 铁律修订允许的精确例外：唯一聊天骨架样式文件及其生成令牌文件。
+CHAT_CSS='packages/client-ui/space-client-ui-shared/client/im.css'
+THEME_TOKENS='packages/client-ui/space-client-ui-shared/client/theme.ts'
+filter_style_exceptions() {
+  while IFS= read -r line; do
+    case "$line" in
+      "$CHAT_CSS":*|"$THEME_TOKENS":*) continue ;;
+    esac
+    printf '%s\n' "$line"
+  done
+}
 
 # ── 断言 ①：不许有自写样式文件 ──────────────────────────────────────────
 # 样式文件的出现本身就是判红条件，不需要看内容。
 stylefiles=()
 if [ "${#scan_dirs[@]}" -gt 0 ]; then
   while IFS= read -r f; do
+    [ "$f" = "$CHAT_CSS" ] && continue
     [ -n "$f" ] && stylefiles+=("$f")
   done < <(find "${scan_dirs[@]}" -type f \
              \( -name '*.css' -o -name '*.scss' -o -name '*.sass' \
@@ -63,8 +75,8 @@ fi
 # ── 断言 ②：源码里不许有内联样式 ────────────────────────────────────────
 inline_hits=""
 if [ "${#scan_dirs[@]}" -gt 0 ]; then
-  inline_hits="$(grep -rnE 'style[[:space:]]*=|:style[[:space:]]*=|v-bind:style' \
-      "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "${scan_dirs[@]}" 2>/dev/null || true)"
+  inline_hits="$( (grep -rnE 'style[[:space:]]*=|:style[[:space:]]*=|v-bind:style' \
+      "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "${scan_dirs[@]}" 2>/dev/null || true) | filter_style_exceptions)"
 fi
 
 if [ -n "$inline_hits" ]; then
@@ -77,8 +89,8 @@ fi
 # ── 断言 ③：源码里不许有自写样式块与硬编码视觉值 ────────────────────────
 hard_hits=""
 if [ "${#scan_dirs[@]}" -gt 0 ]; then
-  hard_hits="$(grep -rnE '#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?\b|rgba?\(|hsla?\(|<style|StyleSheet\.create' \
-      "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "${scan_dirs[@]}" 2>/dev/null || true)"
+  hard_hits="$( (grep -rnE '#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?\b|rgba?\(|hsla?\(|<style|StyleSheet\.create' \
+      "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "${scan_dirs[@]}" 2>/dev/null || true) | filter_style_exceptions)"
 fi
 
 if [ -n "$hard_hits" ]; then
@@ -92,8 +104,8 @@ fi
 # 铁律「选型」表定死了组件库与外壳，这几项一旦被换掉，前面三条的通过就没有意义。
 # 检查 node_modules 里**实际装到**的版本（不是 package.json 里的声明）——
 # @cordisjs/components 是外壳的传递依赖，不由我们直接声明，所以才要按实际解析查。
-NODE_BIN="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}/node"
-if [ -x "$NODE_BIN" ]; then
+source "$REPO_ROOT/scripts/node-runtime.sh"
+if resolve_node_bin; then
   sel_check="$("$NODE_BIN" -e '
     const fs = require("node:fs");
     const required = {
@@ -130,7 +142,7 @@ if [ -x "$NODE_BIN" ]; then
       ;;
   esac
 else
-  note "④ 跳过选型依赖检查（找不到 node：$NODE_BIN）"
+  note '④ 跳过选型依赖检查（Node.js 不可用）'
 fi
 
 # ── 断言 ⑤：禁用的令牌层（2026-09-27 选型扩展新增，P4 2026-09-28 落地）───
@@ -140,9 +152,8 @@ fi
 forbidden_tokens=""
 forbidden_re='--(k-[a-zA-Z]|bg[0-3]([^a-zA-Z0-9-]|$)|fg[0-3]([^a-zA-Z0-9-]|$)|el-[a-zA-Z])'
 for d in "${scan_dirs[@]}"; do
-  # 注意：模式以 -- 开头，必须给 grep 显式 -- 分隔符，否则被当成选项报错、
-  # 被 || true 吃掉后表现为"什么都扫不到"（⑥⑦ 同理，都带 --）。
-  hits="$(grep -rnE -- "$forbidden_re" "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "$d" 2>/dev/null || true)"
+  # 模式以 -- 开头：include/exclude 选项必须放在 -- 前，模式与目录放在 -- 后。
+  hits="$( (grep -rnE "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" -- "$forbidden_re" "$d" 2>/dev/null || true) | filter_style_exceptions)"
   [ -n "$hits" ] && forbidden_tokens+="$hits"$'\n'
 done
 if [ -n "$forbidden_tokens" ]; then
@@ -157,7 +168,7 @@ fi
 # 出现定义（`--xxx:`）就意味着第二个令牌来源，两套令牌的口子一开就收不住。
 token_defs=""
 for d in "${scan_dirs[@]}"; do
-  hits="$(grep -rnE -- '--[a-zA-Z][a-zA-Z0-9-]*[[:space:]]*:' "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" "$d" 2>/dev/null || true)"
+  hits="$( (grep -rnE "${SRC_INCLUDES[@]}" "${EXCLUDE_DIRS[@]}" -- '--[a-zA-Z][a-zA-Z0-9-]*[[:space:]]*:' "$d" 2>/dev/null || true) | filter_style_exceptions)"
   [ -n "$hits" ] && token_defs+="$hits"$'\n'
 done
 if [ -n "$token_defs" ]; then

@@ -25,7 +25,7 @@ interface ConfigShape {
 /** 测试/写操作的返回：{ ok, detail? } 或 { ok:false, error, detail }。 */
 interface OpResult { ok?: boolean; detail?: string; error?: string }
 
-const TOKEN_KEY = 'space_token'
+const TOKEN_KEY = 'admin_token'
 const getToken = () => localStorage.getItem(TOKEN_KEY) ?? ''
 
 const SettingsPage = defineComponent({
@@ -49,7 +49,7 @@ const SettingsPage = defineComponent({
     }
 
     const rpc = useRpc<{
-      me(token: string): Promise<{ id: string; isAdmin: boolean } | null>
+      me(token: string): Promise<{ id: string; username: string } | null>
       getConfig(token: string): Promise<ConfigShape | null>
       saveLlm(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string; timeoutMs?: number }): Promise<OpResult | null>
       saveEmbed(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }): Promise<OpResult | null>
@@ -58,7 +58,7 @@ const SettingsPage = defineComponent({
       login(username: string, password: string): Promise<{ token: string } | { error: string; detail?: string }>
     }>()
 
-    const me = ref<{ id: string; isAdmin: boolean } | null | undefined>(null)
+    const me = ref<{ id: string; username: string } | null | undefined>(null)
     const cfg = ref<ConfigShape | null>(null)
     const msg = ref('')
     const msgOk = ref(true)
@@ -90,10 +90,8 @@ const SettingsPage = defineComponent({
     }
 
     onMounted(async () => {
-      const qtoken = route.query.token
-      if (typeof qtoken === 'string' && qtoken) localStorage.setItem(TOKEN_KEY, qtoken)
       const m = await rpc.value.me(getToken())
-      if (!m || !m.isAdmin) { me.value = undefined; return }
+      if (!m) { me.value = undefined; return }
       me.value = m
       await refresh()
     })
@@ -180,7 +178,7 @@ const SettingsPage = defineComponent({
         c?.hasKey ? '已保存 —— 留空保留现值，输入 - 清除' : 'sk-…'
 
       const llmSection = () => section('语言模型（LLM）',
-        '会议与 Coding 的对话推理都走这一路；OpenAI 兼容口，填直连供应商或 new-api 网关地址均可。',
+        '会议与 Coding 的对话推理都走这一路；填写模型供应商提供的 OpenAI 兼容接口地址。',
         [
           h('div', { class: 'sp-grid' }, [
             field('Base URL', h(ElInput, {
@@ -251,7 +249,7 @@ const SettingsPage = defineComponent({
 
       const panel = () => [
         pageHead('模型与接入',
-          '统一走 OpenAI 兼容口。推荐先用 new-api 网关（deploy/docker-compose.newapi.yml，管理页 :3000）把各家供应商收敛成一个入口，这里只填网关地址 + 令牌。',
+          '文字模型、Embedding 和网页搜索分别配置；在此填写各自供应商的接口地址、模型名和凭据，保存后可单独测试连通性。',
           {
             statuses: [
               { text: `语言模型 ${cfg.value?.env.llmConfigured ? '可用' : '未配置'}`, level: cfg.value?.env.llmConfigured ? 'ok' : 'warn' },
@@ -280,7 +278,7 @@ const SettingsPage = defineComponent({
 interface PageCtx {
   client: {
     router: {
-      page(options: { path: string; name: string; order?: number; component: unknown }): void
+      page(options: { path: string; name: string; order?: number; icon?: string; component: unknown }): void
     }
   }
 }

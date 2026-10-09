@@ -25,6 +25,8 @@ export interface ToolDescriptor {
   id: string
   /** 给人看的名字。 */
   title: string
+  /** Agent 端工具目录中显示的用途与 JSON 参数说明。 */
+  description?: string
   /** 能力域开放词表：'workdir' / 'llm' / 'search' / 'notify' …。 */
   capabilities: readonly string[]
   /**
@@ -40,6 +42,8 @@ export interface ToolInvoker {
   id: string
   /** 调用发生的会话（全局工具可空）。 */
   sessionId?: string
+  /** Abort long-running work when the owning Agent run is invalidated. */
+  signal?: AbortSignal
 }
 
 /** 一次工具调用的结果。 */

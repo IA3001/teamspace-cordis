@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# env.sh —— 所有运行脚本的公共前置：环境变量唯一出处 + 校验 + Node 指路。
+# env.sh —— 所有运行脚本的公共前置：环境变量唯一出处 + 校验 + Node 运行时校验。
 #
 # 为什么单独抽一个文件：端口/主机这类值一旦散落在多个脚本里，迟早对不齐
 # （上一版 teamspace 就吃过这个亏）。规矩是**只在 .env 定义一次**，
@@ -39,30 +39,10 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
-# ── ④ Node 运行时指路 ──────────────────────────────────────────────────
-# WSL 里 node 不在 PATH（系统 /usr/bin/node 不存在），统一在这里指定。
-# 可用 NODE_BIN_DIR 覆盖。
-#
-# 为什么是 node24 而不是 node：调试控制台用的@cordisjs/plugin-logger-webui
-# 依赖 node:sqlite（Node ≥ 22.5 才有），而 .toolchain/node 是 v20.17.0。
-# 两个版本并存，v20 原样留着，改 NODE_BIN_DIR 即可回退。
-NODE_BIN_DIR="${NODE_BIN_DIR:-/home/ia3000/SPM/.toolchain/node24/bin}"
-export PATH="$NODE_BIN_DIR:$PATH"
-
-command -v node >/dev/null 2>&1 || {
-  printf '✗ 找不到 node（期望在 %s）\n' "$NODE_BIN_DIR" >&2
-  exit 1
-}
-
-# 版本下限：Node ≥ 22.5 才有 node:sqlite，低于此版本必须当场失败，
-# 否则会在启动 webui 时才炸，报错离现场很远。
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-NODE_MINOR="$(node -p 'process.versions.node.split(".")[1]')"
-if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 5 ]; }; then
-  printf '✗ Node 版本过低：%s（需要 ≥ 22.5，node:sqlite 要求）\n  当前 NODE_BIN_DIR=%s\n' \
-    "$(node -v)" "$NODE_BIN_DIR" >&2
-  exit 1
-fi
+# ── ④ Node 运行时解析 + 版本检查 ──────────────────────────────────────
+# 生产环境默认使用系统 PATH；需要指定版本时可设置 NODE_BIN_DIR。
+source "$(dirname "${BASH_SOURCE[0]}")/node-runtime.sh"
+resolve_node_bin
 
 say() { printf '  %s\n' "$*"; }
 

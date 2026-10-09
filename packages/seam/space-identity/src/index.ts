@@ -24,8 +24,8 @@ export interface User {
   passwordHash: string
   displayName: string
   kind: 'human' | 'agent'
-  /** 管理员标记（账号管理 2026-10-01）。第一个注册的人类自动置位。 */
-  isAdmin: boolean
+  /** Team 人类账号级角色；与某一场会话的 DRI membership 独立。 */
+  teamRole?: TeamRole
   createdAt: string
 }
 
@@ -35,10 +35,11 @@ export interface PublicUser {
   username: string
   displayName: string
   kind: 'human' | 'agent'
-  /** 管理面要显示；不算敏感（能看出谁是管理员，但改不了）。 */
-  isAdmin: boolean
+  teamRole?: TeamRole
   createdAt: string
 }
+
+export type TeamRole = 'dri' | 'member'
 
 /** 一次登录签发的 token。 */
 export interface TokenGrant {
@@ -84,7 +85,7 @@ export abstract class UserService extends Service {
   }
 
   /** 注册人类用户。返回去敏视图。 */
-  abstract register(username: string, password: string, displayName?: string): Promise<PublicUser>
+  abstract register(username: string, password: string, displayName?: string, teamRole?: TeamRole): Promise<PublicUser>
 
   /** 注册一个 AI 成员身份（无凭据，不可登录 —— 供自定义 Agent 入会外键用）。 */
   abstract registerAgent(id: string, displayName: string): PublicUser
@@ -111,9 +112,6 @@ export abstract class UserService extends Service {
 
   /** 管理员重置某用户密码。agent 身份没有密码 → forbidden_kind。 */
   abstract resetPassword(id: string, password: string): Promise<void>
-
-  /** 设置/取消管理员。agent 身份不可设管理员 → forbidden_kind。 */
-  abstract setAdmin(id: string, v: boolean): Promise<void>
 
   /**
    * 删除用户（其 login_tokens 随之级联删除）。

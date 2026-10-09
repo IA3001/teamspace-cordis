@@ -11,18 +11,112 @@ type Row = Record<string, unknown>
 const now = () => new Date().toISOString()
 
 // ── 分块常量（策略由实现定；seam 不管）─────────────────────────────────────
-// 滑窗分块：每块约 500 字符，相邻块重叠 50 字符 —— 重叠保证跨块的句子
-// 至少在一块里完整出现，避免边界处检索漏命中。
+// 先按 Markdown 标题与段落切分，再合并到约 500 字符；超长段落按句子/词边界
+// 拆分并保留少量重叠。每块带章节面包屑，检索结果脱离原文时仍保有结构语境。
 const CHUNK_SIZE = 500
 const CHUNK_OVERLAP = 50
 
-/** 滑窗分块：返回块文本数组（可能为空 —— 空文本在调用侧已拒）。 */
-function chunkText(text: string): string[] {
+/**
+ * Build a safe trigram query from natural-language input. FTS's default AND
+ * between every query token made complete Chinese questions miss when even one
+ * phrase differed from the source. Latin words stay intact; CJK runs expand to
+ * overlapping trigrams so BM25 can rank by the amount of matching evidence.
+ */
+function trigramQuery(query: string): string {
+  const safe = query.replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const terms = new Set<string>()
+  for (const token of safe.split(/\s+/u)) {
+    if (terms.size >= 32) break
+    const chars = [...token]
+    const cjk = chars.some((char) => /\p{Script=Han}/u.test(char))
+    if (cjk && chars.length > 3) {
+      for (let i = 0; i <= chars.length - 3 && terms.size < 32; i++) terms.add(chars.slice(i, i + 3).join(''))
+    } else if (chars.length >= 3) {
+      terms.add(token)
+    }
+  }
+  return [...terms].map((term) => `"${term.replaceAll('"', '""')}"`).join(' OR ')
+}
+
+type MarkdownSection = { headings: string[]; blocks: string[] }
+
+function headingPrefix(headings: string[]): string {
+  if (headings.length === 0) return ''
+  const full = headings.join(' › ')
+  const bounded = full.length > 220 ? `${full.slice(0, 217)}…` : full
+  return `[章节：${bounded}]\n`
+}
+
+function splitLongBlock(block: string, limit: number): string[] {
+  if (block.length <= limit) return [block]
   const chunks: string[] = []
-  const step = CHUNK_SIZE - CHUNK_OVERLAP
-  for (let i = 0; i < text.length; i += step) {
-    chunks.push(text.slice(i, i + CHUNK_SIZE))
-    if (i + CHUNK_SIZE >= text.length) break
+  let start = 0
+  while (start < block.length) {
+    const hardEnd = Math.min(start + limit, block.length)
+    if (hardEnd === block.length) {
+      chunks.push(block.slice(start).trim())
+      break
+    }
+    const window = block.slice(start, hardEnd)
+    const boundary = Math.max(
+      window.lastIndexOf('\n'),
+      window.lastIndexOf('. '), window.lastIndexOf('。'), window.lastIndexOf('！'), window.lastIndexOf('？'),
+      window.lastIndexOf(' '),
+    )
+    const end = start + (boundary > limit * 0.55 ? boundary + 1 : limit)
+    chunks.push(block.slice(start, end).trim())
+    start = Math.max(start + 1, end - CHUNK_OVERLAP)
+    while (start < block.length && /\s/u.test(block[start]!)) start++
+  }
+  return chunks.filter(Boolean)
+}
+
+/** Markdown-aware chunking; each body chunk carries its heading breadcrumb. */
+function chunkText(text: string): string[] {
+  const sections: MarkdownSection[] = [{ headings: [], blocks: [] }]
+  const headings: string[] = []
+  let paragraph: string[] = []
+  const flushParagraph = () => {
+    const body = paragraph.join('\n').trim()
+    if (body) sections.at(-1)!.blocks.push(body)
+    paragraph = []
+  }
+
+  for (const line of text.replace(/\r\n?/gu, '\n').split('\n')) {
+    const heading = /^(#{1,6})\s+(.+?)\s*#*$/u.exec(line.trim())
+    if (heading) {
+      flushParagraph()
+      const level = heading[1]!.length
+      headings.length = level - 1
+      headings[level - 1] = heading[2]!.trim()
+      sections.push({ headings: [...headings], blocks: [] })
+    } else if (!line.trim()) {
+      flushParagraph()
+    } else {
+      paragraph.push(line)
+    }
+  }
+  flushParagraph()
+
+  const chunks: string[] = []
+  for (const section of sections) {
+    if (!section.blocks.length) continue
+    const prefix = headingPrefix(section.headings)
+    const capacity = Math.max(80, CHUNK_SIZE - prefix.length)
+    let body = ''
+    const flushChunk = () => {
+      const value = `${prefix}${body.trim()}`.trim()
+      if (value) chunks.push(value)
+      body = ''
+    }
+    for (const block of section.blocks) {
+      for (const piece of splitLongBlock(block, capacity)) {
+        if (body && body.length + piece.length + 2 > capacity) flushChunk()
+        if (body) body += '\n\n'
+        body += piece
+      }
+    }
+    flushChunk()
   }
   return chunks.length > 0 ? chunks : [text]
 }
@@ -100,7 +194,7 @@ export class SqliteKnowledgeStore extends KnowledgeService {
   }
 
   async search(query: string, opts?: KbSearchOptions): Promise<KbHit[]> {
-    const q = query.trim()
+    const q = query.trim().slice(0, 512)
     if (!q) {
       throw new KnowledgeError('empty_query', '知识检索 query 为空（纯空白），拒绝检索')
     }
@@ -108,12 +202,9 @@ export class SqliteKnowledgeStore extends KnowledgeService {
     // 双口径（照 eventlog.search 惯例）：FTS trigram 要求查询词 ≥ 3 字符，
     // 否则走 LIKE 兜底（2 字词如"敏捷""看板"）。
     let rows: Row[]
-    if (q.length >= 3) {
-      // FTS MATCH 串消毒（2026-10-07）：@ : * 等在 fts5 query 语法里有含义，
-      // 原样传入会 syntax error（如带 @ 的会议消息）。只保留字母/数字/汉字，
-      // 其余折成空格；空串则跳过 FTS 走 LIKE。
-      const safe = q.replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
-      if (safe) {
+    if ([...q].length >= 3) {
+      const match = trigramQuery(q)
+      if (match) {
         rows = this.db
           .prepare(
             `SELECT c.id AS chunk_id, c.doc_id, c.text, d.title AS doc_title
@@ -124,9 +215,19 @@ export class SqliteKnowledgeStore extends KnowledgeService {
              ORDER BY rank
              LIMIT ?`,
           )
-          .all(safe, topK) as Row[]
+          .all(match, topK) as Row[]
       } else {
-        rows = [] as Row[]
+        const escaped = q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
+        rows = this.db
+          .prepare(
+            `SELECT c.id AS chunk_id, c.doc_id, c.text, d.title AS doc_title
+             FROM kb_chunks c
+             JOIN kb_documents d ON d.id = c.doc_id
+             WHERE c.text LIKE ? ESCAPE '\\'
+             ORDER BY c.created_at ASC
+             LIMIT ?`,
+          )
+          .all(`%${escaped}%`, topK) as Row[]
       }
     } else {
       const escaped = q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')

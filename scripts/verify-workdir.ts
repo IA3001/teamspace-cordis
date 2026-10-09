@@ -20,7 +20,7 @@
 //
 // 用法：npm run verify:workdir    退出码 0 = 全过；1 = 判红。
 // 留痕：全部通过后记一行 action_log: verify-workdir（断言 ⑨）。
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -39,7 +39,7 @@ import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
 import { CommandService } from 'space-command'
 import type { OrchestratorBrain, PlanRequest } from 'space-orchestrator'
 
-// ── 断言器（与 verify-staging 同款）────────────────────────────────────────
+// ── 断言器（与其他本地 verifier 同款）────────────────────────────────────────
 let failures = 0
 let passes = 0
 function check(name: string, cond: boolean, detail = ''): void {
@@ -79,6 +79,47 @@ async function partA(): Promise<void> {
   // A1 未知 agent：名册制 —— 没入驻没有地盘
   await expectWorkdirError('A1a 未入驻 agent claim → not_found', 'not_found', () => workdir.claim('agent.nobody'))
   await expectWorkdirError('A1b 未领取 resolve → not_found', 'not_found', () => workdir.resolve('agent.coder', 'a.md'))
+
+  let quotaCalls = 0
+  const quotaFailCtx = new Context()
+  new AgentRegistry(quotaFailCtx).register({ id: 'agent.coder', kind: 'coding', title: '编码者', capabilities: ['coding'] })
+  const quotaFail = new LocalWorkdirService(quotaFailCtx, join(tmp, 'quota-fail'), {
+    required: true,
+    ensure: async () => { quotaCalls++; throw new Error('simulated host quota failure') },
+  })
+  await expectWorkdirError('A1c 配额登记失败时拒绝创建工作区', 'quota_unavailable', () => quotaFail.claim('agent.coder'))
+  check('A1d 配额失败发生在目录创建前', quotaCalls === 1 && !existsSync(join(tmp, 'quota-fail', 'workdirs', 'agent.coder')))
+  const quotaPassCtx = new Context()
+  new AgentRegistry(quotaPassCtx).register({ id: 'agent.coder', kind: 'coding', title: '编码者', capabilities: ['coding'] })
+  const quotaPass = new LocalWorkdirService(quotaPassCtx, join(tmp, 'quota-pass'), {
+    required: true, ensure: async () => { quotaCalls++ },
+  })
+  await quotaPass.claim('agent.coder')
+  check('A1e 配额成功后才创建工作区', quotaCalls === 2 && existsSync(join(tmp, 'quota-pass', 'workdirs', 'agent.coder')))
+  const helperCtx = new Context()
+  new AgentRegistry(helperCtx).register({ id: 'agent.coder', kind: 'coding', title: '编码者', capabilities: ['coding'] })
+  const helperPath = join(tmp, 'fake-quota-helper.mjs')
+  const helperLog = join(tmp, 'fake-quota-helper.log')
+  writeFileSync(helperPath, `#!/usr/bin/env node\nimport { appendFileSync } from 'node:fs'\nif (process.argv[2] !== 'ensure' || process.argv[3] !== 'agent.coder') process.exit(23)\nappendFileSync(${JSON.stringify(helperLog)}, process.argv.slice(2).join(' ') + '\\n')\n`)
+  chmodSync(helperPath, 0o755)
+  const previousHelper = process.env.WORKDIR_QUOTA_HELPER
+  const previousSudo = process.env.WORKDIR_QUOTA_SUDO
+  process.env.WORKDIR_QUOTA_HELPER = helperPath
+  delete process.env.WORKDIR_QUOTA_SUDO
+  const helperWorkdir = new LocalWorkdirService(helperCtx, join(tmp, 'helper-backed'), { required: true })
+  await helperWorkdir.claim('agent.coder')
+  check('A1f 配额助手收到固定 ensure + Agent ID 参数', readFileSync(helperLog, 'utf8').trim() === 'ensure agent.coder')
+  if (previousHelper === undefined) delete process.env.WORKDIR_QUOTA_HELPER
+  else process.env.WORKDIR_QUOTA_HELPER = previousHelper
+  if (previousSudo === undefined) delete process.env.WORKDIR_QUOTA_SUDO
+  else process.env.WORKDIR_QUOTA_SUDO = previousSudo
+  const missingHelperCtx = new Context()
+  new AgentRegistry(missingHelperCtx).register({ id: 'agent.coder', kind: 'coding', title: '编码者', capabilities: ['coding'] })
+  delete process.env.WORKDIR_QUOTA_HELPER
+  const missingHelper = new LocalWorkdirService(missingHelperCtx, join(tmp, 'helper-missing'), { required: true })
+  await expectWorkdirError('A1g 配额必需但未配置助手时拒绝 claim', 'quota_unavailable', () => missingHelper.claim('agent.coder'))
+  check('A1h 助手缺失时没有创建目录', !existsSync(join(tmp, 'helper-missing', 'workdirs', 'agent.coder')))
+  if (previousHelper !== undefined) process.env.WORKDIR_QUOTA_HELPER = previousHelper
 
   // A2 claim 幂等 + root 形状
   const h1 = await workdir.claim('agent.coder')
@@ -225,8 +266,8 @@ async function partB(): Promise<void> {
     readFileSync(join(rootOf, files[0]!), 'utf8').includes('实现登录页'), JSON.stringify(files))
   check('B6 状态机走满一圈（回 idle，可领下一个）', ctx.agents.get('agent.coder').status === 'idle')
   const turn = engine.turn('s_w')
-  check('B7 收执后 await_human 暂停（铁律：收到反馈必须停）', turn.state === 'static' && turn.stopReason === 'await_human', JSON.stringify(turn))
-  check('B8 暂停文案点名 coder 已交付', turn.stopDetail.includes('编码者'), turn.stopDetail)
+  check('B7 收执后引擎允许按自治策略继续（不强制 await_human）', turn.stopReason !== 'await_human', JSON.stringify(turn))
+  check('B8 收执事件点名 coder 已交付', evs1.some((e) => e.authorId === 'agent.coder' && e.text.includes('已领任务')), JSON.stringify(evs1.map((e) => e.text)))
   check('B9 协调者宣告先于委托（时间线可见）', evs1.some((e) => e.authorId === 'a_coordinator' && e.text.includes('将委托[编码者]')))
 
   // B10 名册制分工：coding 目标对 reportFeedback 必炸（它不在会话成员）
@@ -242,10 +283,10 @@ async function partB(): Promise<void> {
     fbThrew = e instanceof Error && e.name === 'OrchestratorError' ? 'OrchestratorError' : String(e)
   }
   check('B10 coding 目标走 reportFeedback 判红（名册制分工）', fbThrew === 'OrchestratorError', fbThrew)
-  // 收执口对同一在途委托正常工作（上面 B10 抛错不消费委托）
-  const ev3 = ctx.eventLog.listBySession('s_w').find((e) => e.text.includes('第二单') && e.authorId === 'agent.coder')
-  check('B11 reportCodingResult 正常收执（同途不同口）', !!ev3)
-  check('B12 交付后再暂停（await_human）', engine.turn('s_w').stopReason === 'await_human')
+  // 收执口正常结账；连续主动回复由系统拦截并留可见事件。
+  const ev3 = ctx.eventLog.listBySession('s_w').find((e) => e.text.includes('尝试主动发言，但是被拦截'))
+  check('B11 连续主动发言被拦截并留会话事件', !!ev3 && ev3.authorKind === 'system', ev3?.text)
+  check('B12 交付后不强制 await_human', engine.turn('s_w').stopReason !== 'await_human')
 
   // B13 大脑未配置：诚实最小 + 文案点明委托回路就绪
   const ctx3 = new Context()

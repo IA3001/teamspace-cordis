@@ -1,0 +1,10 @@
+{
+  "name": "space-sandbox-approval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "seam: persistent administrator review of sandbox boundary requests",
+  "main": "src/index.ts",
+  "dependencies": {},
+  "peerDependencies": { "cordis": "^4.0.0-rc.10" }
+}

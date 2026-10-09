@@ -39,6 +39,10 @@ export interface AssembledContext {
 export interface AssembleOptions {
   /** 系统提示词模板引用（缺省 'prompt.minutes'）。 */
   promptRef?: string
+  /** Agent whose private durable memory should be included alongside session memory. */
+  agentId?: string
+  /** Optional Agent-configured modules; omitted preserves the legacy all-sources behavior. */
+  contextSources?: readonly string[]
   /** 最近历史条数（缺省 20）。 */
   recentLimit?: number
   /** 记忆召回条数（缺省 5；0 = 不注入记忆）。 */

@@ -4,6 +4,8 @@
 > 铁律见 [`.rules/IRON-RULES.md`](../.rules/IRON-RULES.md)　·　怎么跑起来见 [`README.md`](../README.md)
 > 建档：2026-09-27
 
+> **状态说明（2026-10-09）**：下方按日期记录的是实现历史，不代表今天仍在使用旧页面或旧认证模型。当前 Admin 与 Team 使用独立身份、会话和 API；Admin 管理系统设置、账号与日志，Teamspace 管理共享 Agent 目录、邀请和会话。`npm run gate:static` / `npm run gate:runtime` 是当前门禁。旧记录中 `/commit`、`/tell`、`is_admin`、5174 Admin bridge 和 `/agents` 管理页均为历史实现。会议与 coding Agent 均已作为共享目录数据由通用运行时加载；LangGraph 工具循环、隔离工作区、按 Agent 并行的消息记忆、Inbox 启动回放、SQLite 跨进程活动会话租约、越界审批、DRI 决策与因果撤回/重做、主动发言节流和活动 Tab 已有实现。后续重点是 Orchestrator/确定性流程作业恢复、可达 Embedding 服务上的检索对比和 UI 体验收尾；详见根目录 [`TODO.md`](../../TODO.md) 与 [`Problem.md`](../../Problem.md)。
+
 ---
 
 ## 现状
@@ -40,7 +42,7 @@ AI 主动发言（`ctx.messages.send` 统一入口）、微信式聊天列表与
 上传/注册开关——5172 面板在线改并保存）、知识库域（迁移 0010 + space-kb + 检索
 三源接入 + /kb 管理页）、Embedding 实现（`space-embedding-openai`，EMBED_* env
 兜底）、账号管理（迁移 0011 is_admin + 首用户自动管理员 + 5172 /admin 页）、
-new-api 网关附带（deploy/docker-compose.newapi.yml）。
+外接 New API 网关已于 2026-10-09 退役，后续由后台独立配置文字模型、Embedding 与网页搜索 API。
 **模型与接入设置页**（2026-10-05）：schemastery 原生配置表单对本地 ts 插件渲染
 不出（面板显示「此插件尚未安装」），改走自建通道 —— `ctx.settings` 设置缝
 （seam/space-settings，同步 KV；impl 落 sqlite settings 表，迁移 0013）+
@@ -72,8 +74,8 @@ textarea 禁 resize、文件按钮加回形针图标。诊断：大脑原始输�
 **5174 侧打磨**（2026-10-05 深夜）：登录/注册页净化（.sp-plain 藏外壳
 global-nav 与 layout-activity，:has 选择器）；已登录态从默认空盒插画改为
 居中分区卡；会话栏彩色头像（id 哈希色相，去掉「新」字首字）；新增
-space-client-ui-bridge（5174 /admin → 5172/admin?token= 跳转，DEBUG_PORT
-取端口，延迟 replace 防外壳启动竞态）。
+历史实现：space-client-ui-bridge（5174 /admin → 5172/admin?token= 跳转，DEBUG_PORT
+取端口，延迟 replace 防外壳启动竞态）；该桥接页已于 2026-10-09 退役并从工作区移除，后台现通过独立管理入口访问。
 **知识库页修复**（2026-10-06）：/kb 白屏两连（client 少 import ThemeStyle；
 useRpc 是 ref，全部 rpc.* 调用漏 .value —— 该页自上线即不可用）；灌文档
 FOREIGN KEY 必炸（kb_chunks 先于 kb_documents 插入，顺序颠倒）；检索命中

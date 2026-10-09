@@ -6,8 +6,8 @@
 // 知识库与记忆域的分工：memory 是会话/agent 的"旁注"（自动沉淀），kb 是
 // **人工灌入**的权威知识（优先级介于 event 发言与 memory 之间）。
 //
-// 语义由实现定的部分（本缝不管）：分块策略（窗口/重叠）、向量模型与
-// embedding 量纲。search 是**纯读** —— 绝不产生写副作用（铁律）。
+// 语义由实现定的部分（本缝不管）：结构化分块策略、向量模型与 embedding
+// 量纲。search 是**纯读** —— 绝不产生写副作用（铁律）。
 import { Service } from 'cordis'
 import type { Context } from 'cordis'
 
@@ -97,7 +97,7 @@ export abstract class KnowledgeService extends Service {
 // ── 向量重排（A2，2026-10-06）：纯函数，embed 由调用方注入 ────────────────
 /**
  * 用余弦相似度对关键词命中做语义重排。任一前提不满足（无向量块 / 向量化
- * 失败）原样返回 keywordHits；有向量则取相似度 topK 替换。
+ * 失败）原样返回 keywordHits；有向量则把关键词排名与语义分数合并。
  * embed 是调用方传入的向量化函数 —— 本缝零 IO，IO 责任在调用方。
  */
 export async function vectorRerank(
@@ -121,17 +121,26 @@ export async function vectorRerank(
       for (let i = 0; i < n; i++) { dot += a[i]! * b[i]!; na += a[i]! * a[i]!; nb += b[i]! * b[i]! }
       return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0
     }
-    return withVec
-      .map((c) => ({ c, sim: cosine(qvec, c.embedding) }))
-      .sort((a, b) => b.sim - a.sim)
-      .slice(0, opts.topK)
-      .map(({ c, sim }) => ({
-        docId: c.docId,
-        docTitle: opts.titles.get(c.docId) ?? '',
-        chunkId: c.chunkId,
-        text: c.text,
-        score: sim,
-      }))
+    const keywordScore = new Map(keywordHits.map((hit, index) => [hit.chunkId, 1 / (index + 1)]))
+    const candidates = new Map<string, KbHit>()
+    keywordHits.forEach((hit, index) => candidates.set(hit.chunkId, {
+      ...hit,
+      score: 0.45 * (1 / (index + 1)),
+    }))
+    for (const chunk of withVec) {
+      const sim = Math.max(0, Math.min(1, cosine(qvec, chunk.embedding)))
+      const lexical = keywordScore.get(chunk.chunkId) ?? 0
+      candidates.set(chunk.chunkId, {
+        docId: chunk.docId,
+        docTitle: opts.titles.get(chunk.docId) ?? '',
+        chunkId: chunk.chunkId,
+        text: chunk.text,
+        // Hybrid score keeps exact lexical matches while admitting semantically
+        // close chunks that share no query token.
+        score: 0.55 * sim + 0.45 * lexical,
+      })
+    }
+    return [...candidates.values()].sort((a, b) => b.score - a.score).slice(0, opts.topK)
   } catch {
     return keywordHits
   }

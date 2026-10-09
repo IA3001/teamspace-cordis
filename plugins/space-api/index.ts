@@ -9,29 +9,66 @@
 //   GET /api/users                   人类用户清单（去敏，IM 化邀请成员用）
 //   GET /api/panels                  已登记的页内区域（seam/space-ui 注册表）
 import type { Context } from 'cordis'
+import type { PublicUser } from 'space-identity'
 
 export const name = 'space-api'
 export const inject = ['server', 'session', 'eventLog', 'ui', 'users']
 
+type Request = { headers: { get(name: string): string | null } }
+function tokenFrom(req: Request): string {
+  const bearer = req.headers.get('authorization')
+  if (bearer?.startsWith('Bearer ')) return bearer.slice(7).trim()
+  for (const part of (req.headers.get('cookie') ?? '').split(';')) {
+    const [key, ...value] = part.trim().split('=')
+    if (key === 'space_token') return decodeURIComponent(value.join('='))
+  }
+  return ''
+}
+
+async function human(ctx: Context, req: Request): Promise<PublicUser | null> {
+  try {
+    const user = await ctx.users.verifyToken(tokenFrom(req))
+    return user.kind === 'human' ? user : null
+  } catch { return null }
+}
+
+function isMember(ctx: Context, sessionId: string, userId: string): boolean {
+  try { return ctx.session.listMembers(sessionId, true).some((member) => member.principalId === userId) }
+  catch { return false }
+}
+
 export function apply(ctx: Context) {
-  ctx.server.get('/api/sessions', async () => Response.json(ctx.session.listSessions()))
+  ctx.server.get('/api/sessions', async (req) => {
+    const user = await human(ctx, req)
+    if (!user) return Response.json({ error: 'unauthorized' }, { status: 401 })
+    return Response.json(ctx.session.listSessions().filter((session) => isMember(ctx, session.id, user.id)))
+  })
 
   // 人类用户清单（去敏视图，无 passwordHash）——邀请成员 / 观测用。
-  ctx.server.get('/api/users', async () => Response.json(await ctx.users.listHumans()))
+  ctx.server.get('/api/users', async (req) => {
+    if (!(await human(ctx, req))) return Response.json({ error: 'unauthorized' }, { status: 401 })
+    return Response.json(await ctx.users.listHumans())
+  })
 
   ctx.server.get('/api/sessions/:id/events', async (req) => {
+    const user = await human(ctx, req)
+    if (!user) return Response.json({ error: 'unauthorized' }, { status: 401 })
     const session = ctx.session.getSession(req.params.id)
     if (!session) {
       return Response.json({ error: 'session_not_found', detail: `会话 ${req.params.id} 不存在` }, { status: 404 })
     }
+    if (!isMember(ctx, req.params.id, user.id)) return Response.json({ error: 'not_found' }, { status: 404 })
     return Response.json(ctx.eventLog.listBySession(req.params.id))
   })
 
   ctx.server.get('/api/sessions/:id/members', async (req) => {
+    const user = await human(ctx, req)
+    if (!user) return Response.json({ error: 'unauthorized' }, { status: 401 })
     const session = ctx.session.getSession(req.params.id)
     if (!session) {
       return Response.json({ error: 'session_not_found', detail: `会话 ${req.params.id} 不存在` }, { status: 404 })
     }
+    if (!isMember(ctx, req.params.id, user.id)) return Response.json({ error: 'not_found' }, { status: 404 })
     return Response.json(ctx.session.listMembers(req.params.id, true))
   })
 

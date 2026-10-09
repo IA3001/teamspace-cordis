@@ -46,10 +46,13 @@ import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { Context } from 'cordis'
+import { AgentRunCancelledError } from 'space-agent-runtime'
+import { apply as analystApply } from '../plugins/agent-analyst-llm/index.ts'
 import { PromptError } from 'space-prompt'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { SqlitePromptStore } from '../packages/impl/space-store-sqlite/src/prompt.ts'
+import { SqliteSettingsStore } from '../packages/impl/space-store-sqlite/src/settings.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
 import { apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
@@ -139,7 +142,7 @@ async function partA(): Promise<void> {
   const refs = prompts.list().map((x) => x.ref)
   check('A5 list 按 ref 稳定排序', refs.join(',') === [...refs].sort().join(','), refs.join(','))
 
-  // A6 seed 0002：四条占位 + 幂等 + 文案明示待原文
+  // A6 seed 0002：四条可用默认提示词 + 幂等。
   const seedDir = fileURLToPath(new URL('../packages/impl/space-store-sqlite/seed/', import.meta.url))
   db.exec(readFileSync(join(seedDir, '0002_svc_prompt.sql'), 'utf8'))
   const seeded = prompts.list()
@@ -147,8 +150,8 @@ async function partA(): Promise<void> {
     ['prompt.minutes', 'prompt.coding', 'prompt.testing', 'prompt.review'].every((r) => seeded.some((x) => x.ref === r)),
     JSON.stringify(seeded.map((x) => x.ref)))
   const SEEDED_REFS = ['prompt.minutes', 'prompt.coding', 'prompt.testing', 'prompt.review']
-  check('A6b 占位文案明示「待原文」与「占位」',
-    seeded.filter((x) => SEEDED_REFS.includes(x.ref)).every((x) => x.body.includes('占位提示词') && x.body.includes('原文')))
+  check('A6b 默认提示词有实际职责说明',
+    seeded.filter((x) => SEEDED_REFS.includes(x.ref)).every((x) => x.body.length > 30 && x.body.includes('职责')))
   const before = seeded.length
   db.exec(readFileSync(join(seedDir, '0002_svc_prompt.sql'), 'utf8'))
   check('A6c seed 重播幂等（INSERT OR IGNORE）', prompts.list().length === before)
@@ -218,8 +221,8 @@ async function partB(): Promise<void> {
   check('B2a coder 回执落时间线且含【提示词】（promptRef 绑定可见）',
     !!receipt && receipt.text.includes('【工作区】') && receipt.text.includes('【提示词】') && receipt.text.includes('编码者提示词（角色2）'),
     receipt?.text)
-  check('B2b 收执后 await_human 暂停（收到反馈必须停）',
-    engine.turn(session.id).state === 'static' && engine.turn(session.id).stopReason === 'await_human',
+  check('B2b 收执后按自治策略继续（不强制 await_human）',
+    engine.turn(session.id).stopReason !== 'await_human',
     JSON.stringify(engine.turn(session.id)))
 
   // B3 分支二（未命中）：无 @ → 纯文本回复，不委托，明示占位。
@@ -231,7 +234,7 @@ async function partB(): Promise<void> {
     typeof r2?.reply === 'string' && r2.reply.includes('【占位】'), r2?.reply)
   check('B3c 未命中不新增委托宣告（账本计数不变）',
     ctx.eventLog.listBySession(session.id).filter((e) => e.text.includes('将委托[')).length === announcesBefore)
-  check('B3d 未命中后暂停等人类（await_human）', engine.turn(session.id).stopReason === 'await_human')
+  check('B3d 未命中回复后按自治策略结束或继续', engine.turn(session.id).stopReason !== 'await_human')
 
   // B4 config 可关：enabled=false → 不注册大脑 → coordinator_unconfigured 安全默认。
   const db4 = memoryDb(true)
@@ -362,8 +365,8 @@ async function partD(): Promise<void> {
     JSON.stringify(receipts.map((e) => e.authorId)))
   check('D2c 测试者回执含【提示词】测试者提示词（角色3）',
     receipts[0]!.text.includes('测试者提示词（角色3）'), receipts[0]!.text)
-  check('D2d 收执后 await_human（铁律不变式在全名册下照旧）',
-    engine.turn(session.id).stopReason === 'await_human')
+  check('D2d 收执后不强制 await_human（全名册自治策略一致）',
+    engine.turn(session.id).stopReason !== 'await_human')
 
   // D3 /tell 直派走共享干活路径（升格后的机制口，回执形状一致）。
   const dispatch = (text: string) => {
@@ -389,21 +392,30 @@ async function partE(): Promise<void> {
 
   // mock /chat/completions：node:http 进程内起（端口 0 = 随机分配，无子进程
   // —— 承 verify-workdir 的 Windows shim 教训）；behavior 可切换。
-  const mock: { mode: 'ok-json' | 'ok-artifact' | 'ok-text' | 'http500' } = { mode: 'ok-json' }
+  const mock: { mode: 'ok-json' | 'ok-artifact' | 'ok-tool' | 'ok-text' | 'http500' | 'hold'; requests: number } = {
+    mode: 'ok-json', requests: 0,
+  }
   const server = createServer((req, res) => {
     let body = ''
     req.on('data', (c: Buffer) => { body += c })
     req.on('end', () => {
-      void body
+      const requestBody = JSON.parse(body) as { messages?: Array<{ content?: string }> }
+      mock.requests++
+      if (mock.mode === 'hold') {
+        return
+      }
       if (mock.mode === 'http500') {
         res.writeHead(500, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: { message: 'mock boom' } }))
         return
       }
+      const afterTool = requestBody.messages?.some((message) => message.content?.includes('工具结果 web.search')) ?? false
       const content = mock.mode === 'ok-json'
         ? JSON.stringify({ reply: 'MOCK-协调者回复', reason: 'mock 决策', delegate: { target: '需求分析师', instruction: 'MOCK-分析边界条件' } })
         : mock.mode === 'ok-artifact'
           ? 'MOCK-产物正文：登录页方案（分三步走）……'
+          : mock.mode === 'ok-tool'
+            ? afterTool ? 'MOCK-工具调用后的最终答复' : JSON.stringify({ toolCalls: [{ toolId: 'web.search', args: { query: 'safe test query' } }] })
           : '我先想想，暂不派单。'
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }))
@@ -425,6 +437,28 @@ async function partE(): Promise<void> {
   try {
     clearEnv()
 
+    // Admin API settings are the preferred runtime source. With env empty, both
+    // brain providers must still agree on one configured LLM and register only
+    // brain-llm (the former env-only stub check caused duplicate_brain here).
+    {
+      const configuredValues: Record<string, string> = {
+        'llm.apiKey': 'settings-mock-key',
+        'llm.baseURL': 'https://settings.mock/v1',
+        'llm.model': 'settings-mock-model',
+      }
+      const settings = {
+        get<T>(key: string, fallback: T): T { return (configuredValues[key] as T | undefined) ?? fallback },
+        set() {},
+      }
+      const ctx = new Context()
+      const brains: unknown[] = []
+      Object.assign(ctx, { settings, orchestrator: { registerBrain(brain: unknown) { brains.push(brain) } } })
+      new OpenAiChatLlm(ctx, {}, settings as never)
+      brainApply(ctx)
+      brainLlmApply(ctx)
+      check('E0 后台 settings 配置（无 LLM_* env）只注册真模型大脑', brains.length === 1, `registered=${brains.length}`)
+    }
+
     // E1 无 key → 大脑选择确定性：两脑都 apply（组合根顺序 stub 先），只有
     // stub 注册（让位日志在 5172 可见）；未命中 → 占位回复。
     {
@@ -434,6 +468,7 @@ async function partE(): Promise<void> {
       new SqliteSessionStore(ctx, db)
       new SqliteEventLog(ctx, db)
       new SqlitePromptStore(ctx, db)
+      new SqliteSettingsStore(ctx, db)
       new AgentRegistry(ctx)
       new CommandService(ctx)
       new OpenAiChatLlm(ctx)
@@ -441,6 +476,11 @@ async function partE(): Promise<void> {
       const engine = new OrchestratorEngine(ctx)
       runtimeApply(ctx)
       coderApply(ctx)
+      ctx.session.createSession({ id: 's_progress', title: '进度事件验收' })
+      Object.assign(ctx, { tools: {
+        list: () => [{ id: 'web.search', title: 'Web search', description: 'mock search', capabilities: [] }],
+        invoke: async () => ({ toolId: 'web.search', ok: true, output: 'MOCK-搜索结果', costMs: 1 }),
+      } })
       testerApply(ctx)
       reviewerApply(ctx)
       brainApply(ctx)    // 组合根顺序：stub 行在前 —— key 缺 → 上线
@@ -463,6 +503,7 @@ async function partE(): Promise<void> {
       new SqliteSessionStore(ctx, db)
       new SqliteEventLog(ctx, db)
       new SqlitePromptStore(ctx, db)
+      new SqliteSettingsStore(ctx, db)
       new AgentRegistry(ctx)
       new CommandService(ctx)
       new OpenAiChatLlm(ctx)
@@ -501,15 +542,29 @@ async function partE(): Promise<void> {
       const tmp = mkdtempSync(join(tmpdir(), 'p8-llm-b-'))
       const db = memoryDb(true)
       const ctx = new Context()
+      const progressEvents: Array<{ sessionId: string; agentId: string; sourceEventId: string | null; phase: string; toolId?: string; delta?: string }> = []
+      ctx.on('space/agent-progress', (update) => progressEvents.push(update))
+      new SqliteEventLog(ctx, db)
+      const sessions = new SqliteSessionStore(ctx, db)
+      sessions.createSession({ id: 's_progress', title: '进度事件验收' })
       new SqlitePromptStore(ctx, db)
+      new SqliteSettingsStore(ctx, db)
       new AgentRegistry(ctx)
       new CommandService(ctx)
       new LocalWorkdirService(ctx, tmp)
       new OpenAiChatLlm(ctx)
+      Object.assign(ctx, { context: { assemble: async () => ({ system: 'test context', memories: [], retrieval: [], history: [] }) } })
       runtimeApply(ctx)
       coderApply(ctx)
+      Object.assign(ctx, { tools: {
+        list: () => [{ id: 'web.search', title: 'Web search', description: 'mock search', capabilities: [] }],
+        invoke: async () => ({ toolId: 'web.search', ok: true, output: 'MOCK-搜索结果', costMs: 1 }),
+      } })
+      ctx.agents.get('agent.coder').descriptor.toolIds = ['web.search']
       mock.mode = 'ok-artifact'
-      const r = await ctx.agentRuntime.perform('agent.coder', 'MOCK-实现登录页')
+      const r = await ctx.agentRuntime.perform('agent.coder', 'MOCK-实现登录页', {
+        sessionId: 's_progress', sourceEventId: 'evt_progress',
+      })
       check('E4a 回执诚实标注【真模型】+ model=mock-model、mode=llm（LLM_SABOTAGE=1 时此处红）',
         r.mode === 'llm' && r.receipt.includes('【真模型】') && r.receipt.includes('model=mock-model'),
         r.receipt)
@@ -518,8 +573,69 @@ async function partE(): Promise<void> {
         JSON.stringify(r.files))
       const artifact = readFileSync(join(r.root, r.files[1]!), 'utf8')
       check('E4c artifact 含 LLM 输出正文（MOCK-产物正文）', artifact.includes('MOCK-产物正文'), artifact.slice(0, 120))
-      check('E4d 任务文件含 promptRef 提示词正文（取自 ctx.prompts，占位先顶着）',
-        readFileSync(join(r.root, r.files[0]!), 'utf8').includes('等待角色 2（编码）原文'))
+      check('E4d 任务文件含 promptRef 提示词正文（取自 ctx.prompts）',
+        readFileSync(join(r.root, r.files[0]!), 'utf8').includes('你是团队的编码者'))
+      check('E4d2 人类可见的运行进度只含阶段元数据，不落会话事件或暴露任务正文',
+        progressEvents.map((event) => event.phase).includes('started') &&
+          progressEvents.map((event) => event.phase).includes('completed') &&
+          progressEvents.every((event) => event.sessionId === 's_progress' && event.agentId === 'agent.coder' &&
+            event.sourceEventId === 'evt_progress' && !('task' in event) && !('content' in event)) &&
+          ctx.eventLog.listBySession('s_progress').length === 0,
+        JSON.stringify(progressEvents.map(({ phase, toolId }) => ({ phase, toolId }))))
+      check('E4d2b 最终回复 token 实时发送但不写入事件时间线',
+        progressEvents.some((event) => event.phase === 'text-delta' && event.delta?.includes('MOCK-产物正文')) &&
+          !progressEvents.some((event) => event.delta?.includes('MOCK-实现登录页')) &&
+          ctx.eventLog.listBySession('s_progress').length === 0)
+      mock.mode = 'ok-tool'
+      const toolRun = await ctx.agentRuntime.perform('agent.coder', 'MOCK-运行搜索工具', {
+        sessionId: 's_progress', sourceEventId: 'evt_tool_progress',
+      })
+      check('E4d3 工具步骤向人类进度流报告开始/结果，不包含工具参数或输出',
+        toolRun.toolResults?.length === 1 &&
+          progressEvents.some((event) => event.sourceEventId === 'evt_tool_progress' && event.phase === 'tool-start' && event.toolId === 'web.search') &&
+          progressEvents.some((event) => event.sourceEventId === 'evt_tool_progress' && event.phase === 'tool-finish' && event.ok === true) &&
+          !JSON.stringify(progressEvents.filter((event) => event.sourceEventId === 'evt_tool_progress')).includes('safe test query') &&
+          !JSON.stringify(progressEvents.filter((event) => event.sourceEventId === 'evt_tool_progress')).includes('MOCK-搜索结果') &&
+          !progressEvents.some((event) => event.sourceEventId === 'evt_tool_progress' && event.phase === 'text-delta' && event.delta?.includes('safe test query')))
+      mock.mode = 'hold'
+      const requestsBeforeCancel = mock.requests
+      const artifactCountBeforeCancel = readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length
+      const staleRun = ctx.agentRuntime.perform('agent.coder', 'MOCK-撤回时取消运行', { sourceEventId: 'evt_cancel_run' })
+      for (let i = 0; i < 100 && mock.requests === requestsBeforeCancel; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      const cancelledCount = await ctx.agentRuntime.cancelBySource('evt_cancel_run')
+      let cancellationError: unknown
+      try { await staleRun } catch (error) { cancellationError = error }
+      await new Promise((resolve) => setImmediate(resolve))
+      check('E4e 撤回来源会 AbortSignal 取消在途模型请求并等待运行收束',
+        cancelledCount === 1 && cancellationError instanceof AgentRunCancelledError &&
+          ctx.agents.get('agent.coder').status === 'idle',
+        `count=${cancelledCount}, error=${(cancellationError as Error | undefined)?.name}, status=${ctx.agents.get('agent.coder').status}`)
+      check('E4f 已取消的旧运行不会写出最终产物',
+        readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length === artifactCountBeforeCancel)
+
+      let staleAnalystReported = false
+      let analystLedgerCleared = false
+      Object.assign(ctx, {
+        context: { assemble: async () => ({ system: '测试上下文', history: [], memories: [], retrieval: [] }) },
+        orchestrator: {
+          reportFeedback: () => { staleAnalystReported = true; throw new Error('不应回报撤回任务') },
+          cancelDelegatedTask: () => { analystLedgerCleared = true; return true },
+        },
+      })
+      analystApply(ctx)
+      const analystRequestsBefore = mock.requests
+      ctx.emit('orchestrator/delegate', {
+        sessionId: 's_cancel', eventId: 'evt_cancel_analyst', target: '需求分析师', instruction: '撤回时中止会议分析',
+      })
+      for (let i = 0; i < 100 && mock.requests === analystRequestsBefore; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      const cancelledAnalysts = await ctx.agentRuntime.cancelBySource('evt_cancel_analyst')
+      check('E4g 内置会议 Agent 也注册在同一取消屏障，取消后不回报旧结果',
+        cancelledAnalysts === 1 && analystLedgerCleared && !staleAnalystReported,
+        `count=${cancelledAnalysts}, cleared=${analystLedgerCleared}, reported=${staleAnalystReported}`)
       rmSync(tmp, { recursive: true, force: true })
       db.close()
     }
@@ -531,6 +647,7 @@ async function partE(): Promise<void> {
       const db = memoryDb(true)
       const ctx = new Context()
       new SqlitePromptStore(ctx, db)
+      new SqliteSettingsStore(ctx, db)
       new AgentRegistry(ctx)
       new CommandService(ctx)
       new LocalWorkdirService(ctx, tmp)

@@ -63,8 +63,7 @@
 **组合机制（最值得抄的一条）**——清单是**叠出来的**，不是写出来的：
 
 ```
-profiles/web/cordis.yml            = []          ← 空根（官方注释：edit cordis.patch.yml, not this file）
-  + dsh-base/cordis.patch.yml      （487 行）    ← bundle 层：一个 insert: 挂上全部核心行
+dsh-base/cordis.patch.yml          （487 行）    ← bundle 层：一个 insert: 挂上全部核心行
   + dsh-web-app/cordis.patch.yml                 ← 面（surface）层：web 相关行
   + profiles/web/cordis.patch.yml  = []          ← 用户层：最后写赢
 ```
@@ -118,8 +117,8 @@ teamspace-cordis/
 ├─ composed.cordis.yml             组合根 = bundle 层叠加的产物（启动时生成，不入库）
 ├─ config/app.yml                  框架自身参数（应用名、清单路径）       （现状）
 ├─ profiles/                       ← 每个「面」一份用户层 patch
-│   ├─ debug/cordis.yml            调试控制台（= 现 M1 的 5172 那套）
-│   └─ teamspace/cordis.yml        团队空间（5173/5174）
+│   ├─ debug/cordis.patch.yml      调试控制台（= 现 M1 的 5172 那套）
+│   └─ teamspace/cordis.patch.yml  团队空间（5173/5174）
 ├─ plugins/                        叶子插件：无需换实现、无需被策略包裹
 │   ├─ health/                     （现状保留）
 │   └─ app/                        （现状保留）
@@ -243,7 +242,7 @@ packages/bundle/
 └─ space-surface-debug/           调试控制台面：官方 loader/logger/database-webui + 5172（= 现 M1 那套）
 ```
 
-`profiles/<面>/cordis.yml` 是**空根 + 用户层**：所有 `<面>/cordis.patch.yml` 只做「按 id 覆盖 config / 停用 / 追加」三件事，**不重复 bundle 里已有的行**。
+每个 profile 只维护 `cordis.patch.yml` 用户层：按 id 覆盖配置、停用插件或追加插件；不重复 bundle 里已有的行。`src/compose.ts` 合并 bundle 与 profile patch，生成最终运行清单。
 
 ### 3.7 依赖方向——**建议新增铁律 2**
 

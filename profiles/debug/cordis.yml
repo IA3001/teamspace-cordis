@@ -1,8 +1,0 @@
-# profiles/debug —— 空根（P5，对照 deepseek-harness profiles 形状）。
-#
-# 方案 A（用户拍板 2026-09-28）：单进程多面。本文件是「面」的语义锚点与
-# 未来切「每 profile 一进程」的预留入口；实际生效清单由 src/compose.ts
-# 叠加生成（产物 项目根 composed.cordis.yml），本空根不直接被加载。
-#
-# 编辑用户层请改 cordis.patch.yml，不是这个文件。
-[]

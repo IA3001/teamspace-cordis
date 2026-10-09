@@ -56,7 +56,7 @@
 | 铁律 1 门禁 | `npm run lint:styles`（铁律 1 的四条断言，违反会以退出码 1 结束） |
 | **依赖方向门禁** | `npm run lint:deps`（断言 ①②⑦：方向矩阵 / seam 无 IO / 包一律私有） |
 | **控制台可达门禁** | `npm run check:console`（断言 ⑩：5172 三页 HTTP 200，需服务在跑） |
-| 插件清单 | `cordis.yml` —— **加功能 = 加插件文件 + 清单加一行** |
+| 插件组合清单 | `packages/bundle/*/cordis.patch.yml` + `profiles/*/cordis.patch.yml`；由 `src/compose.ts` 合成运行清单 |
 
 > ⚠ 端口只在 `.env` 定义一次，代码 / 清单 / 脚本全部从它取值，谁都不得自带默认数字。
 > `scripts/env.sh` 少了变量会**直接拒绝启动**——这是刻意的，不要改成「用默认值兜底」。
@@ -85,7 +85,9 @@
 | `packages/client-ui/` | 前端，一区一包 |
 | `packages/bundle/` | 组合层（只写 `cordis.patch.yml` 清单，不写代码） |
 | `dev-cordis/` | 模块划分规范（`MODULE-PLAN.md`）与调研记录 |
-| `cordis.yml` | 插件清单：有哪些插件、各自什么配置 |
+| `packages/bundle/*/cordis.patch.yml` | 基础插件组合清单 |
+| `profiles/*/cordis.patch.yml` | 按运行场景增补、覆盖或禁用插件 |
+| `composed.cordis.yml` | `src/compose.ts` 生成的运行清单，不手改 |
 | `config/app.yml` | 框架自身参数（应用名、loader 去哪读清单）；**不含端口** |
 | `scripts/` | 所有运行脚本（`env.sh` 是公共前置） |
 | `.rules/` | 铁律正文 |

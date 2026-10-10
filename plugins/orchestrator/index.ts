@@ -42,8 +42,7 @@ import { blockedSpeechNotice, decideAgentSpeech } from 'space-agent-speech'
 export const name = 'orchestrator'
 // cordis 严格注入检查：apply 里摸到的每个服务都要声明（漏了会得到
 // "cannot get property without inject"，且只进 5172 日志页，不上控制台）。
-// agents（P6 收尾）：coding 名册 —— 授权名单 = 会议角色 + 在册 coding agent；
-// workdir/命令路径不经本插件（coder 自己用），不注入。
+// agents：共享 Agent catalog —— 授权名单由会话角色与已邀请 Agent 组成。
 export const inject = ['server', 'session', 'eventLog', 'agents', 'settings', 'agentInbox', 'sessionWork', 'users']
 
 /**
@@ -524,24 +523,21 @@ export class OrchestratorEngine extends OrchestratorService {
     })
   }
 
-  /** 授权名单 = 会议三机器人角色（policy 纯函数）+ 在册 coding agent 名册。 */
+  /** 授权名单 = 会话内目标角色 + 已入会 Agent 的共享 catalog 标题。 */
   private buildTargets(sessionId: string): string[] {
-    const meetingTargets = authorizedTargets(this.ctx.session.listMembers(sessionId, true))
-    let codingTargets: string[] = []
+    const members = this.ctx.session.listMembers(sessionId, true)
+    const targets = authorizedTargets(members)
+    const activeMemberIds = new Set(members.filter((member) => member.status === 'active')
+      .map((member) => member.principalId))
     try {
-      codingTargets = this.ctx.agents.list()
-        .filter((agent) => agent.descriptor.kind === 'coding' || agent.descriptor.kind === 'custom')
+      const invitedAgentTargets = this.ctx.agents.list()
+        .filter((agent) => activeMemberIds.has(agent.descriptor.id))
         .map((agent) => agent.descriptor.title)
+      return [...new Set([...targets, ...invitedAgentTargets])]
     } catch {
-      this.ctx.logger.warn('[orchestrator] agents 服务不可用，授权名单仅含会议角色（无 coding 名册）')
+      this.ctx.logger.warn('[orchestrator] agents 服务不可用，授权名单仅含当前会话角色')
     }
-    // 自定义会议 Agent（/agents 页创建，settings 持久化）：title 直接进
-    // 授权名单 —— @标题 即可派单（2026-10-07）。
-    let customTargets: string[] = []
-    try {
-      customTargets = this.ctx.settings.get<Array<{ title: string }>>('agent.custom', []).map((a) => a.title)
-    } catch { /* settings 不可用则忽略 */ }
-    return [...meetingTargets, ...codingTargets, ...customTargets]
+    return targets
   }
 
   private async planOnce({ sessionId, authorId, event }: PlanPayload): Promise<StepResult | null> {
@@ -651,7 +647,7 @@ export class OrchestratorEngine extends OrchestratorService {
     }
 
     // 同一回合内同一目标只能有一笔在途委托。前一笔已完成会被从账本划掉
-    // （见 reportFeedback / reportCodingResult），只有**真正重复**才拦。
+    // （见 reportFeedback / reportAgentResult），只有真正重复才拦。
     if (t.delegatedTargets.includes(delegate.target)) {
       this.pause(sessionId, 'duplicate_target', `本轮已委托过 "${delegate.target}"，重复委托已拒绝`)
       return { case: 'invalid_target', reply, delegation: null, reason: 'duplicate_target' }
@@ -684,9 +680,8 @@ export class OrchestratorEngine extends OrchestratorService {
         (reply ? `\n（大脑附言：${reply}）` : ''),
       eventId,
     )
-    // 消费委托（P6 收尾）：把委托交执行链 —— emit 内核事件，订阅方（
-    // agent-coder-stub 等）认领自己名下的 target 真正干活，干完走收执口
-    // 回报。引擎只决策不执行（职责分家）。
+    // 把委托交给通用执行链。Agent 执行能力由运行时和工具注册，Agent 实例
+    // 只需在 catalog 中配置；引擎只决策不执行（职责分家）。
     this.ctx.emit('orchestrator/delegate', delegated)
     return { case: 'delegated', reply, delegation: delegate, reason }
   }
@@ -849,11 +844,7 @@ export class OrchestratorEngine extends OrchestratorService {
     })
   }
 
-  /**
-   * coding agent 收执口（P6 收尾）：与 reportFeedback 同一回流语义（不再
-   * 强制暂停），但落事件的作者按 **coding 名册**（ctx.agents）解析。
-   * 目标解析双口径（承 /tell 先例）：target 可为名册 title 或 id。
-   */
+  /** Store a delegated result from a catalog Agent invited to this session. */
   reportAgentResult(sessionId: string, target: string, text: string, sourceEventIds: string[] = []): SessionEvent {
     // 同 reportFeedback：账本单一真相源，不卡回合状态（流程轨时序交叠）。
     const t = this.turns.get(sessionId)
@@ -864,9 +855,12 @@ export class OrchestratorEngine extends OrchestratorService {
       .list()
       .find((a) => a.descriptor.title === target || a.descriptor.id === target)
     if (!agent) {
-      // 引擎授权名单与名册不同步是编程错误（授权时还在、收执时消失）。
+      // 引擎授权名单与目录不同步是编程错误（授权时还在、收执时消失）。
       this.pause(sessionId, 'agent_target_unknown', `Agent 名册里找不到 "${target}"，回执无法落库，已暂停`)
       throw new OrchestratorError('not_delegating', `Agent 名册里没有 "${target}"（授权时它还在 —— 引擎与名册不同步）`)
+    }
+    if (!this.ctx.session.listMembers(sessionId, true).some((member) => member.principalId === agent.descriptor.id)) {
+      throw new OrchestratorError('not_delegating', `Agent ${agent.descriptor.id} 未加入会话 ${sessionId}，拒绝接收回执`)
     }
     // 先划账再落库：落库即 emit 回流信号，续步立刻启动（见 reportFeedback 注）。
     const sourceEventId = this.delegationSources.get(this.delegationKey(sessionId, target))
@@ -913,11 +907,6 @@ export class OrchestratorEngine extends OrchestratorService {
     return cancelled
   }
 
-  /** Compatibility alias for the original built-in coding plugins. */
-  reportCodingResult(sessionId: string, target: string, text: string): SessionEvent {
-    return this.reportAgentResult(sessionId, target, text)
-  }
-
   /** 协调者的发言：authorId 用在册协调者的成员 id；没有在册协调者则不落事件。 */
   private sayCoordinator(sessionId: string, text: string, sourceEventId?: string): void {
     const coordinator = this.ctx.session
@@ -947,7 +936,7 @@ export class OrchestratorEngine extends OrchestratorService {
   /**
    * 外部委托入口（流程轨，2026-10-01）：把 MC 式流程的派发登记进在途账本
    * （无回合则开新回合；已有链上回合则复用）后再发 'orchestrator/delegate'
-   * —— agent 回报时 reportCodingResult/reportFeedback 才能找到账本。
+   * —— Agent 回报时 reportAgentResult/reportFeedback 才能找到账本。
    */
   beginExternalDelegate(sessionId: string, eventId: string, target: string, instruction: string): void {
     try {

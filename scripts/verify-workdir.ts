@@ -13,9 +13,9 @@
 //     + 真 orchestrator + 真 agent-registry + 真 coder stub（订阅
 //     'orchestrator/delegate'）+ 真 workdir（临时目录）：
 //     /commit（staging/plan）→ 大脑委托「编码者」→ coder 认领 → 领工作区 →
-//     任务文件落盘 → 状态机走满 → reportCodingResult 收执 → 回执落时间线
-//     （authorKind=agent、authorId=agent.coder）→ 引擎 await_human 暂停。
-//     另证：coding 目标对 reportFeedback 必炸（名册制：它不在会话成员）、
+//     任务文件落盘 → 状态机走满 → reportAgentResult 收执 → 回执落时间线
+//     （authorKind=agent、authorId=agent.coder）→ 引擎处理结果回流。
+//     另证：回执目标必须是当前会话已邀请的 Agent，
 //     大脑未配置时 coordinator_unconfigured 暂停不变（诚实最小）。
 //
 // 用法：npm run verify:workdir    退出码 0 = 全过；1 = 判红。
@@ -29,11 +29,12 @@ import { fileURLToPath } from 'node:url'
 import { Context } from 'cordis'
 import { WorkdirError } from 'space-workdir'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
-import { apply as stubApply } from '../plugins/agent-coder-stub/index.ts'
+import { apply as applyAgentDispatcher } from '../plugins/agent-runtime-dispatcher/index.ts'
 import { apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
 import { LocalWorkdirService } from '../packages/impl/space-workdir-local/src/index.ts'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
+import { SqliteAgentCatalog } from '../packages/impl/space-store-sqlite/src/agent-catalog.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
 import { CommandService } from 'space-command'
@@ -209,14 +210,18 @@ async function partB(): Promise<void> {
   const ctx = new Context()
   new SqliteSessionStore(ctx, db)
   new SqliteEventLog(ctx, db)
-  new AgentRegistry(ctx) // ctx.agents
+  const catalog = new SqliteAgentCatalog(ctx, db)
+  Object.assign(ctx, { agentCatalog: catalog })
+  const agents = new AgentRegistry(ctx)
+  agents.bindCatalog(catalog)
   new CommandService(ctx) // ctx.commands（stub apply 要注册 /tell）
   const workdir = new LocalWorkdirService(ctx, tmp) // ctx.workdir
   const engine = new OrchestratorEngine(ctx) // ctx.orchestrator
 
-  // coder 入驻 + 订阅委托（真 stub 插件 apply —— 与运行时同一条路径）
-  runtimeApply(ctx) // P8 升格：共享干活路径（委托处理器走 ctx.agentRuntime）
-  stubApply(ctx)
+  // Catalog definition + generic dispatcher exercise the current production path.
+  runtimeApply(ctx)
+  applyAgentDispatcher(ctx)
+  ctx.session.join({ sessionId: 's_w', principalId: 'agent.coder', role: '成员', duty: '编码者' })
 
   // scripted brain（承 verify-orchestrator 先例）：可编程的"模型"
   let rawOut = ''
@@ -246,13 +251,14 @@ async function partB(): Promise<void> {
     return event
   }
 
-  // B1 授权名册合并：coding 名册进 targets（大脑看得到，会话成员零改动）
+  // B1 授权名单包含当前会话成员与已加入会话的目录 Agent。
   rawOut = JSON.stringify({ reply: '', reason: '', delegate: { target: '编码者', instruction: '实现登录页' } })
   const ev1 = humanCommit('@编码者 实现登录页')
   await engine.onPlan({ sessionId: 's_w', authorId: 'u_dri', event: ev1 })
-  check('B1a 大脑 targets 含 coding 名册（编码者）', lastReq!.targets.includes('编码者'), JSON.stringify(lastReq!.targets))
+  check('B1a 大脑 targets 含已加入会话的目录 Agent（编码者）', lastReq!.targets.includes('编码者'), JSON.stringify(lastReq!.targets))
   check('B1b targets 同时含会议角色（开会链路不回退）', lastReq!.targets.includes('会议记录官'), JSON.stringify(lastReq!.targets))
-  check('B1c 会话成员未变（coding 不进名册）', ctx.session.listMembers('s_w', true).every((m) => m.principalId !== 'agent.coder'))
+  check('B1c catalog Agent 作为显式会话成员入册',
+    ctx.session.listMembers('s_w', true).some((m) => m.principalId === 'agent.coder' && m.role === '成员'))
   // 认领是异步（事件总线），等事件循环排空
   await new Promise((r) => setTimeout(r, 50))
   const evs1 = ctx.eventLog.listBySession('s_w')
@@ -270,7 +276,7 @@ async function partB(): Promise<void> {
   check('B8 收执事件点名 coder 已交付', evs1.some((e) => e.authorId === 'agent.coder' && e.text.includes('已领任务')), JSON.stringify(evs1.map((e) => e.text)))
   check('B9 协调者宣告先于委托（时间线可见）', evs1.some((e) => e.authorId === 'a_coordinator' && e.text.includes('将委托[编码者]')))
 
-  // B10 名册制分工：coding 目标对 reportFeedback 必炸（它不在会话成员）
+  // B10 Agent target can only settle its own active delegation once.
   rawOut = JSON.stringify({ reply: '', reason: '', delegate: { target: '编码者', instruction: '第二单' } })
   const ev2 = humanCommit('再来一单')
   await engine.onPlan({ sessionId: 's_w', authorId: 'u_dri', event: ev2 })
@@ -282,7 +288,7 @@ async function partB(): Promise<void> {
   } catch (e) {
     fbThrew = e instanceof Error && e.name === 'OrchestratorError' ? 'OrchestratorError' : String(e)
   }
-  check('B10 coding 目标走 reportFeedback 判红（名册制分工）', fbThrew === 'OrchestratorError', fbThrew)
+  check('B10 已结算委托不能通过另一回执重复结账', fbThrew === 'OrchestratorError', fbThrew)
   // 收执口正常结账；连续主动回复由系统拦截并留可见事件。
   const ev3 = ctx.eventLog.listBySession('s_w').find((e) => e.text.includes('尝试主动发言，但是被拦截'))
   check('B11 连续主动发言被拦截并留会话事件', !!ev3 && ev3.authorKind === 'system', ev3?.text)
@@ -292,7 +298,7 @@ async function partB(): Promise<void> {
   const ctx3 = new Context()
   new SqliteSessionStore(ctx3, db)
   new SqliteEventLog(ctx3, db)
-  new AgentRegistry(ctx3) // planOnce 现在也查 coding 名册（名册合并后的依赖面）
+  new AgentRegistry(ctx3) // planOnce resolves Agent targets through the shared catalog.
   const engine3 = new OrchestratorEngine(ctx3)
   const ev4 = ctx3.eventLog.append({
     id: randomUUID(), sessionId: 's_w', authorId: 'u_dri', phaseId: null,

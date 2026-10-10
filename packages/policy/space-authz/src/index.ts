@@ -35,8 +35,8 @@ export function authorizedTargets(members: readonly Membership[]): Role[] {
 }
 
 /** 目标是否在授权名单内（名单外必拒的判据，引擎逐次调用）。
- *  P6 收尾放宽为 string：名单 = 会议角色 + coding 名册 title（名册制），
- *  授权校验是逐项 includes，元素类型不参与判断。 */
+ *  名单以 string 表示：会话目标角色与已加入会话的共享 Agent 标题都可授权，
+ *  授权校验逐项 includes，元素类型不参与判断。 */
 export function isAuthorizedTarget(target: string, targets: readonly string[]): boolean {
   return (targets as readonly string[]).includes(target)
 }
@@ -68,7 +68,7 @@ function rescueField(raw: string, key: string): string {
   return m ? m[1]! : ''
 }
 
-/** 在文本里找出被提到的目标（按名字逐字匹配；P6 收尾放宽为 string，含 coding 名册）。 */
+/** 在文本里找出被提到的目标（按名字逐字匹配）。 */
 function mentionedTargets(text: string, targets: readonly string[]): string[] {
   return targets.filter((r) => text.includes(r))
 }
@@ -80,7 +80,7 @@ function trim(s: unknown): string {
 export interface ParseInput {
   /** 人类原话（3 层补委托时 instruction 的来源）。 */
   humanText: string
-  /** 名单 = 会议角色 + coding 名册 title（P6 收尾放宽为 string，校验归引擎）。 */
+  /** 名单 = 会话目标角色 + 已加入会话的 Agent title（校验归引擎）。 */
   targets: readonly string[]
 }
 

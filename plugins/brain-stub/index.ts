@@ -2,8 +2,8 @@
 //
 // 本包是占位大脑，让未配置文字模型时委托回路仍可端到端观测；它**不是 NLP**
 // —— 决策规则是显式占位：
-//   分支一（命中）：mentionHints（@ 提示 id）能对上授权 target（会议成员
-//     id → 角色；coding 名册 id → title，由引擎给定的 targets 裁决）→
+//   分支一（命中）：mentionHints（@ 提示 id）能对上授权 target（Agent
+//     id → catalog title；会话成员 id → role，由引擎给定的 targets 裁决）→
 //     返回**合法 JSON** 委托（instruction = 人类原话；兜底 0 层直接采用）；
 //   分支二（未命中）：纯文本回复（兜底 1 层路径：只回复、不委托、暂停）。
 // 文案处处明示「占位」标记（2026-09-30 拍板瘦身：原「占位大脑（非 NLP，等待
@@ -24,7 +24,7 @@ import type { OrchestratorBrain, PlanRequest } from 'space-orchestrator'
 
 export const name = 'brain-stub'
 // cordis 严格注入：orchestrator（registerBrain）+ session（成员 id→角色）+
-// agents（coding 名册 id→title）。
+// agents（共享 Agent catalog id→title）。
 export const inject = ['orchestrator', 'session', 'agents', 'llm']
 
 /** 配置面板 schema（5172 自动渲染）：占位大脑开关。 */
@@ -57,15 +57,14 @@ export function apply(ctx: Context, config: Config = {}) {
 
   /**
    * hint（@ 提示 id）→ 授权名单里的 target；对不上返回 null。
-   * 解析双来源：会话成员 id → 角色（会议机器人）；coding 名册 id → title。
+   * 解析双来源：共享 Agent catalog id → title；会话成员 id → role。
    * 名单裁决仍归引擎（isAuthorizedTarget）—— 大脑只转述提示。
    */
   function resolveHint(req: PlanRequest, hint: string): string | null {
-    // 顺序刻意先名册后成员：P8 起 coding agent 也会以本 id 入会（role=成员），
-    // 成员查找对它只会返回「成员」，会掩盖名册 title —— 名册优先才拿得到
-    // 授权名单里的「编码者」等 title；会议机器人不在名册，自然落到成员查找。
+    // 优先从共享 Agent 注册表解析 title；自定义 Agent 入会时 role 固定为
+    // 「成员」，仅查成员角色会丢失它的可读目标名。
     try {
-      const a = ctx.agents.list('coding').find((x) => x.descriptor.id === hint)
+      const a = ctx.agents.list().find((x) => x.descriptor.id === hint)
       if (a) return a.descriptor.title
     } catch { /* agents 服务缺席：跳过名册来源 */ }
     try {

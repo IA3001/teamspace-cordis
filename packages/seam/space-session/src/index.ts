@@ -124,8 +124,7 @@ export interface JoinInput {
   /** 缺省 '成员'。 */
   role?: Role
   /**
-   * 成员分工展示名（P8，2026-09-30）：coding agent 入会时 = 名册 title ——
-   * 否则三个 coding agent 在成员表里都是「成员」，人分不清谁是谁；
+   * Agent 入会时可保存目录 title 作为分工展示名，避免所有 Agent 都显示为「成员」；
    * 缺省空串；重新激活（曾 left）时不传则保留旧值不清洗。
    */
   duty?: string

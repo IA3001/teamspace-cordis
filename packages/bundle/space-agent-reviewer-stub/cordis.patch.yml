@@ -1,7 +1,0 @@
-# space-agent-reviewer-stub —— 代码审查者 stub 的自带 bundle 层（P8 纯新增）。
-# 形状证据与 agent-coder-stub 同款：新增 agent = 新增本包（自带一行），
-# compose 按目录扫描自动发现，既有文件零改动（铁律 4 / 断言 ⑪）。
-# 停用：用户层写同 id 行 disabled: true 即可。
-- id: agent-reviewer-stub
-  name: './plugins/agent-reviewer-stub/index.ts'
-  disabled: true

@@ -30,7 +30,7 @@
     "gate": "npm run gate:static && npm run gate:runtime",
     "verify:orchestrator": "tsx scripts/verify-orchestrator.ts",
     "verify:orchestrator:core": "tsx scripts/verify-orchestrator.ts --core-only",
-    "verify:flow-recovery": "tsx scripts/verify-flow-recovery.ts",
+    "verify:flow-recovery": "tsx scripts/verify-flow-recovery.ts && node scripts/record-action.mjs verify-flow-recovery",
     "verify:agents": "npm run verify:agent-teamspace",
     "build:web": "./scripts/build-web.sh",
     "check:web": "./scripts/check-web.sh",

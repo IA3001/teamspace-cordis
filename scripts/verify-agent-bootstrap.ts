@@ -1,14 +1,11 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Context } from 'cordis'
 import { AgentRegistry, apply as applyAgentRegistry } from '../plugins/agent-registry/index.ts'
 import { SqliteAgentCatalog } from '../packages/impl/space-store-sqlite/src/agent-catalog.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 
-const root = resolve(import.meta.dirname ?? '.', '..')
-const migrations = loadMigrations(resolve(root, 'packages/impl/space-store-sqlite/migrations'))
+const migrations = loadMigrations(new URL('../packages/impl/space-store-sqlite/migrations/', import.meta.url).pathname)
 const db = new DatabaseSync(':memory:')
 try {
   db.exec('PRAGMA foreign_keys = ON')
@@ -38,14 +35,8 @@ try {
   assert.equal(catalog.get('agent.reviewer').promptRef, 'prompt.review')
   assert.equal(catalog.get('a_analyst').promptRef, 'prompt.analysis')
   assert.equal(catalog.get('a_challenger').promptRef, 'prompt.challenge')
-  for (const packageName of ['coder', 'tester', 'reviewer']) {
-    const patch = readFileSync(resolve(root, `packages/bundle/space-agent-${packageName}-stub/cordis.patch.yml`), 'utf8')
-    assert.match(patch, /disabled:\s*true/, `${packageName} legacy plugin registration stays disabled`)
-  }
-  const analystPatch = readFileSync(resolve(root, 'packages/bundle/space-base/cordis.patch.yml'), 'utf8')
-  assert.match(analystPatch, /id: agent-analyst-llm\s+name: '\.\/plugins\/agent-analyst-llm\/index\.ts'\s+disabled: true/)
   assert.deepEqual(new Set(context.agents.list().map((agent: { descriptor: { id: string } }) => agent.descriptor.id)), new Set(expected.keys()))
-  console.log('✓ Built-in meeting and coding roles bootstrap as shared catalog data and hydrate through the generic Agent registry')
+  console.log('✓ Seeded roles share the generic catalog registry with no per-Agent plugin bootstrap')
 } finally {
   db.close()
 }

@@ -92,4 +92,41 @@ async function exercisePluginRecovery(history: SessionEvent[], expectedTarget: s
 await exercisePluginRecovery([start], '编码者', 'flow-start')
 await exercisePluginRecovery([start, progress], '测试者', 'flow-step-2')
 
-console.log('✓ Deterministic flow state is reconstructed from durable timeline markers and terminal flows stay stopped')
+async function verifyCatalogFlowInvitation(): Promise<void> {
+  const db = new DatabaseSync(':memory:')
+  db.exec('PRAGMA foreign_keys = ON')
+  const migrationDir = fileURLToPath(new URL('../packages/impl/space-store-sqlite/migrations/', import.meta.url))
+  for (const migration of loadMigrations(migrationDir)) db.exec(migration.up)
+  const now = new Date().toISOString()
+  db.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at)
+    VALUES ('custom_helper_42', 'helper', '!', 'Custom Helper', 'agent', ?)`).run(now)
+  const ctx = new Context() as Context & Record<string, any>
+  const sessionStore = new SqliteSessionStore(ctx, db)
+  const eventLog = new SqliteEventLog(ctx, db)
+  const session = sessionStore.createSession({ id: 's_custom_flow', title: 'Custom Agent flow' })
+  const registrations: Array<{ name: string; run: (context: any) => unknown }> = []
+  const dispatched: string[] = []
+  Object.assign(ctx, {
+    commands: { register: (command: any) => registrations.push(command) },
+    eventLog,
+    session: sessionStore,
+    agents: { list: () => [{ descriptor: { id: 'custom_helper_42', title: 'Custom Helper' }, status: 'idle' }] },
+    orchestrator: { beginExternalDelegate: (_sessionId: string, _eventId: string, target: string) => dispatched.push(target) },
+    sessionWork: { state: () => ({ activeSessionId: null, owners: [], queue: [] }) },
+    settings: { get: (_key: string, fallback: unknown) => fallback },
+  })
+  applyFlowCommands(ctx, { flows: { custom: ['Custom Helper'] } })
+  const customCommand = registrations.find((command) => command.name === 'custom')
+  assert.ok(customCommand, 'configured flow command is registered')
+  const run = () => customCommand.run({ sessionId: session.id, arg: 'review this request' })
+  assert.match((run() as { text: string }).text, /尚未加入此会话/)
+  assert.equal(dispatched.length, 0, 'a catalog Agent cannot receive a flow assignment before invitation')
+  sessionStore.join({ sessionId: session.id, principalId: 'custom_helper_42', role: '成员', duty: 'Custom Helper' })
+  assert.match((run() as { text: string }).text, /流程已启动/)
+  assert.deepEqual(dispatched, ['Custom Helper'], 'an invited custom Agent with a non-special ID can receive the assignment')
+  db.close()
+}
+
+await verifyCatalogFlowInvitation()
+
+console.log('✓ Flow recovery, shared-catalog lookup, and invitation checks passed')

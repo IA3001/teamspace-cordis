@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "impl（space-agent-runtime-local）：ctx.agentRuntime 的本机实现 —— coding 类共享干活路径（P8 从 agent-coder-stub 升格）+ /tell 直派口",
+  "description": "impl（space-agent-runtime-local）：ctx.agentRuntime 的本机实现 —— Agent 共享任务执行路径 + /tell 直派口",
   "main": "src/index.ts",
   "dependencies": {
     "@langchain/langgraph": "^1.4.21",

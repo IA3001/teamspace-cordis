@@ -9,8 +9,7 @@ export interface MemberLite {
   duty?: string
 }
 
-/** 成员 → 「显示名（id）」：有分工展示名用分工（P8：coding agent 入会时
- *  duty = 名册 title，否则三个 coding agent 在表里都是「成员」分不清），无则用角色。 */
+/** 成员 → 「显示名（id）」：有分工展示名用分工，无则用角色。 */
 export function memberLabel(m: MemberLite): string {
   return `${m.duty?.trim() ? m.duty : m.role}（${m.principalId}）`
 }

@@ -17,21 +17,8 @@ import { blockedSpeechNotice, decideAgentSpeech } from 'space-agent-speech'
 export const name = 'space-message'
 export const inject = ['session', 'eventLog', 'agents']
 
-/** 人类成员 id 前缀（约定：u_*）。 */
+/** 人类账号 ID 的约定前缀；Agent 身份以注册表为准，不依赖专属 ID 形状。 */
 const HUMAN_PREFIX = 'u_'
-/**
- * agent 成员 id 可接受的前缀：seam 契约是 a_*，但既有 coding 名册 id 形如
- * 'agent.coder'（agent. 前缀）—— 两种都识别为 agent，否则三个 stub 的
- * 主动发言会被自己的服务拒绝。其余前缀一律 unknown_author。
- */
-const AGENT_PREFIXES = ['a_', 'agent.']
-
-/** 由作者 id 推断 authorKind；不可分类返回 null（调用方报 unknown_author）。 */
-function authorKindOf(authorId: string): 'human' | 'agent' | null {
-  if (authorId.startsWith(HUMAN_PREFIX)) return 'human'
-  if (AGENT_PREFIXES.some((p) => authorId.startsWith(p))) return 'agent'
-  return null
-}
 
 export class MessageServiceImpl extends MessageService {
   async send(
@@ -50,19 +37,18 @@ export class MessageServiceImpl extends MessageService {
     if (!text || !text.trim()) {
       throw new MessageError('empty_text', '消息文本为空（纯空白），拒绝落库')
     }
-    // 3) 作者必须可分类（先于在册校验：分类不出的人谈不上是谁）。
-    const authorKind = authorKindOf(authorId)
+    // 3) 作者必须可分类。普通 Agent 是可配置数据实例，身份以注册表为准；
+    //    不要求 a_* / agent.* 这类专属命名，也不把未知 ID 当作 Agent。
+    let descriptor
+    try { descriptor = this.ctx.agents.get(authorId).descriptor }
+    catch { descriptor = undefined }
+    const authorKind = descriptor ? 'agent' : authorId.startsWith(HUMAN_PREFIX) ? 'human' : null
     if (!authorKind) {
-      throw new MessageError('unknown_author', `作者 id "${authorId}" 无法分类（u_* = 人类，a_* / agent.* = agent）`)
+      throw new MessageError('unknown_author', `作者 id "${authorId}" 无法分类（需为已注册 Agent 或 u_* 人类账号）`)
     }
     // 4) 作者必须在册（含已离开的历史成员不算 —— onlyActive=true）。
-    //    例外（2026-10-01）：coding agent 刻意不入会名册（见 reportCodingResult
-    //    的名册制分工注释），但它们的主动发言与收执同样正当 —— 注册在案的
-    //    agent 一律放行。
     const members = this.ctx.session.listMembers(sessionId, true)
-    const isRegisteredAgent = authorKind === 'agent' &&
-      (() => { try { this.ctx.agents.get(authorId); return true } catch { return false } })()
-    if (!members.some((m) => m.principalId === authorId) && !isRegisteredAgent) {
+    if (!members.some((m) => m.principalId === authorId)) {
       throw new MessageError('not_member', `作者 ${authorId} 不是会话 ${sessionId} 的在册成员`)
     }
     // 5) 引用校验（引用系统化 2026-10-02）：目标事件必须存在且属于本会话；
@@ -86,9 +72,6 @@ export class MessageServiceImpl extends MessageService {
     }
 
     if (authorKind === 'agent') {
-      let descriptor
-      try { descriptor = this.ctx.agents.get(authorId).descriptor }
-      catch { descriptor = undefined }
       const history = this.ctx.eventLog.listBySession(sessionId)
       const decision = decideAgentSpeech(authorId, descriptor?.speechPolicy, metadata.sourceEventId, history)
       if (!decision.allowed) {

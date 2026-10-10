@@ -33,7 +33,7 @@ export interface Config {
   flows?: Record<string, string[]>
 }
 
-/** 缺省流程（title 与 agent-*-stub 的名册 title 逐字一致）。 */
+/** 缺省流程可由后台/团队配置覆盖；步骤仅引用共享 Agent catalog 的名称。 */
 const DEFAULT_FLOWS: Record<string, string[]> = {
   code: ['编码者', '测试者', '代码审查者'],
   test: ['测试者', '代码审查者'],
@@ -111,9 +111,9 @@ export function apply(ctx: Context, config: Config = {}) {
     const flow = running.get(event.sessionId)
     if (!flow) return
     const doneStep = flow.steps[flow.idx - 1]!
-    const agentOk = ctx.agents.list('coding')
+    const agentOk = ctx.agents.list()
       .some((a) => a.descriptor.id === event.authorId && (a.descriptor.title === doneStep || a.descriptor.id === doneStep))
-    if (!agentOk && !(event.authorId ?? '').includes(doneStep)) return
+    if (!agentOk) return
     if (flow.idx < flow.steps.length) {
       const next = flow.steps[flow.idx]!
       const busy = busyAgent([next])
@@ -191,9 +191,9 @@ export function apply(ctx: Context, config: Config = {}) {
     return event.id
   }
 
-  /** 名册里是否存在该 title/id 的 coding agent；在的话返回快照。 */
+  /** 共享 Agent catalog 里是否存在该 title/id；在的话返回快照。 */
   function findAgent(title: string) {
-    return ctx.agents.list('coding').find((a) => a.descriptor.id === title || a.descriptor.title === title)
+    return ctx.agents.list().find((a) => a.descriptor.id === title || a.descriptor.title === title)
   }
 
   /**
@@ -226,8 +226,14 @@ export function apply(ctx: Context, config: Config = {}) {
         }
         const missing = steps.find((s) => !findAgent(s))
         if (missing) {
-          return { text: `流程成员「${missing}」未入驻（检查对应 agent 插件与名册），流程未启动` }
+          return { text: `流程成员「${missing}」不在共享 Agent 目录中，流程未启动` }
         }
+        const activeMemberIds = new Set(ctx.session.listMembers(c.sessionId, true).map((member) => member.principalId))
+        const notInvited = steps.find((step) => {
+          const agent = findAgent(step)!
+          return !activeMemberIds.has(agent.descriptor.id)
+        })
+        if (notInvited) return { text: `流程成员「${notInvited}」尚未加入此会话，流程未启动` }
         const busy = busyAgent(steps)
         if (busy) {
           return { text: `「${busy}」正在其它任务中（单套 Agent 同一时刻只服务一个会话）。等它空闲后再发起 /${name}` }

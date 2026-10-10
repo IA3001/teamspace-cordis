@@ -41,11 +41,18 @@ db.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, c
   VALUES ('u_human', 'human', '!', 'Human', 'human', ?, 'member')`).run(at)
 db.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at)
   VALUES ('a_speaker', 'a_speaker', '!', 'Speaker', 'agent', ?)`).run(at)
+db.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at)
+  VALUES ('review_agent_v2', 'review_agent_v2', '!', 'Review Agent', 'agent', ?)`).run(at)
 const snapshot = { descriptor: { id: 'a_speaker', title: 'Speaker', kind: 'custom', capabilities: [], speechPolicy: 'proactive' }, status: 'idle' }
+const customSnapshot = { descriptor: { id: 'review_agent_v2', title: 'Review Agent', kind: 'custom', capabilities: [], speechPolicy: 'proactive' }, status: 'idle' }
 Object.assign(ctx, {
   agents: {
-    get(id: string) { if (id !== 'a_speaker') throw new Error('not found'); return snapshot },
-    list() { return [snapshot] },
+    get(id: string) {
+      if (id === 'a_speaker') return snapshot
+      if (id === 'review_agent_v2') return customSnapshot
+      throw new Error('not found')
+    },
+    list() { return [snapshot, customSnapshot] },
   },
 })
 new MessageServiceImpl(ctx)
@@ -55,6 +62,15 @@ async function main() {
   const session = ctx.session.createSession({ id: 's_speech', title: '发言限制验收' })
   ctx.session.join({ sessionId: session.id, principalId: 'u_human', role: '成员' })
   ctx.session.join({ sessionId: session.id, principalId: 'a_speaker', role: '成员', duty: 'Speaker' })
+
+  await assert.rejects(
+    ctx.messages.send(session.id, 'review_agent_v2', '未获邀请的 Agent 不得发言'),
+    (error: unknown) => error instanceof Error && error.message.includes('不是会话') && error.message.includes('在册成员'),
+    'registered Agents must be invited into the session before sending messages',
+  )
+  ctx.session.join({ sessionId: session.id, principalId: 'review_agent_v2', role: '成员', duty: 'Review Agent' })
+  const customIdMessage = await ctx.messages.send(session.id, 'review_agent_v2', '使用自定义 ID 的 Agent 发言')
+  assert.equal(customIdMessage.authorKind, 'agent', 'registered Agent IDs do not require a built-in prefix')
 
   const mention = eventLog.append({ id: 'trigger-1', sessionId: session.id, authorId: 'u_human', phaseId: null,
     authorKind: 'human', kind: 'message', text: '@Speaker 请发言', mentions: ['a_speaker'], toolCalls: [], replyMode: '' })

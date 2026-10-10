@@ -33,9 +33,8 @@ declare module 'cordis' {
     /** 回合进入静止（暂停）时恰好一次。订阅：ctx.on('orchestrator/pause', (p) => ...)。 */
     'orchestrator/pause'(this: Context, payload: PausePayload): void
     /**
-     * 引擎产出了合法委托，交执行链去干活（P6 收尾，2026-09-30）。
-     * 订阅：ctx.on('orchestrator/delegate', (p) => ...) —— 执行方（如
-     * agent-coder-stub）认领自己名下的 target，干完调 ctx.orchestrator
+     * 引擎产出了合法委托，交通用 Agent 执行链去干活。
+     * 订阅：ctx.on('orchestrator/delegate', (p) => ...) —— 执行方认领 target，干完调 ctx.orchestrator
      * 的收执口回报。引擎本身不执行（职责分家：决策归引擎、执行归执行链）。
      */
     'orchestrator/delegate'(this: Context, payload: DelegatePayload): void
@@ -94,9 +93,8 @@ export interface PlanRequest {
    */
   mentionHints: string[]
   /**
-   * 本会话当前可被授权的目标名单：会议三机器人角色（来自 policy 纯函数）+
-   * 在册 coding agent 的 title（P6 收尾，名册制）。放宽为 string ——
-   * 授权校验归引擎（isAuthorizedTarget），类型不拦（承 Delegation.target 口径）。
+   * 本会话当前可被授权的目标名单：会议目标角色与已加入会话的 Agent title。
+   * 使用 string，授权校验归引擎（isAuthorizedTarget），类型不拦。
    */
   targets: readonly string[]
 }
@@ -126,8 +124,8 @@ export type StopReason =
   | 'coordinator_empty'
   /** 同一轮内对同一目标的重复委托被拒。 */
   | 'duplicate_target'
-  /** coding 名册里找不到被委托的目标（引擎-名册不同步，编程错误）。 */
-  | 'coding_target_unknown'
+  /** 共享 Agent 目录里找不到被委托的目标（引擎-目录不同步，编程错误）。 */
+  | 'agent_target_unknown'
 
 /** 一个回合的状态快照（承旧 Turn，只保留人类授权制下仍在用的字段）。 */
 export interface Turn {
@@ -158,7 +156,7 @@ export interface PausePayload {
 /**
  * 'orchestrator/delegate' 的载荷（P6 收尾）：引擎产出的合法委托。
  * target 是授权名单里的一项 —— 会议机器人 = 角色（如「会议记录官」），
- * coding agent = 名册 title 或 id（承 /tell 的双口径解析先例）。
+ * Agent target = 共享目录 title 或 id（承 /tell 的双口径解析口径）。
  */
 export interface DelegatePayload {
   sessionId: string
@@ -217,7 +215,7 @@ export class OrchestratorError extends Error {
 //   · onPlan：每回合恰好一次大脑调用（decisionCalls=1）；无脑/失败/空输出/
 //     名单外目标一律**暂停**（state=static）且不猜；合法委托 → 输出
 //     「已收到指令，将委托[target]：…」后保持 chain 等目标反馈。
-//   · reportFeedback / reportCodingResult：反馈视为结果回流（IM 化改造
+//   · reportFeedback / reportAgentResult：反馈视为结果回流（IM 化改造
 //     2026-09-30），由引擎按每回合自治预算决定继续；无新委托且协调者不再
 //     继续 → completed 收敛，预算耗尽 → budget_exhausted 暂停。
 //   · 回合状态热缓存于进程内存，并由实现层持久化；恢复必须以 SQLite 状态与
@@ -245,17 +243,7 @@ export abstract class OrchestratorService extends Service {
    */
   abstract reportFeedback(sessionId: string, target: string, text: string, sourceEventIds?: string[]): SessionEvent
 
-  /**
-   * coding agent 收执口（P6 收尾）：委托执行方（agent-coder-stub 等）干完活
-   * 回报结果。IM 化改造（2026-09-30）：与 reportFeedback 同一回流语义（不再
-   * 强制 await_human，由引擎按自治预算决定继续或 completed 收敛），但落事件时
-   * 按 coding 名册（ctx.agents）解析 authorId —— coding agent 不进会话成员
-   * 名册，reportFeedback 的 member.role 查找对它必然落空（not_delegating），
-   * 这是名册制的刻意分工，不是漏改。没有在途委托 → not_delegating。
-   */
-  abstract reportCodingResult(sessionId: string, target: string, text: string): SessionEvent
-
-  /** Store a result from any data-defined or built-in Agent. */
+  /** Store a result from any invited, data-defined or built-in Agent. */
   abstract reportAgentResult(sessionId: string, target: string, text: string, sourceEventIds?: string[]): SessionEvent
 
   /** Forget an in-flight delegate after its source is invalidated. */

@@ -33,7 +33,7 @@ export function apply(ctx: Context) {
       if (typeof instruction !== 'string' || !instruction) throw new Error('args.instruction 缺失或不是字符串')
 
       // 桥接共享干活路径：领工作区 → 任务落盘（+ 真模型产物）→ 状态机走满一圈 → 回执。
-      // CodingReceipt = { agentId, title, task, root, files, receipt,
+      // AgentExecutionReceipt = { agentId, title, task, root, files, receipt,
       //                   promptRef, promptTitle, mode, model }（impl/space-agent-runtime）。
       // invoker（{id, sessionId}）在此只作身份透传审计；真正的闸门在 space-tool。
       const r = await ctx.agentRuntime.perform(agentId, instruction)

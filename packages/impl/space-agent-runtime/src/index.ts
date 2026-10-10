@@ -1,8 +1,6 @@
-// space-agent-runtime —— space-agent-runtime 缝的本机实现（P8 上半场建，下半场接真 LLM）。
+// space-agent-runtime —— Agent 任务执行缝的本机实现。
 //
-// 职责（P6 在案记账的升格兑现）：coding 类**共享干活路径**从 agent-coder-stub
-// 升格为机制 —— 第二、三个 coding agent（agent-tester-stub / agent-reviewer-stub）
-// 入驻时，agent 包收敛为「入驻描述符 + 委托认领」，本包承载唯一的干活路径：
+// 职责：所有需要处理任务的 catalog Agent 共用执行路径，实例配置通过注册表读取：
 //   perform：idle→working（正忙即拒）→ 领工作区（ctx.workdir.claim）→ 任务文件
 //   落盘（经 ctx.workdir.resolve 路径校验，execdir 铁则）→ promptRef 绑定的
 //   提示词随任务落盘（ctx.prompts，缺席/未预置降级不炸）→ working→done→idle
@@ -11,11 +9,10 @@
 //   · 真模型（ctx.llm 在且 .env 三件套齐）：提示词 + 指令 → 单次 LLM 调用
 //     （不重试不猜）→ 产物落盘 artifact-<时间>.md → 回执标【真模型】+model；
 //   · 占位（其余一切情况）：保持 stub 行为 → 回执标【占位】。
-//   判定是确定性的（configured 谓词现算），两种模式都由 CodingReceipt.mode
+//   判定是确定性的（configured 谓词现算），两种模式都由 AgentExecutionReceipt.mode
 //   机器可断言；LLM 调用失败 → LlmError 原样上抛（外层 catch 状态回 idle），
 //   5172 日志页可见（铁律 2）。
-// 同时承接 /tell 直派口（从 coder-stub 迁入 —— 直派本就与「编码者」无关，
-// 任何已入驻 agent 都可被直派）。
+// 同时承接 /tell 直派口，调用方可以将任务派给任何已加入会话的 Agent。
 //
 // 依赖方向（lint:deps 断言①）：impl 只准依赖 seams —— 本包依赖
 // space-agent-runtime（契约）+ space-agent（名册/状态机）+ space-workdir
@@ -27,7 +24,7 @@ import type { Context } from 'cordis'
 import { AgentError } from 'space-agent'
 import { AgentRuntimeService } from 'space-agent-runtime'
 import { AgentRunCancelledError } from 'space-agent-runtime'
-import type { CodingReceipt } from 'space-agent-runtime'
+import type { AgentExecutionReceipt } from 'space-agent-runtime'
 import type { AgentRunContext } from 'space-agent-runtime'
 import type { AgentProgressPhase } from 'space-agent-runtime'
 import { CommandError } from 'space-command'
@@ -81,7 +78,7 @@ export class AgentRuntime extends AgentRuntimeService {
     }
   }
 
-  async perform(agentId: string, task: string, runContext: AgentRunContext = {}): Promise<CodingReceipt> {
+  async perform(agentId: string, task: string, runContext: AgentRunContext = {}): Promise<AgentExecutionReceipt> {
     // 名册制：没入驻就没有干活路径（未知 → not_found，space-agent 错误码）。
     const snap = this.ctx.agents.get(agentId)
     const title = snap.descriptor.title
@@ -333,7 +330,7 @@ export class AgentRuntime extends AgentRuntimeService {
       // ⚠ LLM_SABOTAGE=1（verify-p8 红测探针，断言 ⑬）：真模型模式谎报【占位】
       // —— 诚实标注被改坏，E4 必红；还原（不设 env）复绿。
       const lying = llmReady && process.env.LLM_SABOTAGE === '1'
-      const mode: CodingReceipt['mode'] = llmReady && !lying ? 'llm' : 'stub'
+      const mode: AgentExecutionReceipt['mode'] = llmReady && !lying ? 'llm' : 'stub'
       const receipt =
         `[@${title}] 已领任务：${task}\n` +
         (llmReady
@@ -379,7 +376,7 @@ export function apply(ctx: Context) {
   const runtime = new AgentRuntime(ctx)
 
   // ── 直派口：人类 @ 直派（不经协调者；会议机器人明确拒收并指路）────────
-  // P8 从 agent-coder-stub 原样迁入（在案记账）：正忙检测在 perform 内。
+  // 忙碌状态由共享执行器维护，避免为具体 Agent 配置专属执行插件。
   ctx.commands.register({
     name: 'tell',
     usage: '/tell @<agent名或id> <任务> —— 把任务直派给一个已入驻的 agent（不经协调者）',

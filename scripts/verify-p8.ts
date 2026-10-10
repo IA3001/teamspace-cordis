@@ -17,13 +17,11 @@
 //   Part C（进程内，建会名册）：createSessionWithRoster（服务端建会与 RPC
 //     同一条代码路径）—— 默认名册 6 席（DRI + 协调者 + 会议三机器人，补
 //     P7 遗留 1）+ coding 多选入会（role=成员、duty=名册 title）+ 名册外
-//     id 忽略 + promptRef 绑定闭环（三 stub 的 promptRef 全部能在
+//     id 忽略 + promptRef 绑定闭环（默认 Agent 模板的 promptRef 均能在
 //     prompt_templates 里取到内容）。
-//   Part D（进程内，双 stub 入驻 ⑪ 回归）：三 coding stub 同场 —— 名册形状
+//   Part D（进程内，catalog Agent ⑪ 回归）：共享目录实例同场 —— 目录形状
 //     （id 排序 / title / promptRef / capabilities / 报到即 idle）+ 委托定向性
-//     （委托「测试者」只有 tester 回执，coder/reviewer 静默）+ /tell 直派
-//     测试者走共享干活路径。⑪ 的白名单静态扫描由 gate 链里 verify:agents
-//     Part C 承担（verify-p8.ts 已进其白名单，同 verify-workdir 待遇）。
+//     （委托「测试者」只有目标 Agent 回执）+ /tell 直派走共享干活路径。
 //   Part E（P8 下半场扩容，2026-09-30，进程内 + 进程内 mock OpenAI 兼容服务）：
 //     门禁不依赖真 key —— main() 先清 LLM 三件套（A–D 恒为占位模式），本
 //     Part 自管 env（注入 mock 三件套，finally 还原）：
@@ -31,7 +29,8 @@
 //     E2 有 key（mock）→ brain-llm 上线，合法 JSON 过兜底 0 层逐字直通；
 //     E3 LLM 纯文本 → replied（1 层）、mock 500 → coordinator_error（不猜不重试）；
 //     E4 perform 真模型模式（提示词取用 + artifact 落盘 + 回执【真模型】+model
-//        + CodingReceipt.mode='llm'）；E5 无 key 占位模式（【占位】、绝不冒充）。
+//        + AgentExecutionReceipt.mode='llm'）；并创建非特化 ID 的自定义 catalog Agent，
+//        验收邀请、通用 dispatcher、配置工具调用和回执；E5 无 key 占位模式。
 //     **红测**：LLM_SABOTAGE=1（agent-runtime 内置探针）—— 真模型模式谎报
 //     【占位】，E4a 必红；还原（不设 env）复绿（自检记录见文末）。
 //
@@ -47,18 +46,17 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { Context } from 'cordis'
 import { AgentRunCancelledError } from 'space-agent-runtime'
-import { apply as analystApply } from '../plugins/agent-analyst-llm/index.ts'
 import { PromptError } from 'space-prompt'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { SqlitePromptStore } from '../packages/impl/space-store-sqlite/src/prompt.ts'
 import { SqliteSettingsStore } from '../packages/impl/space-store-sqlite/src/settings.ts'
+import { SqliteAgentCatalog } from '../packages/impl/space-store-sqlite/src/agent-catalog.ts'
+import { SqliteUserStore } from '../packages/impl/space-store-sqlite/src/users.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
 import { apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
-import { apply as coderApply } from '../plugins/agent-coder-stub/index.ts'
-import { apply as testerApply } from '../plugins/agent-tester-stub/index.ts'
-import { apply as reviewerApply } from '../plugins/agent-reviewer-stub/index.ts'
+import { apply as agentDispatcherApply } from '../plugins/agent-runtime-dispatcher/index.ts'
 import { apply as brainApply } from '../plugins/brain-stub/index.ts'
 import { apply as brainLlmApply } from '../plugins/brain-llm/index.ts'
 import { OpenAiChatLlm } from '../packages/impl/space-llm-openai/src/index.ts'
@@ -107,6 +105,15 @@ function memoryDb(withSeed: boolean): DatabaseSync {
     }
   }
   return db
+}
+
+/** Load the shipped Agent definitions as data and register the shared runtime dispatcher. */
+function applyCatalogAgents(ctx: Context, db: DatabaseSync): AgentRegistry {
+  const catalog = new SqliteAgentCatalog(ctx, db)
+  Object.assign(ctx, { agentCatalog: catalog })
+  const registry = new AgentRegistry(ctx)
+  registry.bindCatalog(catalog)
+  return registry
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -161,7 +168,7 @@ async function partA(): Promise<void> {
 // ══════════════════════════════════════════════════════════════════════════
 // Part B —— 占位大脑两分支决策形状（真引擎 + 真 brain-stub 插件）
 // ══════════════════════════════════════════════════════════════════════════
-function humanCommit(ctx: Context, sessionId: string, authorId: string, text: string, mentions: string[] = []) {
+function humanCommit(ctx: Context, sessionId: string, authorId: string, text: string, mentions: string[] = [], notify = true) {
   const event = ctx.eventLog.append({
     id: randomUUID(),
     sessionId,
@@ -174,7 +181,7 @@ function humanCommit(ctx: Context, sessionId: string, authorId: string, text: st
     toolCalls: [],
     replyMode: '',
   })
-  ctx.emit('staging/plan', { sessionId, authorId, event })
+  if (notify) ctx.emit('staging/plan', { sessionId, authorId, event })
   return event
 }
 
@@ -187,20 +194,26 @@ async function partB(): Promise<void> {
   new SqliteSessionStore(ctx, db)
   new SqliteEventLog(ctx, db)
   new SqlitePromptStore(ctx, db) // promptRef 绑定的内容源（seed 已入）
-  new AgentRegistry(ctx)
+  applyCatalogAgents(ctx, db)
   new CommandService(ctx)
   new OpenAiChatLlm(ctx) // ctx.llm（main 已清 key → 占位模式；拓扑与运行时一致）
   new LocalWorkdirService(ctx, tmp)
   const engine = new OrchestratorEngine(ctx)
-  // 真插件原样 apply：三 stub 入驻 + 共享干活路径 + 占位大脑注册。
+  // Seeded Team definitions enter through the same generic registry and dispatcher as custom Agents.
   runtimeApply(ctx)
-  coderApply(ctx)
-  testerApply(ctx)
-  reviewerApply(ctx)
+  agentDispatcherApply(ctx)
   brainApply(ctx) // registerBrain —— 占位大脑上线
 
   // 建会（走服务端同一条入册路径）：带「编码者」。
   const session = createSessionWithRoster(ctx, ['agent.coder'])
+
+  // A catalog definition alone does not authorize a target; the Agent must be invited.
+  const uninvitedSession = createSessionWithRoster(ctx)
+  const uninvitedEvent = humanCommit(ctx, uninvitedSession.id, 'u_dri', '@agent.tester 给登录页补冒烟测试', ['agent.tester'], false)
+  const uninvitedResult = await engine.onPlan({ sessionId: uninvitedSession.id, authorId: 'u_dri', event: uninvitedEvent })
+  check('B1x 未入会的 catalog Agent 不在协调器可用目标中且不会启动运行',
+    uninvitedResult?.case === 'replied' && uninvitedResult.delegation === null && ctx.agents.get('agent.tester').status === 'idle',
+    JSON.stringify({ result: uninvitedResult, status: ctx.agents.get('agent.tester').status }))
 
   // B1 分支一（命中）：@编码者 → 合法 JSON 委托，instruction = 人类原话。
   const HUMAN = '@agent.coder 实现登录页，先出方案'
@@ -264,24 +277,21 @@ async function partB(): Promise<void> {
 // Part C —— 建会名册 + promptRef 绑定（服务端同一条入册路径）
 // ══════════════════════════════════════════════════════════════════════════
 async function partC(): Promise<void> {
-  section('Part C：建会名册（默认 6 席）+ coding 多选 + promptRef 绑定')
+  section('Part C：建会名册（默认 6 席）+ catalog Agent 邀请 + promptRef 绑定')
 
   const db = memoryDb(true)
   const ctx = new Context()
   new SqliteSessionStore(ctx, db)
   new SqlitePromptStore(ctx, db)
-  new AgentRegistry(ctx)
+  applyCatalogAgents(ctx, db)
   new CommandService(ctx)
   runtimeApply(ctx)
-  coderApply(ctx)
-  testerApply(ctx)
-  reviewerApply(ctx)
 
-  // C1 默认名册 6 席（补 P7 遗留 1）+ 附加「编码者」。
+  // C1 默认名册 5 席 + 显式邀请一个共享 catalog Agent。
   const s1 = createSessionWithRoster(ctx, ['agent.coder'])
   const m1 = ctx.session.listMembers(s1.id, true)
   const byId = new Map(m1.map((m) => [m.principalId, m]))
-  check('C1a 默认名册齐 6 席（DRI + 协调者 + 会议三机器人 + 编码者）', m1.length === 6, JSON.stringify(m1.map((m) => m.principalId)))
+  check('C1a 默认名册 5 席并包含受邀 catalog Agent', m1.length === 6 && byId.get('agent.coder')?.role === '成员', JSON.stringify(m1.map((m) => m.principalId)))
   check('C1b 协调者在册且不进授权语义（角色=协调者）', byId.get('a_coordinator')?.role === '协调者')
   check('C1c 会议三机器人在册（需求分析师/挑战者/会议记录官）',
     byId.get('a_analyst')?.role === '需求分析师' && byId.get('a_challenger')?.role === '挑战者' && byId.get('a_recorder')?.role === '会议记录官')
@@ -293,11 +303,11 @@ async function partC(): Promise<void> {
   const m2 = ctx.session.listMembers(s2.id, true)
   check('C2a 名册外 id 忽略（默认名册仍齐 5 席）', m2.length === 5 && !m2.some((m) => m.principalId === 'agent.nobody'),
     JSON.stringify(m2.map((m) => m.principalId)))
-  check('C2b 未选中的 coding agent 不入会（测试者/审查者缺席）',
+  check('C2b 未邀请的共享 Agent 不入会（测试者/审查者缺席）',
     !m2.some((m) => m.principalId === 'agent.tester' || m.principalId === 'agent.reviewer'))
 
   // C3 promptRef 绑定闭环：三 stub 的引用都能在 prompt_templates 取到内容。
-  const roster = ctx.agents.list('coding')
+  const roster = ctx.agents.list().filter((agent) => ['agent.coder', 'agent.tester', 'agent.reviewer'].includes(agent.descriptor.id))
   const binding = roster.map((a) => {
     const ref = a.descriptor.promptRef
     try {
@@ -306,7 +316,7 @@ async function partC(): Promise<void> {
       return { id: a.descriptor.id, ref, title: null }
     }
   })
-  check('C3a 三 coding stub 的 promptRef 全部绑定到真实提示词',
+  check('C3a 三个共享 catalog Agent 的 promptRef 全部绑定到真实提示词',
     binding.every((b) => b.ref && b.title), JSON.stringify(binding))
   check('C3b ref ↔ 角色逐一对位（coding/testing/review）',
     binding.find((b) => b.id === 'agent.coder')?.ref === 'prompt.coding' &&
@@ -317,10 +327,10 @@ async function partC(): Promise<void> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Part D —— 双 stub 入驻纯新增（⑪ 回归）+ 委托定向性 + /tell 共享路径
+// Part D —— catalog Agent 入驻（⑪ 回归）+ 委托定向性 + /tell 共享路径
 // ══════════════════════════════════════════════════════════════════════════
 async function partD(): Promise<void> {
-  section('Part D：双 stub 入驻回归（名册形状 / 委托定向性 / /tell 共享干活路径）')
+  section('Part D：catalog Agent 回归（目录形状 / 委托定向性 / /tell 共享干活路径）')
 
   const tmp = mkdtempSync(join(tmpdir(), 'p8-stubs-'))
   const db = memoryDb(true)
@@ -328,27 +338,27 @@ async function partD(): Promise<void> {
   new SqliteSessionStore(ctx, db)
   new SqliteEventLog(ctx, db)
   new SqlitePromptStore(ctx, db)
-  new AgentRegistry(ctx)
+  applyCatalogAgents(ctx, db)
   new CommandService(ctx)
   new OpenAiChatLlm(ctx) // ctx.llm（main 已清 key → 占位模式）
   new LocalWorkdirService(ctx, tmp)
   const engine = new OrchestratorEngine(ctx)
   runtimeApply(ctx)
-  coderApply(ctx)
-  testerApply(ctx)
-  reviewerApply(ctx)
+  agentDispatcherApply(ctx)
   brainApply(ctx)
 
   // D1 名册形状（报到即 idle；id 稳定排序；promptRef/capabilities 各就各位）。
-  const roster = ctx.agents.list('coding').map((a) => a.descriptor)
+  const roster = ctx.agents.list()
+    .filter((agent) => ['agent.coder', 'agent.tester', 'agent.reviewer'].includes(agent.descriptor.id))
+    .map((agent) => agent.descriptor)
   check('D1a 三个 coding stub 全部入驻（id 稳定排序）',
     roster.map((d) => d.id).join(',') === 'agent.coder,agent.reviewer,agent.tester',
     roster.map((d) => d.id).join(','))
-  check('D1b title/capabilities 各就各位',
+  check('D1b title/tool 配置各就各位',
     roster.find((d) => d.id === 'agent.tester')?.title === '测试者' &&
-    roster.find((d) => d.id === 'agent.tester')?.capabilities.includes('testing') &&
+    roster.find((d) => d.id === 'agent.tester')?.toolIds?.includes('tool.code.execute') &&
     roster.find((d) => d.id === 'agent.reviewer')?.title === '代码审查者' &&
-    roster.find((d) => d.id === 'agent.reviewer')?.capabilities.includes('review'))
+    roster.find((d) => d.id === 'agent.reviewer')?.toolIds?.includes('tool.workspace.read'))
   check('D1c 报到即 idle', roster.every((d) => ctx.agents.get(d.id).status === 'idle'))
 
   // D2 委托定向性：@测试者 → 只有 tester 认领回执，coder/reviewer 静默。
@@ -483,20 +493,18 @@ async function partE(): Promise<void> {
       new SqliteEventLog(ctx, db)
       new SqlitePromptStore(ctx, db)
       new SqliteSettingsStore(ctx, db)
-      new AgentRegistry(ctx)
+      applyCatalogAgents(ctx, db)
       new CommandService(ctx)
       new OpenAiChatLlm(ctx)
       new LocalWorkdirService(ctx, tmp)
       const engine = new OrchestratorEngine(ctx)
       runtimeApply(ctx)
-      coderApply(ctx)
+      agentDispatcherApply(ctx)
       ctx.session.createSession({ id: 's_progress', title: '进度事件验收' })
       Object.assign(ctx, { tools: {
         list: () => [{ id: 'web.search', title: 'Web search', description: 'mock search', capabilities: [] }],
         invoke: async () => ({ toolId: 'web.search', ok: true, output: 'MOCK-搜索结果', costMs: 1 }),
       } })
-      testerApply(ctx)
-      reviewerApply(ctx)
       brainApply(ctx)    // 组合根顺序：stub 行在前 —— key 缺 → 上线
       brainLlmApply(ctx) // key 缺 → 让位（不注册、不炸）
       const s1 = createSessionWithRoster(ctx)
@@ -518,7 +526,7 @@ async function partE(): Promise<void> {
       new SqliteEventLog(ctx, db)
       new SqlitePromptStore(ctx, db)
       new SqliteSettingsStore(ctx, db)
-      new AgentRegistry(ctx)
+      applyCatalogAgents(ctx, db)
       new CommandService(ctx)
       new OpenAiChatLlm(ctx)
       const engine = new OrchestratorEngine(ctx)
@@ -560,16 +568,17 @@ async function partE(): Promise<void> {
       ctx.on('space/agent-progress', (update) => progressEvents.push(update))
       new SqliteEventLog(ctx, db)
       const sessions = new SqliteSessionStore(ctx, db)
+      new SqliteUserStore(ctx, db)
       sessions.createSession({ id: 's_progress', title: '进度事件验收' })
       new SqlitePromptStore(ctx, db)
       new SqliteSettingsStore(ctx, db)
-      new AgentRegistry(ctx)
+      const registry = applyCatalogAgents(ctx, db)
       new CommandService(ctx)
       new LocalWorkdirService(ctx, tmp)
       new OpenAiChatLlm(ctx)
       Object.assign(ctx, { context: { assemble: async () => ({ system: 'test context', memories: [], retrieval: [], history: [] }) } })
       runtimeApply(ctx)
-      coderApply(ctx)
+      agentDispatcherApply(ctx)
       Object.assign(ctx, { tools: {
         list: () => [{ id: 'web.search', title: 'Web search', description: 'mock search', capabilities: [] }],
         invoke: async () => ({ toolId: 'web.search', ok: true, output: 'MOCK-搜索结果', costMs: 1 }),
@@ -611,6 +620,37 @@ async function partE(): Promise<void> {
           !JSON.stringify(progressEvents.filter((event) => event.sourceEventId === 'evt_tool_progress')).includes('safe test query') &&
           !JSON.stringify(progressEvents.filter((event) => event.sourceEventId === 'evt_tool_progress')).includes('MOCK-搜索结果') &&
           !progressEvents.some((event) => event.sourceEventId === 'evt_tool_progress' && event.phase === 'text-delta' && event.delta?.includes('safe test query')))
+
+      // Reproduce Teamspace's data-first creation path with a fresh ID and no
+      // Agent-specific plugin: catalog definition → identity → registry → invite
+      // → generic dispatch → configured tool → timeline receipt.
+      const customId = 'research_helper_42'
+      const customDefinition = ctx.agentCatalog.create({
+        title: '自定义研究助手', description: '使用团队搜索工具完成研究任务并提供依据。',
+        promptRef: 'prompt.custom.research', modelRef: 'mock-model', toolIds: ['web.search'],
+        contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive',
+      }, customId)
+      ctx.prompts.upsert(customDefinition.promptRef, customDefinition.title, '你是团队自定义研究助手，使用工具检索并引用证据。')
+      ctx.users.registerAgent(customDefinition.id, customDefinition.title)
+      registry.refreshCatalog()
+      const customSession = createSessionWithRoster(ctx, [customDefinition.id])
+      const customTask = humanCommit(ctx, customSession.id, 'u_dri', '@research_helper_42 调查当前供应商状态', [customId], false)
+      const customEngine = new OrchestratorEngine(ctx)
+      mock.mode = 'ok-tool'
+      customEngine.beginExternalDelegate(customSession.id, customTask.id, customDefinition.title, customTask.text)
+      for (let i = 0; i < 200 && !ctx.eventLog.listBySession(customSession.id).some((event) => event.authorId === customId); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      const customEvents = ctx.eventLog.listBySession(customSession.id)
+      const customReceipt = customEvents.find((event) => event.authorId === customId && event.authorKind === 'agent')
+      check('E4d4 新建的自定义 Agent 使用非特化 ID，受邀后经通用 dispatcher 调用配置工具并回执',
+        customReceipt?.text.includes('MOCK-工具调用后的最终答复') === true &&
+          customReceipt.text.includes('自定义研究助手') &&
+          customEvents.some((event) => event.kind === 'system' && event.text.includes(`${customId} 调用工具 web.search：成功`)) &&
+          ctx.agents.get(customId).status === 'idle',
+        JSON.stringify({ events: customEvents.map((event) => [event.authorId, event.kind, event.text]),
+          progress: progressEvents.filter((event) => event.agentId === customId).map(({ phase, toolId }) => [phase, toolId]),
+          status: ctx.agents.get(customId).status }))
       mock.mode = 'hold'
       const requestsBeforeCancel = mock.requests
       const artifactCountBeforeCancel = readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length
@@ -634,11 +674,10 @@ async function partE(): Promise<void> {
       Object.assign(ctx, {
         context: { assemble: async () => ({ system: '测试上下文', history: [], memories: [], retrieval: [] }) },
         orchestrator: {
-          reportFeedback: () => { staleAnalystReported = true; throw new Error('不应回报撤回任务') },
+          reportAgentResult: () => { staleAnalystReported = true; throw new Error('不应回报撤回任务') },
           cancelDelegatedTask: () => { analystLedgerCleared = true; return true },
         },
       })
-      analystApply(ctx)
       const analystRequestsBefore = mock.requests
       ctx.emit('orchestrator/delegate', {
         sessionId: 's_cancel', eventId: 'evt_cancel_analyst', target: '需求分析师', instruction: '撤回时中止会议分析',
@@ -647,7 +686,7 @@ async function partE(): Promise<void> {
         await new Promise((resolve) => setTimeout(resolve, 1))
       }
       const cancelledAnalysts = await ctx.agentRuntime.cancelBySource('evt_cancel_analyst')
-      check('E4g 内置会议 Agent 也注册在同一取消屏障，取消后不回报旧结果',
+      check('E4g catalog Agent 经通用 dispatcher 进入取消屏障，取消后不回报旧结果',
         cancelledAnalysts === 1 && analystLedgerCleared && !staleAnalystReported,
         `count=${cancelledAnalysts}, cleared=${analystLedgerCleared}, reported=${staleAnalystReported}`)
 
@@ -697,12 +736,12 @@ async function partE(): Promise<void> {
       const ctx = new Context()
       new SqlitePromptStore(ctx, db)
       new SqliteSettingsStore(ctx, db)
-      new AgentRegistry(ctx)
+      applyCatalogAgents(ctx, db)
       new CommandService(ctx)
       new LocalWorkdirService(ctx, tmp)
       new OpenAiChatLlm(ctx)
       runtimeApply(ctx)
-      coderApply(ctx)
+      agentDispatcherApply(ctx)
       const r = await ctx.agentRuntime.perform('agent.coder', 'MOCK-占位任务')
       check('E5 无 LLM → 占位模式诚实标注（mode=stub、含【占位】、无【真模型】、model=null）',
         r.mode === 'stub' && r.receipt.includes('【占位】') && !r.receipt.includes('【真模型】') && r.model === null,
@@ -727,7 +766,7 @@ async function main(): Promise<void> {
   // 门禁确定性（P8 下半场）：不管外层 shell 有没有真 key，A–D 一律占位模式
   // —— 先清 LLM 三件套；Part E 自管 env（注入 mock 三件套并在 finally 还原）。
   for (const k of [LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV]) delete process.env[k]
-  console.log(`verify-p8：P8 机制层验收（提示词 + 大脑 + 建会名册 + 双 stub + LLM 接入；断言 ⑬）`)
+  console.log(`verify-p8：P8 机制层验收（提示词 + 大脑 + 建会名册 + catalog Agent + LLM 接入；断言 ⑬）`)
   await partA()
   await partB()
   await partC()
@@ -763,8 +802,8 @@ await main()
 //   附带修正（红测暴露的断言形状问题，非代码 bug）：D2b 原断言回执含
 //   「已领任务：给登录页补冒烟测试」—— 但 instruction 是人类原话逐字透传
 //   （含 @token 前缀），改为「已领任务：」+「给登录页补冒烟测试」两段包含。
-//   覆盖说明：⑪ 的白名单静态扫描由 gate 链 verify:agents Part C 承担
-//   （verify-p8.ts 已列其白名单），本脚本不重复扫描。
+//   覆盖说明：Agent 动态创建与共享目录行为由 verify:agent-teamspace 覆盖；
+//   本脚本验证 catalog Agent 的通用委托和运行路径。
 //
 //   ── P8 下半场红测（2026-09-30 实测）──────────────────────────────────
 //   改坏方式：LLM_SABOTAGE=1 npm run verify:p8（agent-runtime 内置探针：

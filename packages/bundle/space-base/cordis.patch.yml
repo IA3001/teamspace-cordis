@@ -157,9 +157,8 @@
 - id: space-workdir-local
   name: './packages/impl/space-workdir-local/src/index.ts'
 
-# ctx.agentRuntime（P8，2026-09-30）：coding 类共享干活路径的机制行 ——
-# P6 在案记账的升格兑现（从 agent-coder-stub 迁入 perform 与 /tell 直派口）。
-# 此后 coding agent 包收敛为「描述符 + 委托认领」（铁律 4：入驻 = 纯新增）。
+# ctx.agentRuntime：共享 Agent 执行路径，普通 Agent 作为 catalog 数据实例注册，
+# 不需要为每个 Agent 新增插件包。
 # ctx.llm：OpenAI 兼容单次补全（不重试、60s 超时）。配置优先读后台 settings，
 # 再读插件配置和 .env 的 LLM_* 三件套；未配置也照常提供（configured=false）。
 - id: space-llm-openai
@@ -173,18 +172,6 @@
 
 - id: space-agent-runtime
   name: './packages/impl/space-agent-runtime/src/index.ts'
-
-# 会议 Agent（真模型示范，2026-10-01）：第一个走全分层组合的会议角色 ——
-# L7 委托 → L4 组装 → L0 单次调用 → L8 发言；LLM 未配置/失败回退【占位】。
-# 铁律 4：加一个会议 bot = 复制本条 + 改 config（role/agentId/title），零改码。
-- id: agent-analyst-llm
-  name: './plugins/agent-analyst-llm/index.ts'
-  disabled: true
-  config:
-    role: 需求分析师
-    agentId: a_analyst
-    title: 需求分析师
-    promptRef: prompt.minutes
 
 # 事件视图过滤器（分层 L5 会话层，2026-10-01）：ctx.history.view ——
 # eventLog 的纯过滤视图（作者种类/事件种类/时间窗/条数），供显示层按口径取数。

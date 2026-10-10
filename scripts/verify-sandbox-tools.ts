@@ -135,6 +135,19 @@ async function main(): Promise<void> {
   const approvedRetry = await tools.invoke('tool.workspace.read', JSON.stringify({ path: join(outside, 'approved.txt') }), invoker)
   assert.equal(approvedRetry.ok, true, 'retrying the original boundary-crossing request resolves its approved shared copy')
   assert.equal(approvedRetry.output, 'admin approved content', 'approved retries do not require relaying the shared path')
+  agents.register({ id: 'a_other_sandbox_verify', kind: 'custom', title: '其他验收 Agent', capabilities: [] })
+  const crossAgentRetry = await tools.invoke('tool.workspace.read', JSON.stringify({ path: join(outside, 'approved.txt') }), {
+    id: 'a_other_sandbox_verify', sessionId: invoker.sessionId,
+  })
+  assert.equal(crossAgentRetry.ok, false, 'another Agent cannot reuse the approved copy')
+  assert.equal(ctx.sandboxApproval.list('pending').some((item) => item.agentId === 'a_other_sandbox_verify'), true,
+    'approval lookup is scoped to the requesting Agent')
+  const crossSessionRetry = await tools.invoke('tool.workspace.read', JSON.stringify({ path: join(outside, 'approved.txt') }), {
+    id: invoker.id, sessionId: 's_another_session',
+  })
+  assert.equal(crossSessionRetry.ok, false, 'the same Agent cannot reuse approval from another session')
+  assert.equal(ctx.sandboxApproval.list('pending').some((item) => item.agentId === invoker.id && item.sessionId === 's_another_session'), true,
+    'approval lookup is scoped to the requesting session')
   const duplicate = ctx.sandboxApproval.request({
     agentId: invoker.id, sessionId: invoker.sessionId, sourcePath: join(outside, 'approved.txt'),
     sourceSize: pending.sourceSize, sourceMtimeMs: pending.sourceMtimeMs,

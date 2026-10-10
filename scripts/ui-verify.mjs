@@ -1,16 +1,39 @@
 // ui-verify.mjs —— 团队空间页回归自测 + 会红断言（gate:runtime 最后一项）。
-// 断言区（AS1~AS6）任何一条不满足 → 输出 RED，进程退出码 1。
+// 断言区（AS1~AS10）任何一条不满足 → 输出 RED，进程退出码 1。
 // Playwright 使用标准浏览器缓存；自定义浏览器路径通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定。
 import { chromium } from 'playwright-core'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readFileSync } from 'node:fs'
 const envPath = new URL('../.env', import.meta.url)
 const envSource = readFileSync(existsSync(envPath) ? envPath : new URL('../.env.example', import.meta.url), 'utf8')
+const nodeEnv = process.env.NODE_ENV ?? envSource.match(/^NODE_ENV=(.*)\s*$/m)?.[1]?.trim()
+if (nodeEnv === 'production') {
+  throw new Error('拒绝在 production 环境运行 UI 验收：测试会创建模板并临时加入 seed 会话')
+}
 const teamspacePort = process.env.TEAMSPACE_PORT ?? envSource.match(/^TEAMSPACE_PORT=(\d+)\s*$/m)?.[1]
 if (!teamspacePort || Number(teamspacePort) < 1 || Number(teamspacePort) > 65535) {
   throw new Error('TEAMSPACE_PORT 缺失或无效；请在 .env 中配置唯一监听端口')
 }
 const teamspaceBase = `http://127.0.0.1:${teamspacePort}`
+let temporaryDemoMember = null
+function cleanTemporaryDemoMember() {
+  if (!temporaryDemoMember) return true
+  const { sessionId, userId } = temporaryDemoMember
+  const db = new DatabaseSync('data/database.db')
+  try {
+    db.exec('PRAGMA busy_timeout=5000')
+    db.prepare(`UPDATE session_members SET status='left', left_at=?
+      WHERE session_id=? AND principal_id=? AND status='active'`).run(new Date().toISOString(), sessionId, userId)
+    const row = db.prepare('SELECT status FROM session_members WHERE session_id=? AND principal_id=?')
+      .get(sessionId, userId)
+    temporaryDemoMember = null
+    return row?.status === 'left'
+  } catch (error) {
+    console.error(`[ui-verify] 无法清理 seed 会话验收成员：${String(error?.message ?? error)}`)
+    return false
+  } finally { db.close() }
+}
+process.once('exit', cleanTemporaryDemoMember)
 const browser = await chromium.launch(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
   ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }
   : {})
@@ -52,6 +75,7 @@ if (!(await page.locator('textarea').count())) {
     if (!user?.user_id) throw new Error('UI 验收 token 未关联 Team 账号')
     const session = db.prepare("SELECT id FROM sessions WHERE id = 's_seed_demo'").get()
     if (!session?.id) throw new Error('UI 验收需要已迁移并 seed 的 s_seed_demo 会话')
+    temporaryDemoMember = { sessionId: session.id, userId: user.user_id }
     db.prepare(`INSERT INTO session_members(session_id, principal_id, role, status, joined_at, left_at, duty)
       VALUES (?, ?, '成员', 'active', ?, NULL, '')
       ON CONFLICT(session_id, principal_id) DO UPDATE SET status='active', left_at=NULL`).run(
@@ -498,5 +522,9 @@ console.log('== 断言区 ==')
 console.log('页面错误:', errs.length ? errs : '（无）')
 await page.screenshot({ path: '/tmp/ui-final.png' })
 await browser.close()
+const memberCleanupOk = cleanTemporaryDemoMember()
+process.removeListener('exit', cleanTemporaryDemoMember)
+judge('AS10 UI 验收账号退出 seed 演示会话', memberCleanupOk, memberCleanupOk
+  ? '验收账号已标记离会' : '验收账号仍是活动成员或清理失败')
 console.log(`断言汇总: ${reds.length ? 'RED → ' + reds.join(', ') : '全部 GREEN'}`)
 process.exitCode = reds.length ? 1 : 0

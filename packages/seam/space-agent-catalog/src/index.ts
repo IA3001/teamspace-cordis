@@ -26,26 +26,33 @@ export interface AgentDefinition {
   contextSources: string[]
   memoryPolicy: string
   speechPolicy: string
+  templateOrigin: AgentTemplateOrigin | null
   status: AgentDefinitionStatus
   createdAt: string
   updatedAt: string
 }
 
-export type AgentDefinitionInput = Omit<AgentDefinition, 'id' | 'status' | 'createdAt' | 'updatedAt' | 'llmProfileRef'> & { llmProfileRef?: string }
-export type AgentDefinitionPatch = Partial<AgentDefinitionInput>
+export interface AgentTemplateOrigin { id: string; version: number }
+
+export type AgentDefinitionInput = Omit<AgentDefinition, 'id' | 'status' | 'createdAt' | 'updatedAt' | 'llmProfileRef' | 'templateOrigin'> & {
+  llmProfileRef?: string
+  templateOrigin?: AgentTemplateOrigin | null
+}
+export type AgentDefinitionPatch = Partial<Omit<AgentDefinitionInput, 'templateOrigin'>>
 
 /** Reusable starter configuration; creating from one copies data into an Agent instance. */
 export interface AgentTemplate {
   id: string
+  version: number
   title: string
   summary: string
   input: AgentDefinitionInput
 }
 
-/** Generic role presets. They do not register identities or require per-Agent plugins. */
+/** Generic role presets. Increment version when the default input changes; existing Agent copies stay unchanged. */
 export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   {
-    id: 'research', title: '研究与分析', summary: '检索团队资料或网页，比较证据并给出引用。',
+    id: 'research', version: 1, title: '研究与分析', summary: '检索团队资料或网页，比较证据并给出引用。',
     input: {
       title: '研究助手', description: '检索和比较可靠资料，区分事实与推断，并为结论提供可核验引用。',
       promptRef: '', modelRef: '', toolIds: ['web.search'],
@@ -53,7 +60,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     },
   },
   {
-    id: 'challenge', title: '方案挑战', summary: '主动检查方案假设、边界条件和失败路径。',
+    id: 'challenge', version: 1, title: '方案挑战', summary: '主动检查方案假设、边界条件和失败路径。',
     input: {
       title: '挑战者', description: '审视讨论中的方案和结论，指出隐含假设、反例、边界条件与可能的失败路径。',
       promptRef: '', modelRef: '', toolIds: ['web.search'],
@@ -61,7 +68,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     },
   },
   {
-    id: 'coding', title: '代码实现', summary: '在独立工作区内读写代码并运行受控验证。',
+    id: 'coding', version: 1, title: '代码实现', summary: '在独立工作区内读写代码并运行受控验证。',
     input: {
       title: '编码助手', description: '分析任务，先检查相关代码，再在个人工作区内实现并运行必要验证。汇报改动和结果。',
       promptRef: '', modelRef: '', toolIds: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute'],
@@ -69,7 +76,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     },
   },
   {
-    id: 'review', title: '代码审查', summary: '优先识别缺陷、回归风险和缺失验证。',
+    id: 'review', version: 1, title: '代码审查', summary: '优先识别缺陷、回归风险和缺失验证。',
     input: {
       title: '审查助手', description: '审查给定改动，优先报告可复现的缺陷和回归风险，并指出代码位置与验证缺口。',
       promptRef: '', modelRef: '', toolIds: ['tool.workspace.read', 'tool.code.execute'],
@@ -77,7 +84,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     },
   },
   {
-    id: 'testing', title: '测试设计', summary: '围绕正常、边界和异常行为制定可执行验证。',
+    id: 'testing', version: 1, title: '测试设计', summary: '围绕正常、边界和异常行为制定可执行验证。',
     input: {
       title: '测试助手', description: '为任务设计可执行验证，覆盖正常、边界和异常情况，并清楚列出通过标准。',
       promptRef: '', modelRef: '', toolIds: ['tool.workspace.read', 'tool.code.execute'],
@@ -85,7 +92,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     },
   },
   {
-    id: 'general', title: '通用协作', summary: '从空白职责开始定义团队需要的 Agent。',
+    id: 'general', version: 1, title: '通用协作', summary: '从空白职责开始定义团队需要的 Agent。',
     input: {
       title: '', description: '', promptRef: '', modelRef: '', toolIds: [],
       contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive',

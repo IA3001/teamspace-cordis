@@ -216,6 +216,10 @@ export function apply(ctx: Context) {
         const user = await authTeamHuman(ctx, token)
         if (!user) return null
         try {
+          if (input.templateOrigin && !AGENT_TEMPLATES.some((template) =>
+            template.id === input.templateOrigin?.id && template.version === input.templateOrigin.version)) {
+            throw new AgentCatalogError('invalid_input', '所选 Agent 起始模板版本不存在')
+          }
           const def = ctx.agentCatalog.create(input, `a_${randomUUID()}`)
           try { ctx.users.registerAgent(def.id, def.title) } catch (e) {
             ctx.agentCatalog.archive(def.id)

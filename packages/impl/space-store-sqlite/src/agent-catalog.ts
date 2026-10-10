@@ -33,6 +33,9 @@ function toDefinition(r: Row): AgentDefinition {
     promptRef: r.prompt_ref as string,
     modelRef: r.model_ref as string,
     llmProfileRef: r.llm_profile_ref as string,
+    templateOrigin: r.template_id
+      ? { id: r.template_id as string, version: Number(r.template_version) }
+      : null,
     toolIds: parseList(r.tool_ids, 'toolIds'),
     contextSources: parseList(r.context_sources, 'contextSources'),
     memoryPolicy: r.memory_policy as string,
@@ -52,6 +55,11 @@ function cleanInput(input: AgentDefinitionInput): AgentDefinitionInput {
   if (!description) {
     throw new AgentCatalogError('invalid_input', 'Agent 职责说明不能为空')
   }
+  const templateOrigin = input.templateOrigin ?? null
+  if (templateOrigin !== null && (!/^[a-z][a-z0-9-]{0,63}$/.test(templateOrigin.id) ||
+    !Number.isSafeInteger(templateOrigin.version) || templateOrigin.version < 1)) {
+    throw new AgentCatalogError('invalid_input', '模板来源必须包含有效模板 ID 和正整数版本')
+  }
   return {
     title,
     description,
@@ -62,6 +70,7 @@ function cleanInput(input: AgentDefinitionInput): AgentDefinitionInput {
     contextSources: parseList(JSON.stringify(input.contextSources ?? ['session', 'agent-memory', 'team-kb']), 'contextSources'),
     memoryPolicy: String(input.memoryPolicy ?? 'agent').trim() || 'agent',
     speechPolicy: String(input.speechPolicy ?? 'passive').trim() || 'passive',
+    templateOrigin,
   }
 }
 
@@ -77,13 +86,15 @@ export class SqliteAgentCatalog extends AgentCatalogService {
       this.db.prepare(`
         INSERT INTO agent_definitions(
           id, title, description, prompt_ref, model_ref, llm_profile_ref, tool_ids,
-          context_sources, memory_policy, speech_policy, status, created_at, updated_at
-        ) VALUES ($id, $title, $description, $promptRef, $modelRef, $llmProfileRef, $toolIds, $contextSources, $memoryPolicy, $speechPolicy, 'active', $createdAt, $updatedAt)
+          context_sources, memory_policy, speech_policy, template_id, template_version,
+          status, created_at, updated_at
+        ) VALUES ($id, $title, $description, $promptRef, $modelRef, $llmProfileRef, $toolIds, $contextSources, $memoryPolicy, $speechPolicy, $templateId, $templateVersion, 'active', $createdAt, $updatedAt)
       `).run({
         $id: id, $title: value.title, $description: value.description,
         $promptRef: value.promptRef, $modelRef: value.modelRef, $llmProfileRef: value.llmProfileRef ?? '',
         $toolIds: JSON.stringify(value.toolIds), $contextSources: JSON.stringify(value.contextSources),
         $memoryPolicy: value.memoryPolicy, $speechPolicy: value.speechPolicy,
+        $templateId: value.templateOrigin?.id ?? '', $templateVersion: value.templateOrigin?.version ?? 0,
         $createdAt: timestamp, $updatedAt: timestamp,
       })
     } catch (e) {

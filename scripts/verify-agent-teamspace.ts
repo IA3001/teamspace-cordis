@@ -51,7 +51,7 @@ const catalog = {
   create(input: AgentDefinitionInput, id = `a_test_${definitions.size + 1}`) {
     if ([...definitions.values()].some((d) => d.title.toLowerCase() === input.title.toLowerCase() && d.status === 'active')) throw new Error('duplicate')
     const at = new Date().toISOString()
-    const value: AgentDefinition = { ...input, id, status: 'active', createdAt: at, updatedAt: at }
+    const value: AgentDefinition = { ...input, templateOrigin: input.templateOrigin ?? null, id, status: 'active', createdAt: at, updatedAt: at }
     definitions.set(id, value)
     return value
   },
@@ -154,11 +154,13 @@ async function main() {
   const input: AgentDefinitionInput = {
     title: '研究助手', description: '检索并汇总资料', promptRef: 'prompt.research',
     modelRef: 'model.reasoning', llmProfileRef: 'ark-coding', toolIds: ['kb.search'],
+    templateOrigin: { id: 'research', version: 1 },
     contextSources: ['session', 'agent-memory', 'team-kb'],
     memoryPolicy: 'agent', speechPolicy: 'passive',
   }
   const created = await rpc.createAgent('team-a', input)
   assert.equal(created.title, '研究助手')
+  assert.deepEqual(created.templateOrigin, { id: 'research', version: 1 }, 'creation retains the selected starter-template version')
   assert.equal(refreshCount, 1, 'creating a definition immediately refreshes the live registry')
   assert.equal(liveRegistry.get(created.id).descriptor.title, created.title)
   assert.equal(memberships.length, initialMembershipCount, 'creating a shared definition must not auto-join any open session')
@@ -167,7 +169,11 @@ async function main() {
     'Team humans receive generic, reusable starter templates')
   assert.deepEqual(agentTemplates.find((template: { id: string }) => template.id === 'coding')?.input.toolIds,
     ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute'])
+  assert.equal(agentTemplates.find((template: { id: string }) => template.id === 'research')?.version, 1,
+    'starter templates expose an explicit version')
   assert.equal(await rpc.agentTemplates('agent-token'), null, 'Agent identities cannot manage shared Agent templates')
+  assert.match((await rpc.createAgent('team-a', { ...input, title: 'Invalid template origin', templateOrigin: { id: 'research', version: 999 } })).detail,
+    /模板版本不存在/, 'creation rejects a template version that is not in the shared template catalog')
   settings.set('llm.profiles', [{ id: 'ark-coding', name: 'Ark Coding' }])
   settings.set('llm.profile.ark-coding.model', 'coding-model')
   assert.deepEqual(await rpc.llmProfiles('team-a'), [{ id: 'ark-coding', name: 'Ark Coding', model: 'coding-model' }])

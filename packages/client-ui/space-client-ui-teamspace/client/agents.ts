@@ -16,6 +16,7 @@ interface AgentDefinition {
   contextSources: string[]
   memoryPolicy: string
   speechPolicy: string
+  templateOrigin: { id: string; version: number } | null
   status: 'active' | 'archived'
   createdAt: string
   updatedAt: string
@@ -35,7 +36,7 @@ interface SessionOption { id: string; title: string; status: string }
 interface PromptTemplate { ref: string; title: string; body: string; updatedAt: string }
 interface ToolOption { id: string; title: string; capabilities: string[] }
 interface LlmProfileOption { id: string; name: string; model: string }
-interface AgentTemplate { id: string; title: string; summary: string; input: Omit<AgentInput, 'llmProfileRef'> & { llmProfileRef?: string } }
+interface AgentTemplate { id: string; version: number; title: string; summary: string; input: Omit<AgentInput, 'llmProfileRef'> & { llmProfileRef?: string } }
 type ApiError = { error: string; detail: string }
 const isError = (value: unknown): value is ApiError => Boolean(value && typeof value === 'object' && 'error' in value)
 
@@ -50,7 +51,7 @@ export const AgentManagementPage = defineComponent({
       toolCatalog(token: string): Promise<ToolOption[] | null>
       savePromptTemplate(token: string, ref: string, title: string, body: string): Promise<{ ok: true; template: PromptTemplate } | ApiError | null>
       sessions(token: string): Promise<SessionOption[]>
-      createAgent(token: string, input: AgentInput): Promise<AgentDefinition | ApiError | null>
+      createAgent(token: string, input: AgentInput & { templateOrigin?: { id: string; version: number } }): Promise<AgentDefinition | ApiError | null>
       updateAgent(token: string, id: string, patch: Partial<AgentInput>): Promise<AgentDefinition | ApiError | null>
       archiveAgent(token: string, id: string): Promise<{ ok: true; definition: AgentDefinition } | ApiError | null>
       inviteAgent(token: string, sessionId: string, agentId: string): Promise<{ ok: true; joined: boolean; detail: string } | ApiError | null>
@@ -140,7 +141,12 @@ export const AgentManagementPage = defineComponent({
         const payload: AgentInput = { ...form.value }
         const result = editingId.value
           ? await rpc.value.updateAgent(token(), editingId.value, payload)
-          : await rpc.value.createAgent(token(), payload)
+          : await rpc.value.createAgent(token(), {
+            ...payload,
+            templateOrigin: templates.value.find((template) => template.id === selectedTemplate.value)
+              ? { id: selectedTemplate.value, version: templates.value.find((template) => template.id === selectedTemplate.value)!.version }
+              : undefined,
+          })
         if (!result) { window.location.assign('/login'); return }
         if (isError(result)) { flash(result.detail || result.error, true); return }
         flash(editingId.value ? '共享 Agent 配置已更新' : '共享 Agent 已创建；它尚未加入任何会话')
@@ -219,7 +225,7 @@ export const AgentManagementPage = defineComponent({
             !editingId.value ? field('创建模板', h(ElSelect, { modelValue: selectedTemplate.value,
               'onUpdate:modelValue': (v: string) => applyTemplate(v), placeholder: '从通用模板开始，也可直接填写' }, {
               default: () => templates.value.map((item) => h(ElOption, { key: item.id,
-                label: `${item.title}：${item.summary}`, value: item.id })),
+                label: `${item.title} v${item.version}：${item.summary}`, value: item.id })),
             })) : null,
             field('名称', h(ElInput, { modelValue: form.value.title, maxlength: 80, showWordLimit: true,
               'onUpdate:modelValue': (v: string) => { form.value.title = v }, placeholder: '例如：需求分析助手' })),
@@ -279,6 +285,7 @@ export const AgentManagementPage = defineComponent({
               default: () => [
                 h(ElText, {}, { default: () => def.description }),
                 h(ElSpace, { wrap: true }, { default: () => [
+                  def.templateOrigin ? h(ElTag, { size: 'small', type: 'info' }, { default: () => `起始模板：${def.templateOrigin?.id} v${def.templateOrigin?.version}` }) : null,
                   h(ElTag, { size: 'small' }, { default: () => `供应商：${llmProfiles.value.find((item) => item.id === def.llmProfileRef)?.name ?? (def.llmProfileRef || '系统默认')}` }),
                   def.modelRef ? h(ElTag, { size: 'small' }, { default: () => `模型覆盖：${def.modelRef}` }) : null,
                   h(ElTag, { size: 'small' }, { default: () => `工具：${def.toolIds.join(', ') || '未配置'}` }),

@@ -291,6 +291,30 @@ console.log('== 断言区 ==')
   judge('AS5 390px 标题与搜索栏不换行/不溢出', ok, detail.join(' | '))
 }
 
+// AS7 Agent 创建器展示起始模板的显式版本，方便团队知道新建实例复制自哪一版。
+{
+  let ok = true; const detail = []
+  let agentContext
+  try {
+    const token = await page.evaluate(() => localStorage.getItem('space_token'))
+    agentContext = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+    await agentContext.addInitScript((value) => localStorage.setItem('space_token', value), token)
+    const agentPage = await agentContext.newPage()
+    const agentErrors = []
+    agentPage.on('pageerror', (e) => agentErrors.push(String(e).slice(0, 120)))
+    await agentPage.goto(`${teamspaceBase}/teamspace/agents`, { waitUntil: 'networkidle', timeout: 20000 })
+    await agentPage.getByText('创建模板', { exact: true }).locator('xpath=..').locator('.el-select').click()
+    const versionOptions = agentPage.locator('.el-popper:visible .el-select-dropdown__item')
+    await versionOptions.first().waitFor({ timeout: 5000 })
+    const options = await versionOptions.allTextContents()
+    const versioned = options.filter((text) => /\sv\d+：/.test(text))
+    detail.push(`有版本标识的模板=${versioned.length}（${versioned.join(' / ')}）`)
+    ok &&= versioned.length === 6 && agentErrors.length === 0
+  } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
+  finally { await agentContext?.close() }
+  judge('AS7 团队 Agent 创建器展示模板版本', ok, detail.join(' | '))
+}
+
 console.log('页面错误:', errs.length ? errs : '（无）')
 await page.screenshot({ path: '/tmp/ui-final.png' })
 await browser.close()

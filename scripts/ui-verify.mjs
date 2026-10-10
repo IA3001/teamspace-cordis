@@ -161,6 +161,8 @@ console.log('== 断言区 ==')
     detail.push(`10步耗时=${JSON.stringify(steps.map((x) => x[1]))}ms max=${maxMs}ms`)
     ok &&= maxMs < 1000
     await toggle.click(); await page.waitForTimeout(150) // 恢复展开态
+    // Do not leave the interaction probe in the composer shown in the final screenshot.
+    await page.locator('textarea').fill('')
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 80)) }
   judge('AS3 折叠即时可靠+折叠态10步交互<1s', ok, detail.join(' | '))
 }

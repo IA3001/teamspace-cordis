@@ -172,6 +172,40 @@ async function verifyQueuedPlans(): Promise<void> {
   check('Q5 共享槽位空闲后派发排队流程任务', externalDispatched &&
     ctx.sessionWork.state().activeSessionId === 's_b' && engine.turn('s_b').state === 'chain')
   ctx.sessionWork.leave('s_b', 'orchestrator:s_b')
+
+  // Recovery must survive the gate becoming free and being claimed by a FIFO
+  // competitor before the queued recovery microtask runs. The next release
+  // notification must wake the persisted Plan instead of leaving it stranded.
+  ctx.on('session-work/changed', () => engine.wakeQueue())
+  const callsBeforeRecovery = calls
+  const recoveryPlan = humanCommit(ctx, 's_a', '队列与恢复交错验收')
+  ctx.settings.set('orchestrator.runtime.v1', {
+    version: 1,
+    turns: [['s_a', {
+      state: 'chain', decisionCalls: 0, autonomousActions: 0, delegatedTargets: [], stopReason: '', stopDetail: '',
+    }]],
+    delegations: [], queue: [], activeDecisions: [{ payload: recoveryPlan, resetTurn: true }],
+  })
+  const blockerAdmitted = ctx.sessionWork.tryEnter('s_recovery_blocker', 'agent-inbox')
+  const competitorQueued = !ctx.sessionWork.tryEnter('s_fifo_competitor', 'agent-worker')
+  engine.recoverPersistedWork()
+  check('Q6 活跃租约期间恢复任务设置等待屏障', blockerAdmitted && competitorQueued && calls === callsBeforeRecovery)
+  ctx.sessionWork.leave('s_recovery_blocker', 'agent-inbox')
+  // session-work/changed schedules recovery on a microtask; synchronously let
+  // the existing FIFO head claim the empty slot before that callback runs.
+  const competitorAdmitted = ctx.sessionWork.tryEnter('s_fifo_competitor', 'agent-worker')
+  await new Promise((resolve) => setImmediate(resolve))
+  check('Q7 FIFO 竞争者先占槽时恢复 Plan 仍留在持久队列', competitorAdmitted && calls === callsBeforeRecovery &&
+    ctx.settings.get<Record<string, any>>('orchestrator.runtime.v1', {}).queue?.some((item: any) =>
+      item.kind === 'plan' && item.payload?.event?.id === recoveryPlan.event.id))
+  ctx.sessionWork.leave('s_fifo_competitor', 'agent-worker')
+  for (let i = 0; i < 40 && engine.turn('s_a').stopReason !== 'completed'; i++) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  check('Q8 后续租约释放重新唤醒恢复，且只执行一次', calls === callsBeforeRecovery + 1 &&
+    engine.turn('s_a').stopReason === 'completed' &&
+    ctx.eventLog.listBySession('s_a').filter((event) => event.id === `orchestrator_reply_${recoveryPlan.event.id}`).length === 1,
+    `calls=${calls - callsBeforeRecovery}, turn=${JSON.stringify(engine.turn('s_a'))}`)
   db.close()
 }
 

@@ -240,8 +240,11 @@ export const AgentManagementPage = defineComponent({
       const ElTag = resolveComponent('el-tag') as unknown as string
       const ElEmpty = resolveComponent('el-empty') as unknown as string
       const ElRow = resolveComponent('el-row') as unknown as string
+      const ElCol = resolveComponent('el-col') as unknown as string
+      const ElDivider = resolveComponent('el-divider') as unknown as string
+      const ElMain = resolveComponent('el-main') as unknown as string
+      const ElScrollbar = resolveComponent('el-scrollbar') as unknown as string
       const KLayout = resolveComponent('k-layout') as unknown as string
-      const KContent = resolveComponent('k-content') as unknown as string
       const field = (label: string, control: VNodeChild) => h('div', { key: label }, [
         h(ElText, { tag: 'label', size: 'small' }, { default: () => label }), control,
       ])
@@ -370,17 +373,18 @@ export const AgentManagementPage = defineComponent({
         ]),
         default: () => [
           h(ThemeStyle),
-          h(KContent, {}, { default: () => h(ElSpace, { direction: 'vertical', fill: true, size: 16 }, {
-            default: () => [
-              h(ElText, { type: 'info', size: 'small' }, { default: () => 'Agent 配置属于整个团队共享资源，没有个人所有者。邀请加入会话后可访问从会话开始以来的完整历史。' }),
-              h(ElText, { type: 'info', size: 'small' }, { default: () => '共享 Agent 使用统一运行时。模型、工具、上下文来源、记忆和发言策略会按配置执行；提示词需绑定已有模板 ref，模型凭据由系统管理员维护。创建定义不会自动加入会话，需显式邀请。' }),
-              promptEditor,
-              notice.value ? h(ElText, { type: failure.value ? 'danger' : 'success' }, { default: () => notice.value }) : null,
-              formCard,
-              h(ElText, { tag: 'strong' }, { default: () => `共享 Agent 目录${loading.value ? '（加载中）' : ''}` }),
-              catalog,
-            ],
-          }) }),
+          h(ElMain, {}, { default: () => h(ElScrollbar, {}, { default: () => h(ElRow, { gutter: 24 }, { default: () => [
+            h(ElCol, { span: 24 }, { default: () => h('div', {}, [
+              h('div', {}, h(ElText, { type: 'info', size: 'small' }, { default: () => 'Agent 配置属于整个团队共享资源，没有个人所有者。邀请加入会话后可访问从会话开始以来的完整历史。' })),
+              h('div', {}, h(ElText, { type: 'info', size: 'small' }, { default: () => '共享 Agent 使用统一运行时。模型、工具、上下文来源、记忆和发言策略会按配置执行；提示词需绑定已有模板 ref，模型凭据由系统管理员维护。创建定义不会自动加入会话，需显式邀请。' })),
+            ]) }),
+            h(ElCol, { span: 24, lg: 12 }, { default: () => promptEditor }),
+            h(ElCol, { span: 24, lg: 12 }, { default: () => formCard }),
+            notice.value ? h(ElCol, { span: 24 }, { default: () => h(ElText, { type: failure.value ? 'danger' : 'success' }, { default: () => notice.value }) }) : null,
+            h(ElCol, { span: 24 }, { default: () => h(ElDivider) }),
+            h(ElCol, { span: 24 }, { default: () => h(ElText, { tag: 'strong' }, { default: () => `共享 Agent 目录${loading.value ? '（加载中）' : ''}` }) }),
+            h(ElCol, { span: 24 }, { default: () => catalog }),
+          ] }) }) }),
         ],
       })
     }

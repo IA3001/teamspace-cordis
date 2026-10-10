@@ -308,6 +308,13 @@ console.log('== 断言区 ==')
     const genericFamily = fontFamily.split(',').at(-1)?.trim().replace(/^['"]|['"]$/g, '')
     detail.push(`共享无衬线字体=${fontFamily}`)
     ok &&= genericFamily === 'sans-serif'
+    const managementCards = agentPage.locator('.main-content .el-card')
+    const promptBox = await managementCards.nth(0).boundingBox()
+    const editorBox = await managementCards.nth(1).boundingBox()
+    const desktopColumns = Boolean(promptBox && editorBox && Math.abs(promptBox.y - editorBox.y) < 16 &&
+      promptBox.x + promptBox.width <= editorBox.x + 1 && promptBox.width >= 400 && editorBox.width >= 400)
+    detail.push(`桌面提示词/Agent 编辑双栏=${desktopColumns}`)
+    ok &&= desktopColumns
     await agentPage.getByText('创建模板', { exact: true }).locator('xpath=..').locator('.el-select').click()
     const versionOptions = agentPage.locator('.el-popper:visible .el-select-dropdown__item')
     await versionOptions.first().waitFor({ timeout: 5000 })
@@ -353,6 +360,33 @@ console.log('== 断言区 ==')
     await agentContext?.close()
   }
   judge('AS7 团队 Agent 创建器展示版本并保存共享模板', ok, detail.join(' | '))
+}
+
+// AS8 Agent management uses a full-width desktop grid and stacks safely on mobile.
+{
+  let ok = true; const detail = []
+  let mobileContext
+  try {
+    const token = await page.evaluate(() => localStorage.getItem('space_token'))
+    mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 } })
+    await mobileContext.addInitScript((value) => localStorage.setItem('space_token', value), token)
+    const mobile = await mobileContext.newPage()
+    const errors = []
+    mobile.on('pageerror', (e) => errors.push(String(e).slice(0, 120)))
+    await mobile.goto(`${teamspaceBase}/teamspace/agents`, { waitUntil: 'networkidle', timeout: 20000 })
+    const cards = mobile.locator('.main-content .el-card')
+    await cards.nth(1).waitFor({ timeout: 10000 })
+    const first = await cards.nth(0).boundingBox()
+    const second = await cards.nth(1).boundingBox()
+    const stacked = Boolean(first && second && second.y >= first.y + first.height - 1)
+    const widths = await mobile.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }))
+    const inset = Boolean(first && first.x >= 56 && first.x + first.width <= widths.viewport - 4)
+    detail.push(`390px 下纵向布局=${stacked}、卡片留边=${inset}，页面宽=${widths.document}/${widths.viewport}px，错误=${errors.length}`)
+    ok &&= stacked && inset && widths.document <= widths.viewport && errors.length === 0
+    await mobile.screenshot({ path: '/tmp/ui-agent-mobile-final.png' })
+  } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 120)) }
+  finally { await mobileContext?.close() }
+  judge('AS8 Agent 管理页桌面双栏与窄屏堆叠', ok, detail.join(' | '))
 }
 
 console.log('页面错误:', errs.length ? errs : '（无）')

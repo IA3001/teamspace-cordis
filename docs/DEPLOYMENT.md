@@ -79,4 +79,11 @@ sudo install -d -o teamspace -g teamspace /srv/teamspace-cordis/data/workdirs
 
 通过 `visudo` 仅允许服务账号免交互调用该固定助手，然后在应用 `.env` 设置 `WORKDIR_QUOTA_HELPER=/usr/local/sbin/teamspace-workdir-quota` 和 `WORKDIR_QUOTA_SUDO=1`。例如 sudoers 规则为 `teamspace ALL=(root) NOPASSWD: /usr/local/sbin/teamspace-workdir-quota ensure *`；助手会再次校验 Agent ID、固定目录、XFS 文件系统和配额挂载选项。先手动执行 `sudo /usr/local/sbin/teamspace-workdir-quota ensure a_quota_check`，再用 `xfs_quota -x -c 'report -h -p' /srv/teamspace-cordis/data/workdirs` 核对登记和限制，然后删除验收 Agent 前先人工检查其文件。助手不自动清空或删除 Agent 文件：工作区可能含有未共享的重要产物；清理需由管理员确认归档/保留后再处理。项目 ID 映射保持登记，避免误把旧配额分配给其他 Agent。
 
+仓库提供 `deploy/teamspace-workdir-quota.sudoers` 作为规则模板。安装时用 `visudo` 校验，不要直接覆盖整份 `/etc/sudoers`：
+
+```sh
+sudo install -o root -g root -m 0440 deploy/teamspace-workdir-quota.sudoers /etc/sudoers.d/teamspace-workdir-quota
+sudo visudo -cf /etc/sudoers.d/teamspace-workdir-quota
+```
+
 超限验收只在隔离预发的专用 XFS 测试挂载和测试 Agent 上执行，不要降低生产配额或向生产工作区写入大文件。先验证首次工作区领取生成唯一 project ID 和限额，再让测试 Agent 通过 `tool.workspace.write` 写入超过测试 hard limit 的内容；预期文件系统返回 `EDQUOT`/`ENOSPC`，工具失败，会话时间线出现“个人工作区达到或无法登记宿主机磁盘配额”系统事件，服务错误日志包含 `[workdir-quota]`、会话和 Agent 标识。还要在调试控制台日志页确认该 logger 记录已持久化。检查工作区文件后由管理员决定归档或删除；不要让测试脚本自动清理用户文件。

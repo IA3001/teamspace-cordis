@@ -1,0 +1,3 @@
+# The helper accepts only `ensure AGENT_ID` and validates the fixed XFS root,
+# root-owned config, project mapping and Agent ID before changing quota state.
+teamspace ALL=(root) NOPASSWD: /usr/local/sbin/teamspace-workdir-quota ensure *

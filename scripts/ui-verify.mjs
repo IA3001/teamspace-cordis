@@ -297,11 +297,40 @@ console.log('== 断言区 ==')
     ok &&= layout.titleWhiteSpace === 'nowrap' && layout.titleHeight <= 32 && layout.titleWidth >= 80
     ok &&= layout.panelText === '面板' && layout.panelRight <= layout.viewportWidth
     ok &&= layout.searchWidth >= 150 && layout.searchRight <= layout.viewportWidth && layout.documentWidth <= layout.viewportWidth
+
+    await mobile.locator('.sp-collab-toggle').click()
+    const rightDrawer = mobile.locator('aside.right-sidebar')
+    await rightDrawer.waitFor({ timeout: 3000 })
+    const rightGeometry = await rightDrawer.evaluate((node) => {
+      const rect = node.getBoundingClientRect()
+      return { left: rect.left, right: rect.right, width: rect.width, position: getComputedStyle(node).position }
+    })
+    const firstDrawerExclusive = !(await mobile.locator('aside.page-sidebar').count()) &&
+      (await mobile.locator('.sp-drawer-backdrop').count()) === 1 && rightGeometry.position === 'fixed' &&
+      rightGeometry.right <= 390 && rightGeometry.left >= 390 - rightGeometry.width - 1
+    detail.push(`右抽屉固定且互斥=${firstDrawerExclusive}（${Math.round(rightGeometry.left)}–${Math.round(rightGeometry.right)}px）`)
+    ok &&= firstDrawerExclusive
+    await mobile.locator('.sp-drawer-backdrop').click({ position: { x: 10, y: 20 } })
+    ok &&= !(await mobile.locator('aside.right-sidebar, aside.page-sidebar').count())
+
+    await mobile.locator('.layout-header button').first().click()
+    await mobile.locator('aside.page-sidebar').waitFor({ timeout: 3000 })
+    const leftDrawerExclusive = !(await mobile.locator('aside.right-sidebar').count()) &&
+      (await mobile.locator('.sp-drawer-backdrop').count()) === 1
+    detail.push(`左抽屉打开时右抽屉关闭=${leftDrawerExclusive}`)
+    ok &&= leftDrawerExclusive
+    await mobile.locator('.sp-collab-toggle').click()
+    const switchExclusive = !(await mobile.locator('aside.page-sidebar').count()) &&
+      (await mobile.locator('aside.right-sidebar').count()) === 1
+    detail.push(`两侧切换保持互斥=${switchExclusive}`)
+    ok &&= switchExclusive
+    await mobile.locator('.sp-drawer-backdrop').click({ position: { x: 10, y: 20 } })
+    ok &&= !(await mobile.locator('aside.right-sidebar, aside.page-sidebar').count())
     ok &&= mobileErrors.length === 0
     await mobile.screenshot({ path: '/tmp/ui-mobile-final.png' })
     await mobileContext.close()
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
-  judge('AS5 390px 标题与搜索栏不换行/不溢出', ok, detail.join(' | '))
+  judge('AS5 390px 标题/搜索栏与互斥抽屉保持可用', ok, detail.join(' | '))
 }
 
 // AS7 Agent 创建器展示起始模板的显式版本，方便团队知道新建实例复制自哪一版。

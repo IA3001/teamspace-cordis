@@ -27,13 +27,33 @@ class SharedApprovalDelivery extends SandboxApprovalDeliveryService {
         throw new Error('申请文件自管理员审查后已发生变化，请重新申请')
       }
       const content = await source.readFile()
-      if (content.byteLength !== info.size) throw new Error('源文件在审批交付期间发生变化，请重新申请')
+      const afterRead = await source.stat()
+      if (content.byteLength !== info.size || afterRead.size !== info.size || afterRead.mtimeMs !== info.mtimeMs ||
+        afterRead.ctimeMs !== info.ctimeMs || afterRead.ino !== info.ino) {
+        throw new Error('源文件在审批交付期间发生变化，请重新申请')
+      }
       const leaf = basename(request.sourcePath).replace(/[^\p{L}\p{N}._-]/gu, '_').slice(0, 120) || 'approved-file'
       const folder = resolve(SHARED_ROOT, 'approvals', request.id)
       await mkdir(folder, { recursive: true })
       const destination = resolve(folder, leaf)
-      const output = await open(destination, 'wx', 0o600)
-      try { await output.writeFile(content) } finally { await output.close() }
+      let output
+      try { output = await open(destination, 'wx', 0o600) }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        // A process may stop after publishing the copy but before committing the
+        // approval row. Let an Admin retry only when the existing regular file
+        // is exactly the reviewed source; never overwrite an unrelated path.
+        const existing = await open(destination, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+        try {
+          const existingInfo = await existing.stat()
+          const existingContent = await existing.readFile()
+          if (!existingInfo.isFile() || existingInfo.size !== content.byteLength || !existingContent.equals(content)) {
+            throw new Error('审批交付路径已存在且内容不匹配，拒绝覆盖')
+          }
+        } finally { await existing.close() }
+        return { relativePath: `approvals/${request.id}/${leaf}` }
+      }
+      try { await output.writeFile(content); await output.sync() } finally { await output.close() }
       return { relativePath: `approvals/${request.id}/${leaf}` }
     } finally { await source.close() }
   }

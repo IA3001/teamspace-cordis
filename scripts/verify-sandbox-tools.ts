@@ -85,6 +85,14 @@ async function main(): Promise<void> {
   })
   assert.equal(repeatedPending.id, pending.id, 'repeated tool calls reuse one pending review request')
   const delivered = await ctx.sandboxApprovalDelivery.deliver(pending)
+  assert.equal(ctx.sandboxApproval.get(pending.id).status, 'pending', 'copying alone does not commit the decision')
+  assert.deepEqual(await ctx.sandboxApprovalDelivery.deliver(pending), delivered,
+    'retry after a completed copy but before the decision record reuses the verified file')
+  const approvedFile = resolve(process.cwd(), 'data/shared-workspace', delivered.relativePath)
+  writeFileSync(approvedFile, 'tampered destination')
+  await assert.rejects(ctx.sandboxApprovalDelivery.deliver(pending), /内容不匹配/,
+    'retry refuses to overwrite a destination that no longer matches the reviewed source')
+  writeFileSync(approvedFile, 'admin approved content')
   const approved = ctx.sandboxApproval.decide(pending.id, 'approved', 'admin-test', '已检查并复制', delivered.relativePath)
   assert.equal(approved.status, 'approved')
   const approvedRead = await tools.invoke('tool.workspace.read', JSON.stringify({ path: delivered.relativePath, scope: 'shared' }), invoker)

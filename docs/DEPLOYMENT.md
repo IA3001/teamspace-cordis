@@ -7,12 +7,12 @@
 1. 在 Linux 主机创建专用运行账号和发布目录，安装 Node.js 22.5.0 或更新版本，以及 Docker Engine（Agent 代码执行依赖 Docker 隔离容器）。npm 会根据 `package.json` / `.npmrc` 强制检查 Node 版本。优先使用 rootless Docker；标准 Docker socket 的访问权限相当于主机管理员权限。检出经过验证的提交或版本标签。
 2. 执行 `npm ci` 安装锁定依赖；复制 `.env.example` 为 `.env`，设置 `NODE_ENV=production`、监听地址和端口、日志时区，以及后台独立凭据 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD`。生成 `SETTINGS_ENCRYPTION_KEY`（`openssl rand -base64 32`）并保存在部署密钥管理处；它用于加密数据库中的模型和搜索 API 密钥，必须与数据库备份分开备份，丢失后需重新录入 API 凭据。确保默认 `PATH` 中的 Node.js 至少为 22.5；只有需要固定某个 Node 安装时才设置 `NODE_BIN_DIR`（例如 `/usr/bin`）。生产密码至少 6 位，建议使用密码管理器生成的长随机值。不要把 `.env` 提交到 Git。
 3. 首次启动前运行 `npm run migrate` 创建或升级 SQLite schema。后续版本升级前先运行 `npm run backup`，再运行迁移。
-4. 执行 `npm run gate:static`。在与生产数据隔离的预发实例启动候选版本，再执行 `npm run gate:runtime`；该命令包含后台/Teamspace 可达性、Playwright UI 回归、`smoke` 和运行时验证。预发主机需安装可运行的 Chromium；非标准路径通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定。Runtime gate 会创建验收账号和会话、调整 seed demo 会话成员，并可能触发真实模型调用，因此不要对有真实团队数据的生产实例运行。确认检查通过后再将版本切为当前发布。
+4. 执行 `npm run gate:static`。在隔离、合成数据的预发副本先用 `NODE_ENV=development` 启动候选版本，再执行 `npm run gate:runtime`；该门禁包含后台/Teamspace 可达性、Playwright UI 回归、写入型 `smoke` 和运行时验证。预发主机需安装可运行的 Chromium；非标准路径通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定。Runtime gate 会创建验收账号和会话、调整 seed demo 会话成员，并可能触发真实模型调用，因此不要对有真实团队数据的生产实例运行。随后使用独立 `.env`、数据库和密钥，以 `NODE_ENV=production` 重启隔离副本，核对 `/healthz`、后台管理员登录、Team 注册/登录及两类 token 互相拒绝；生产模式不要运行 `smoke` 或完整 `gate:runtime`，smoke 会主动拒绝生产环境。确认检查通过后再将版本切为当前发布。
 5. 以专用账号运行 `npm start`。推荐由 systemd 或同类服务管理器托管，并设置工作目录为仓库根目录、失败自动重启、日志进入 journald。不要以 root 运行应用。
 
 ## 预发验收与恢复演练
 
-预发必须使用独立 checkout 根目录和独立 `.env`；应用数据目录相对当前工作目录位于 `data/`，因此不要让预发和生产共用 `data/`、端口或密钥。使用合成/脱敏数据启动预发服务，先运行 `npm run gate:static`，再运行 `npm run gate:runtime`。确认登录、Agent 记忆追赶、`@AI` 回复、工具调用和文件访问都通过后，才允许生产发布。
+预发必须使用独立 checkout 根目录和独立 `.env`；应用数据目录相对当前工作目录位于 `data/`，因此不要让预发和生产共用 `data/`、端口或密钥。使用合成/脱敏数据启动预发服务，先运行 `npm run gate:static`，再在开发模式运行 `npm run gate:runtime`。另在生产模式检查启动、后台管理员认证、Team 用户认证及身份域隔离；仅使用隔离预发数据库执行会写数据的检查。确认登录、Agent 记忆追赶、`@AI` 回复、工具调用和文件访问都通过后，才允许生产发布。
 
 恢复演练从预发快照开始：执行 `npm run backup -- --include-workdirs`，将快照复制到独立演练目录，恢复数据库、日志、上传、共享交付和工作区，使用对应 `SETTINGS_ENCRYPTION_KEY` 启动候选版本；核对 `/healthz`、`PRAGMA integrity_check`、成员会话访问、附件读取与加密 API 配置可解密。记录恢复用时、缺失数据和操作步骤。不得把生产快照直接恢复到开放的预发环境，也不得在生产库运行 smoke。
 

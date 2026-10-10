@@ -81,14 +81,17 @@ assert.equal(decisionResult.ok, true)
 assert.equal(delivered, true, 'approval copies only through the trusted delivery service')
 assert.equal(decision, 'approved:admin-root:reviewed:approvals/sar_test/input.txt')
 assert.equal(await rpc.saveTextProfile('invalid-session', { id: 'ark-code', name: 'Ark', baseURL: 'https://provider.invalid/v1', model: 'model', apiKey: 'profile-secret' }), null)
+assert.equal((await rpc.saveTextProfile('admin-session', {
+  id: 'bad-limit', name: 'Invalid cap', baseURL: 'https://provider.invalid/v1', model: 'model', maxOutputTokens: 0,
+})).error, 'invalid_input', 'output token caps must be positive integers')
 const savedProfile = await rpc.saveTextProfile('admin-session', {
-  id: 'ark-code', name: 'Ark Coding', baseURL: 'https://provider.invalid/v1', model: 'coding-model', apiKey: 'profile-secret',
+  id: 'ark-code', name: 'Ark Coding', baseURL: 'https://provider.invalid/v1', model: 'coding-model', apiKey: 'profile-secret', maxOutputTokens: 4096,
 })
 assert.equal(savedProfile.ok, true)
 const apiConfig = await rpc.getApiConfig('admin-session')
 assert.deepEqual(apiConfig.textProfiles[0], {
   id: 'ark-code', name: 'Ark Coding', baseURL: 'https://provider.invalid/v1', model: 'coding-model',
-  hasKey: true, keyTail: 'cret',
+  maxOutputTokens: 4096, hasKey: true, keyTail: 'cret',
 })
 assert.equal(JSON.stringify(apiConfig).includes('profile-secret'), false, 'profile credentials are never returned by admin config')
 assert.equal((await rpc.testTextProfile('admin-session', 'ark-code')).ok, true)
@@ -113,5 +116,6 @@ agentProfileRefs = []
 assert.equal((await rpc.removeTextProfile('admin-session', 'ark-code')).ok, true)
 assert.equal((await rpc.getApiConfig('admin-session')).activeTextProfileRef, '')
 assert.equal(settingValues.has('llm.profile.ark-code.apiKey'), false, 'removing a profile clears its secret')
+assert.equal(settingValues.has('llm.profile.ark-code.maxOutputTokens'), false, 'removing a profile clears its output cap')
 console.log('✓ Admin plugin inventory, sandbox approvals, and multi-provider API profiles enforce auth and redact credentials')
 execFileSync(process.execPath, ['scripts/record-action.mjs', 'verify-admin-plugins', '{"ok":true}'], { stdio: 'inherit' })

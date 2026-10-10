@@ -41,6 +41,9 @@ export interface ConfigInput {
   timeoutMs?: number
 }
 
+const positiveTokenLimit = (value: number | undefined): number | undefined =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 200_000 ? value : undefined
+
 export class OpenAiChatLlm extends LlmService {
   private readonly cfg: ConfigInput
   private readonly settings: SettingsService | null
@@ -54,7 +57,7 @@ export class OpenAiChatLlm extends LlmService {
   }
 
   /** 取值优先级：settings（面板设置页）> Config > env 兜底（每次现算）。 */
-  private resolve(profileRef?: string): { key: string; base: string; model: string } {
+  private resolve(profileRef?: string): { key: string; base: string; model: string; maxOutputTokens?: number } {
     const s = this.settings
     const selectedRef = profileRef || s?.get<string>('llm.activeProfileRef', '').trim()
     if (selectedRef) {
@@ -69,6 +72,7 @@ export class OpenAiChatLlm extends LlmService {
         key: s?.get<string>(`llm.profile.${selectedRef}.apiKey`, '').trim() ?? '',
         base: s?.get<string>(`llm.profile.${selectedRef}.baseURL`, '').trim() ?? '',
         model: s?.get<string>(`llm.profile.${selectedRef}.model`, '').trim() ?? '',
+        maxOutputTokens: positiveTokenLimit(s?.get<number>(`llm.profile.${selectedRef}.maxOutputTokens`, 0)),
       }
     }
     return {
@@ -87,6 +91,7 @@ export class OpenAiChatLlm extends LlmService {
         this.cfg.model?.trim() ||
         process.env[LLM_MODEL_ENV]?.trim() ||
         '',
+      maxOutputTokens: positiveTokenLimit(s?.get<number>('llm.maxOutputTokens', 0)),
     }
   }
 
@@ -104,7 +109,7 @@ export class OpenAiChatLlm extends LlmService {
   }
 
   async chat(messages: readonly ChatMessage[], options?: ChatOptions): Promise<string> {
-    const { base, key, model: configuredModel } = this.resolve(options?.profileRef)
+    const { base, key, model: configuredModel, maxOutputTokens: profileLimit } = this.resolve(options?.profileRef)
     const model = options?.model?.trim() || configuredModel
     if (!base || !key || !model) {
       throw new LlmError(
@@ -115,12 +120,21 @@ export class OpenAiChatLlm extends LlmService {
     const url = `${base.replace(/\/+$/, '')}/chat/completions`
     // 超时优先级：调用方 options > 面板配置 > 缺省 60s。
     const timeoutMs = options?.timeoutMs ?? this.cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const requestedLimit = positiveTokenLimit(options?.maxTokens)
+    const maxTokens = profileLimit && requestedLimit
+      ? Math.min(profileLimit, requestedLimit)
+      : profileLimit ?? requestedLimit
     let res: Response
     try {
       res = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model, messages, ...(options?.onToken ? { stream: true } : {}) }),
+        body: JSON.stringify({
+          model,
+          messages,
+          ...(maxTokens ? { max_tokens: maxTokens } : {}),
+          ...(options?.onToken ? { stream: true } : {}),
+        }),
         signal: options?.signal
           ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal])
           : AbortSignal.timeout(timeoutMs),

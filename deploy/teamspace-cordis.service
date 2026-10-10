@@ -2,6 +2,9 @@
 Description=Teamspace Cordis collaboration service
 Wants=network-online.target
 After=network-online.target
+# Do not start against the root filesystem if the dedicated workspace volume is absent.
+RequiresMountsFor=/srv/teamspace-cordis/data/workdirs
+ConditionPathIsMountPoint=/srv/teamspace-cordis/data/workdirs
 
 [Service]
 Type=simple

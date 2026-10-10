@@ -128,6 +128,7 @@ export function apply(ctx: Context) {
             id: profile.id, name: profile.name,
             baseURL: ctx.settings.get<string>(`llm.profile.${profile.id}.baseURL`, ''),
             model: ctx.settings.get<string>(`llm.profile.${profile.id}.model`, ''),
+            maxOutputTokens: ctx.settings.get<number>(`llm.profile.${profile.id}.maxOutputTokens`, 0) || null,
             hasKey: Boolean(key), keyTail: key ? key.slice(-4) : '',
           }
         }),
@@ -145,7 +146,7 @@ export function apply(ctx: Context) {
       audit(ctx, admin.id, 'save_api_config', 'text')
       return { ok: true }
     },
-    async saveTextProfile(token: string, cfg: { id?: string; name?: string; baseURL?: string; model?: string; apiKey?: string }) {
+    async saveTextProfile(token: string, cfg: { id?: string; name?: string; baseURL?: string; model?: string; apiKey?: string; maxOutputTokens?: number | null }) {
       const admin = await auth(ctx, token)
       if (!admin) return null
       const id = String(cfg.id ?? '').trim()
@@ -155,6 +156,10 @@ export function apply(ctx: Context) {
       if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id) || !name || !baseURL || !model) {
         return { ok: false, error: 'invalid_input', detail: '配置 ID、名称、Base URL 和模型名均为必填项；ID 仅允许字母、数字、下划线和连字符。' }
       }
+      if (cfg.maxOutputTokens !== undefined && cfg.maxOutputTokens !== null &&
+        (!Number.isSafeInteger(cfg.maxOutputTokens) || cfg.maxOutputTokens < 1 || cfg.maxOutputTokens > 200_000)) {
+        return { ok: false, error: 'invalid_input', detail: '最大输出 Token 必须是 1–200000 的整数；留空表示使用供应商默认值。' }
+      }
       const profiles = ctx.settings.get<Array<{ id: string; name: string }>>('llm.profiles', []) ?? []
       const existing = profiles.some((profile) => profile.id === id)
       if (!existing && profiles.length >= 32) return { ok: false, error: 'limit', detail: '最多保存 32 组文字模型配置。' }
@@ -163,6 +168,9 @@ export function apply(ctx: Context) {
         : [...profiles, { id, name }])
       ctx.settings.set(`llm.profile.${id}.baseURL`, baseURL)
       ctx.settings.set(`llm.profile.${id}.model`, model)
+      if (cfg.maxOutputTokens !== undefined) {
+        ctx.settings.set(`llm.profile.${id}.maxOutputTokens`, cfg.maxOutputTokens ?? undefined)
+      }
       if (cfg.apiKey === '-') ctx.settings.set(`llm.profile.${id}.apiKey`, undefined)
       else if (typeof cfg.apiKey === 'string' && cfg.apiKey.trim()) ctx.settings.set(`llm.profile.${id}.apiKey`, cfg.apiKey.trim())
       audit(ctx, admin.id, 'save_text_model_profile', id)
@@ -178,7 +186,7 @@ export function apply(ctx: Context) {
       const references = ctx.agentCatalog.list().filter((agent) => agent.llmProfileRef === id).length
       if (references > 0) return { ok: false, error: 'in_use', detail: `仍有 ${references} 个团队 Agent 使用此配置；请先更换它们的模型配置 ref。` }
       ctx.settings.set('llm.profiles', profiles.filter((profile) => profile.id !== id))
-      for (const key of ['apiKey', 'baseURL', 'model']) ctx.settings.set(`llm.profile.${id}.${key}`, undefined)
+      for (const key of ['apiKey', 'baseURL', 'model', 'maxOutputTokens']) ctx.settings.set(`llm.profile.${id}.${key}`, undefined)
       if (ctx.settings.get<string>('llm.activeProfileRef', '') === id) ctx.settings.set('llm.activeProfileRef', '')
       audit(ctx, admin.id, 'remove_text_model_profile', id)
       return { ok: true }

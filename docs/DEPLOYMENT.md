@@ -18,7 +18,7 @@ sudo systemctl status teamspace-cordis
 journalctl -u teamspace-cordis -n 100 --no-pager
 ```
 
-配额助手需要通过 sudo 更新 XFS project 映射，因此不要在 unit 中启用 `NoNewPrivileges=true` 或只读 `/etc` 沙箱，除非同时为助手设计并验收了相应的 systemd 文件权限例外。更新时用 `systemctl stop/start teamspace-cordis`；发布路径固定时无需改 unit。
+unit 模板通过 `RequiresMountsFor=` 等待工作区卷，并以 `ConditionPathIsMountPoint=` 拒绝在路径退化为普通目录时启动应用，避免把工作区写到系统盘。配额助手需要通过 sudo 更新 XFS project 映射，因此不要在 unit 中启用 `NoNewPrivileges=true` 或只读 `/etc` 沙箱，除非同时为助手设计并验收了相应的 systemd 文件权限例外。更新时用 `systemctl stop/start teamspace-cordis`；发布路径固定时无需改 unit。
 
 ## 预发验收与恢复演练
 
@@ -56,6 +56,23 @@ sudo systemctl start teamspace-cordis
 容器 `--storage-opt size=256m` 不限制挂载到 `/workspace` 的宿主机目录。生产环境可将 `data/workdirs/` 放到启用了 XFS project quota 的专用挂载点，并给每个 Agent 工作区分配独立 project ID。XFS 项目配额限制目录树的块用量，超限写入由文件系统拒绝；官方 `xfs_quota(8)` 文档说明，初始化 project tree 后，新建文件会继承项目归属。[XFS 项目配额说明](https://man7.org/linux/man-pages/man8/xfs_quota.8.html)
 
 先在 `/etc/fstab` 为专用 XFS 挂载配置 `prjquota`（部分发行版使用 `pquota`），然后通过 `findmnt -T /srv/teamspace-cordis/data/workdirs` 确认文件系统类型和生效挂载选项。`data/workdirs/` 必须是独立挂载点，不能只位于包含数据库、日志、上传和共享交付的 `data/` 文件系统中。若发布目录采用版本化路径或软链接，需将工作区挂载配置在稳定数据路径，并通过 `space-workdir-local` 的 `dataDir` 指向该持久数据目录。project ID 和名称映射由下方助手统一维护；不要手工为同一目录追加另一套 `/etc/projects`、`/etc/projid` 记录，否则助手会按冲突失败关闭。
+
+使用存储系统提供的卷 UUID（不要格式化或覆盖含数据的卷），将下面示例中的 UUID 替换为实际值，并把挂载点设为稳定的数据路径：
+
+```fstab
+UUID=<workdir-volume-uuid> /srv/teamspace-cordis/data/workdirs xfs defaults,prjquota 0 0
+```
+
+首次挂载后明确核对文件系统类型、挂载选项和项目配额状态；任一项不符时不要启动生产应用：
+
+```sh
+sudo mkdir -p /srv/teamspace-cordis/data/workdirs
+sudo mount /srv/teamspace-cordis/data/workdirs
+findmnt -T /srv/teamspace-cordis/data/workdirs -n -o FSTYPE,TARGET,OPTIONS
+sudo xfs_quota -x -c 'state -p' /srv/teamspace-cordis/data/workdirs
+```
+
+验收输出必须显示 `xfs` 与 `prjquota`（或 `pquota`），且 project quota 状态为启用；再安装配额助手并运行下方 `ensure` 和超限写入验收。将该 mount 配置与服务启动编排分开管理，避免卷未挂载时应用把普通根文件系统目录当成工作区使用。
 
 应用首次领取 Agent 工作区时，会调用配置的配额助手登记唯一 XFS project ID 并设置每 Agent 的 soft/hard limit；生产模式未配置助手或登记失败时拒绝创建工作区。配额超限写入失败时，系统会在会话追加可见系统事件，并将 Agent、会话和错误写入服务日志。助手代码在 `deploy/teamspace-workdir-quota.py`，它只接受 `ensure AGENT_ID`，从 root 所有的配置文件读取固定工作区根目录和配额，不接受调用方传入任意路径。
 

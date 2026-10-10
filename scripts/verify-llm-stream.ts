@@ -40,6 +40,7 @@ try {
   })
   const answer = await llm.chat([{ role: 'user', content: 'hello' }], { onToken: (delta) => deltas.push(delta) })
   assert.equal(sentBody?.stream, true)
+  assert.equal(sentBody?.max_tokens, undefined, 'uncapped legacy configuration preserves provider defaults')
   assert.equal(answer, '你好，团队')
   assert.deepEqual(deltas, ['你好', '，团队'])
   assert.doesNotMatch(JSON.stringify({ answer, deltas }), /stream-test-key/)
@@ -62,6 +63,7 @@ try {
         'llm.profile.provider-b.apiKey': 'profile-secret',
         'llm.profile.provider-b.baseURL': 'https://provider-b.example/v1',
         'llm.profile.provider-b.model': 'provider-b-model',
+        'llm.profile.provider-b.maxOutputTokens': 4096,
       }
       return key in values ? values[key] : fallback
     },
@@ -75,6 +77,11 @@ try {
   assert.equal(sentUrl, 'https://provider-b.example/v1/chat/completions')
   assert.equal(sentAuthorization, 'Bearer profile-secret')
   assert.equal(sentBody?.model, 'provider-b-model')
+  assert.equal(sentBody?.max_tokens, 4096, 'a provider profile applies its configured hard output cap')
+  await profileLlm.chat([{ role: 'user', content: 'smaller per-call cap' }], { profileRef: 'provider-b', maxTokens: 1024 })
+  assert.equal(sentBody?.max_tokens, 1024, 'a per-call output budget can tighten the profile cap')
+  await profileLlm.chat([{ role: 'user', content: 'larger per-call request' }], { profileRef: 'provider-b', maxTokens: 8192 })
+  assert.equal(sentBody?.max_tokens, 4096, 'a per-call request cannot exceed the administrator profile cap')
   assert.equal(profileLlm.configured, true, 'the selected system default profile determines configured state')
   await profileLlm.chat([{ role: 'user', content: 'default profile' }])
   assert.equal(sentUrl, 'https://provider-b.example/v1/chat/completions', 'calls without an Agent override use the selected default profile')

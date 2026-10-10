@@ -36,6 +36,8 @@ export interface ChatMessage {
 export interface ChatOptions {
   /** 单次调用超时（毫秒）。缺省 60_000。 */
   timeoutMs?: number
+  /** Per-call output ceiling; provider-profile limits can impose a lower hard cap. */
+  maxTokens?: number
   /** Named administrator-managed provider profile; missing profiles fail closed. */
   profileRef?: string
   /** Per-call model override within the selected provider. */

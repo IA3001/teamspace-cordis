@@ -29,7 +29,7 @@ interface MeRow { id: string; username: string }
 interface ApiShape { baseURL: string; model: string; hasKey: boolean; keyTail: string; timeoutMs?: number }
 interface ApiConfig {
   text: ApiShape
-  textProfiles: Array<{ id: string; name: string; baseURL: string; model: string; hasKey: boolean; keyTail: string }>
+  textProfiles: Array<{ id: string; name: string; baseURL: string; model: string; maxOutputTokens: number | null; hasKey: boolean; keyTail: string }>
   activeTextProfileRef: string
   embedding: ApiShape
   webSearch: ApiShape
@@ -100,7 +100,7 @@ const AdminPage = defineComponent({
       removeUser(token: string, userId: string): Promise<WriteResult | null>
       getApiConfig(token: string): Promise<ApiConfig | null>
       saveTextApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string; timeoutMs?: number }): Promise<WriteResult | null>
-      saveTextProfile(token: string, cfg: { id: string; name: string; baseURL: string; model: string; apiKey?: string }): Promise<WriteResult | null>
+      saveTextProfile(token: string, cfg: { id: string; name: string; baseURL: string; model: string; apiKey?: string; maxOutputTokens: number | null }): Promise<WriteResult | null>
       removeTextProfile(token: string, id: string): Promise<WriteResult | null>
       setDefaultTextProfile(token: string, id: string): Promise<WriteResult | null>
       testTextProfile(token: string, id: string): Promise<WriteResult | null>
@@ -133,7 +133,7 @@ const AdminPage = defineComponent({
     const apiKeys = ref({ text: '', embedding: '', webSearch: '' })
     const apiNotice = ref('')
     const apiBusy = ref('')
-    const profileDraft = ref({ id: '', name: '', baseURL: '', model: '', apiKey: '' })
+    const profileDraft = ref({ id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null as number | null })
     // 筛选 + 分页（用户反馈①⑤，2026-10-07）。
     const query = ref('')
     const pageNo = ref(1)
@@ -305,7 +305,10 @@ const AdminPage = defineComponent({
       await handleResult(result)
     }
     function editTextProfile(profile: NonNullable<ApiConfig['textProfiles']>[number]) {
-      profileDraft.value = { id: profile.id, name: profile.name, baseURL: profile.baseURL, model: profile.model, apiKey: '' }
+      profileDraft.value = {
+        id: profile.id, name: profile.name, baseURL: profile.baseURL, model: profile.model,
+        apiKey: '', maxOutputTokens: profile.maxOutputTokens,
+      }
     }
 
     async function decideApproval(row: SandboxApprovalRow, decision: 'approved' | 'rejected') {
@@ -358,6 +361,7 @@ const AdminPage = defineComponent({
       const ElSwitch = resolveComponent('el-switch') as unknown as string
       const ElPagination = resolveComponent('el-pagination') as unknown as string
       const ElSelect = resolveComponent('el-select') as unknown as string
+      const ElInputNumber = resolveComponent('el-input-number') as unknown as string
       const ElOption = resolveComponent('el-option') as unknown as string
       const ElDescriptions = resolveComponent('el-descriptions') as unknown as string
       const ElDescriptionsItem = resolveComponent('el-descriptions-item') as unknown as string
@@ -598,6 +602,7 @@ const AdminPage = defineComponent({
               h(ElTableColumn, { prop: 'id', label: '配置 ID', width: 150 }),
               h(ElTableColumn, { prop: 'baseURL', label: 'Base URL', minWidth: 220 }),
               h(ElTableColumn, { prop: 'model', label: '模型', minWidth: 150 }),
+              h(ElTableColumn, { label: '最大输出 Token', width: 135 }, { default: (scope: { row: ApiConfig['textProfiles'][number] }) => scope.row.maxOutputTokens ?? '供应商默认' }),
               h(ElTableColumn, { label: '密钥', width: 125 }, { default: (scope: { row: ApiConfig['textProfiles'][number] }) => scope.row.hasKey ? `已保存 · …${scope.row.keyTail}` : '未配置' }),
               h(ElTableColumn, { label: '操作', minWidth: 390, fixed: 'right' }, {
                 default: (scope: { row: ApiConfig['textProfiles'][number] }) => h(ElSpace, null, { default: () => [
@@ -632,6 +637,11 @@ const AdminPage = defineComponent({
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.model = v },
                 placeholder: '供应商提供的模型 ID', clearable: true,
               }) }),
+              h(ElFormItem, { label: '最大输出 Token（留空使用供应商默认）' }, { default: () => h(ElInputNumber, {
+                modelValue: profileDraft.value.maxOutputTokens,
+                'onUpdate:modelValue': (v: number | null) => { profileDraft.value.maxOutputTokens = v ? Math.floor(v) : null },
+                min: 1, max: 200000, step: 512, controlsPosition: 'right', clearable: true,
+              }) }),
               h(ElFormItem, { label: 'API Key（编辑时留空保留现值；输入 - 清除）' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.apiKey,
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.apiKey = v },
@@ -639,7 +649,7 @@ const AdminPage = defineComponent({
               }) }),
               h(ElSpace, null, { default: () => [
                 h(ElButton, { type: 'primary', loading: apiBusy.value === 'save-profile', onClick: () => void saveTextProfile() }, { default: () => '保存供应商配置' }),
-                h(ElButton, { onClick: () => { profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '' } } }, { default: () => '清空表单' }),
+                h(ElButton, { onClick: () => { profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null } } }, { default: () => '清空表单' }),
               ] }),
             ],
           }),

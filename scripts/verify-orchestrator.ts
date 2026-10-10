@@ -14,8 +14,8 @@
 // 用法：npm run verify:orchestrator    退出码 0 = 全过；1 = 判红。
 // 留痕：全部通过后记一行 action_log: verify-orchestrator（断言 ⑨）。
 import { DatabaseSync } from 'node:sqlite'
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,7 +29,6 @@ import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { SqliteSettingsStore } from '../packages/impl/space-store-sqlite/src/settings.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
-import { SqliteSessionWork } from '../packages/impl/space-store-sqlite/src/session-work.ts'
 import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
 import { SessionWork } from '../plugins/session-work/index.ts'
 
@@ -324,87 +323,106 @@ async function verifyOrphanedChainRecovery(): Promise<void> {
 }
 
 async function verifyConcurrentEngineRecovery(): Promise<void> {
-  section('跨实例恢复：同一持久 Plan 只允许一个 Orchestrator 决策')
+  section('跨进程恢复：同一持久 Plan 只允许一个 Orchestrator 决策')
   const dir = mkdtempSync(join(tmpdir(), 'teamspace-orchestrator-race-'))
   const dbPath = join(dir, 'orchestrator.db')
-  const dbA = new DatabaseSync(dbPath)
-  const dbB = new DatabaseSync(dbPath)
-  const ctxA = new Context()
-  const ctxB = new Context()
-  let workA: SqliteSessionWork | undefined
-  let workB: SqliteSessionWork | undefined
+  const roles = ['orchestrator-a', 'orchestrator-b']
+  const children: Array<{
+    role: string
+    child: ReturnType<typeof spawn>
+    output: string
+    closed: Promise<{ role: string; code: number | null }>
+  }> = []
   try {
-    dbA.exec('PRAGMA foreign_keys = ON')
+    const db = new DatabaseSync(dbPath)
+    db.exec('PRAGMA foreign_keys = ON')
     const migrationsDir = fileURLToPath(new URL('../packages/impl/space-store-sqlite/migrations/', import.meta.url))
-    for (const migration of loadMigrations(migrationsDir)) dbA.exec(migration.up)
-    workA = new SqliteSessionWork(ctxA, dbA, { processId: 'orchestrator-a', heartbeatMs: 10 })
-    workB = new SqliteSessionWork(ctxB, dbB, { processId: 'orchestrator-b', heartbeatMs: 10 })
+    for (const migration of loadMigrations(migrationsDir)) db.exec(migration.up)
     const timestamp = new Date().toISOString()
-    dbA.prepare(`INSERT INTO sessions(id, title, status, created_at, updated_at)
+    db.prepare(`INSERT INTO sessions(id, title, status, created_at, updated_at)
       VALUES ('s_engine_race', '并发恢复验收', 'open', ?, ?)`).run(timestamp, timestamp)
-    dbA.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at)
+    db.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at)
       VALUES ('a_engine_race', 'a_engine_race', '!', '并发验收协调者', 'agent', ?)`).run(timestamp)
-    dbA.prepare(`INSERT INTO session_members(session_id, principal_id, role, status, joined_at)
+    db.prepare(`INSERT INTO session_members(session_id, principal_id, role, status, joined_at)
       VALUES ('s_engine_race', 'a_engine_race', '协调者', 'active', ?)`).run(timestamp)
-    for (const [ctx, db] of [[ctxA, dbA], [ctxB, dbB]] as const) {
-      new SqliteSessionStore(ctx, db)
-      new SqliteEventLog(ctx, db)
-      new SqliteSettingsStore(ctx, db)
-    }
-    const event = ctxA.eventLog.append({
+    const seed = new Context()
+    new SqliteSessionStore(seed, db)
+    new SqliteEventLog(seed, db)
+    new SqliteSettingsStore(seed, db)
+    const event = seed.eventLog.append({
       id: 'event_engine_race', sessionId: 's_engine_race', authorId: 'u_dri', phaseId: null,
       authorKind: 'human', kind: 'message', text: '恢复验收计划', mentions: [], toolCalls: [], replyMode: '',
     })
     const payload = { sessionId: event.sessionId, authorId: event.authorId!, event }
-    ctxA.settings.set('orchestrator.runtime.v1', {
+    seed.settings.set('orchestrator.runtime.v1', {
       version: 1,
       turns: [['s_engine_race', {
         state: 'chain', decisionCalls: 0, autonomousActions: 0, delegatedTargets: [], stopReason: '', stopDetail: '',
       }]],
       delegations: [], queue: [], activeDecisions: [{ payload, resetTurn: true }],
     })
+    db.close()
 
-    const engineA = new OrchestratorEngine(ctxA)
-    const engineB = new OrchestratorEngine(ctxB)
-    let callsA = 0
-    let callsB = 0
-    let releaseBrain!: () => void
-    let markStarted!: () => void
-    const blocked = new Promise<void>((resolve) => { releaseBrain = resolve })
-    const started = new Promise<void>((resolve) => { markStarted = resolve })
-    engineA.registerBrain({ async plan() {
-      callsA++
-      markStarted()
-      await blocked
-      return JSON.stringify({ reply: '已处理一次', reason: '完成', delegate: null })
-    } })
-    engineB.registerBrain({ async plan() {
-      callsB++
-      return JSON.stringify({ reply: '重复处理', reason: '完成', delegate: null })
-    } })
-    ctxA.on('session-work/changed', () => engineA.wakeQueue())
-    ctxB.on('session-work/changed', () => engineB.wakeQueue())
-    engineA.recoverPersistedWork()
-    engineB.recoverPersistedWork()
-    await started
-    releaseBrain()
-    for (let attempt = 0; attempt < 100 && engineA.turn('s_engine_race').stopReason !== 'completed'; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
+    for (const role of roles) {
+      const child = spawn(process.execPath, [
+        '--import', 'tsx', 'scripts/orchestrator-recovery-race-worker.ts', dbPath, role, dir,
+      ], { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] })
+      const record = {
+        role,
+        child,
+        output: '',
+        closed: new Promise<{ role: string; code: number | null }>((resolve) => {
+          child.once('close', (code) => resolve({ role, code }))
+        }),
+      }
+      child.stdout.setEncoding('utf8').on('data', (chunk: string) => { record.output += chunk })
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => { record.output += chunk })
+      children.push(record)
     }
-    engineB.wakeQueue()
-    await new Promise((resolve) => setTimeout(resolve, 40))
-    const outcomes = ctxA.eventLog.listBySession('s_engine_race').filter((row) =>
-      row.authorId === 'a_engine_race' && row.sourceEventId === event.id)
-    check('M1 两个独立引擎同时恢复时，大脑只决策一次', callsA === 1 && callsB === 0,
-      `callsA=${callsA}, callsB=${callsB}`)
-    check('M2 同一触发事件仅有一条协调者结果，第二引擎刷新为已完成回合',
-      outcomes.length === 1 && engineB.turn('s_engine_race').stopReason === 'completed',
-      `outcomes=${outcomes.length}, turnB=${JSON.stringify(engineB.turn('s_engine_race'))}`)
+    const waitUntil = async (predicate: () => boolean, label: string, timeout = 10_000) => {
+      const deadline = Date.now() + timeout
+      while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10))
+      if (!predicate()) throw new Error(`跨进程恢复测试超时：${label}`)
+    }
+    await waitUntil(() => roles.every((role) => existsSync(join(dir, `${role}.ready`))), '两个 worker 初始化')
+    writeFileSync(join(dir, 'begin'), 'start')
+    await waitUntil(() => roles.some((role) => existsSync(join(dir, `${role}.brain-started`))), '协调大脑启动')
+    const winner = roles.find((role) => existsSync(join(dir, `${role}.brain-started`)))!
+    writeFileSync(join(dir, `${winner}.release`), 'release')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    // Release a second brain too if a regression started it, so the verifier
+    // can report duplicate calls instead of hanging on the test barrier.
+    for (const role of roles) writeFileSync(join(dir, `${role}.release`), 'release')
+
+    const exitResults = await Promise.race([
+      Promise.all(children.map(({ closed }) => closed)),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 18_000)),
+    ])
+    if (!exitResults) {
+      for (const { child } of children) child.kill('SIGKILL')
+      throw new Error('跨进程恢复 worker 未能及时退出')
+    }
+    const brainCalls = readdirSync(dir).filter((name) => name.endsWith('.brain-started')).length
+    const resultDb = new DatabaseSync(dbPath, { readOnly: true })
+    const outcomeCount = (resultDb.prepare(`SELECT count(*) AS n FROM events
+      WHERE session_id = ? AND author_id = ? AND source_event_id = ?`)
+      .get('s_engine_race', 'a_engine_race', event.id) as { n: number }).n
+    const saved = resultDb.prepare("SELECT value FROM settings WHERE key = 'orchestrator.runtime.v1'")
+      .get() as { value: string }
+    const finalState = JSON.parse(saved.value) as { turns: Array<[string, { stopReason: string }]> }
+    const finalTurn = finalState.turns.find(([sid]) => sid === 's_engine_race')?.[1]
+    resultDb.close()
+    const workerErrors = exitResults.filter((result) => result.code !== 0)
+      .map((result) => {
+        const child = children.find((entry) => entry.role === result.role)
+        return `${result.role} exit=${result.code}: ${child?.output.slice(-500) ?? ''}`
+      })
+    check('M1 两个独立 OS 进程恢复同一 Plan 时，大脑只调用一次', brainCalls === 1 && workerErrors.length === 0,
+      `brainCalls=${brainCalls}, workers=${workerErrors.join(' | ') || 'ok'}`)
+    check('M2 协调者结果唯一，持久回合最终完成', outcomeCount === 1 && finalTurn?.stopReason === 'completed',
+      `outcomes=${outcomeCount}, turn=${JSON.stringify(finalTurn)}`)
   } finally {
-    workA?.dispose()
-    workB?.dispose()
-    dbA.close()
-    dbB.close()
+    for (const { child } of children) if (child.exitCode === null) child.kill('SIGKILL')
     rmSync(dir, { recursive: true, force: true })
   }
 }

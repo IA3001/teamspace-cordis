@@ -147,6 +147,18 @@ export class OrchestratorEngine extends OrchestratorService {
     }
   }
 
+  /** Replace this process snapshot with the latest durable state before recovery. */
+  private refreshPersistedState(): void {
+    this.turns.clear()
+    this.delegationSources.clear()
+    this.delegationPayloads.clear()
+    this.workQueue.length = 0
+    this.activeDecisions.clear()
+    this.queuedEventIds.clear()
+    this.recoveringSessions.clear()
+    this.hydrateState()
+  }
+
   /** Reload shared state after a peer already emitted the idempotent result for a queued Plan. */
   private reconcileCompletedPlan(payload: PlanPayload): boolean {
     const coordinator = this.ctx.session.listMembers(payload.sessionId, true).find((member) => member.role === '协调者')
@@ -163,14 +175,7 @@ export class OrchestratorEngine extends OrchestratorService {
     // A second process may have hydrated the same active decision before the
     // first process finished. Its local snapshot is now stale; reload the
     // durable turn, delegation ledger, and FIFO before allowing any replay.
-    this.turns.clear()
-    this.delegationSources.clear()
-    this.delegationPayloads.clear()
-    this.workQueue.length = 0
-    this.activeDecisions.clear()
-    this.queuedEventIds.clear()
-    this.recoveringSessions.clear()
-    this.hydrateState()
+    this.refreshPersistedState()
     this.activeDecisions.delete(payload.event.id)
     for (let index = this.workQueue.length - 1; index >= 0; index--) {
       const item = this.workQueue[index]!
@@ -207,6 +212,7 @@ export class OrchestratorEngine extends OrchestratorService {
 
   /** Requeue crash-interrupted decisions and delegates after the global slot is free. */
   recoverPersistedWork(): void {
+    const refreshAfterWait = this.recoveryPending
     try {
       if (this.ctx.sessionWork.state().activeSessionId) {
         this.recoveryPending = true
@@ -214,6 +220,7 @@ export class OrchestratorEngine extends OrchestratorService {
       }
     } catch { /* standalone engine verifier has no shared scheduler */ }
     this.recoveryPending = false
+    if (refreshAfterWait) this.refreshPersistedState()
     for (const { payload, resetTurn } of this.activeDecisions.values()) {
       this.recoveringSessions.add(payload.sessionId)
       const restoredTurn = this.turns.get(payload.sessionId)

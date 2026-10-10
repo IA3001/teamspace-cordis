@@ -5,6 +5,13 @@
  */
 
 /* ── 消息流（替代 el-timeline 圆点轴）────────────────────────────────── */
+/* Product surfaces use the shared sans-serif token; the shell's SimSun fallback
+   resolves to a serif CJK font on Linux. */
+.sp-team-layout,
+.sp-admin-wrap,
+.sp-plain,
+.sp-login-gate { font-family: var(--el-font-family); }
+
 .sp-list { padding: 4px 14px 16px; }
 
 .sp-msg { display: flex; gap: 10px; margin: 10px 0; align-items: flex-start; }

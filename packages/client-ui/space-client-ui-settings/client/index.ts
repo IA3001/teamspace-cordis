@@ -149,7 +149,7 @@ const SettingsPage = defineComponent({
       const denied = () => loginGate({
       brand: 'TS',
       title: '模型与接入',
-      desc: '需要管理员权限 —— 第一个注册的用户自动成为管理员。请登录管理员账号：',
+      desc: '请使用独立的后台管理员账号登录；Team 成员账号不能登录后台。',
       children: [
         h(ElInput, {
           modelValue: loginName.value,

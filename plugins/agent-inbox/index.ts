@@ -145,7 +145,7 @@ export class AgentInbox extends AgentInboxService {
     if (!item.scope.startsWith('agent:') || validSources.length === 0) return 0
     const agentId = item.scope.slice('agent:'.length)
     const descriptor = this.ctx.agents.get(agentId).descriptor
-    if (descriptor.memoryPolicy === 'none' || !this.ctx.llm.configured) return 0
+    if (descriptor.memoryPolicy === 'none' || !this.ctx.llm.configuredFor(descriptor.llmProfileRef)) return 0
     const sourceEventIds = [...new Set(validSources.map((event) => event.id))]
     const result = await this.ctx.llm.chat([
       {
@@ -162,7 +162,7 @@ export class AgentInbox extends AgentInboxService {
           })),
         }),
       },
-    ], { model: descriptor.modelRef || undefined })
+    ], { model: descriptor.modelRef || undefined, profileRef: descriptor.llmProfileRef || undefined })
     const candidates = parseCandidates(result)
     let written = 0
     for (const [index, candidate] of candidates.entries()) {
@@ -290,7 +290,7 @@ export class AgentInbox extends AgentInboxService {
   }
 
   private async reviewDecision(agentId: string, descriptor: AgentDescriptor, request: SessionEvent): Promise<void> {
-    if (!request.replyTo || !this.ctx.llm.configured) return
+    if (!request.replyTo || !this.ctx.llm.configuredFor(descriptor.llmProfileRef)) return
     try {
       const history = this.ctx.eventLog.listBySession(request.sessionId)
         .filter((event) => !event.voided && isAgentVisibleEvent(event))
@@ -309,7 +309,7 @@ export class AgentInbox extends AgentInboxService {
           reviewer: { title: descriptor.title, description: descriptor.description ?? '' },
           proposedAction: action, driReason: redactSecrets(reason), targetEventId: target.id, affectedMessages: evidence,
         }) },
-      ], { model: descriptor.modelRef || undefined })
+      ], { model: descriptor.modelRef || undefined, profileRef: descriptor.llmProfileRef || undefined })
       const question = parseReviewQuestion(raw)
       if (!question) return
       this.ctx.eventLog.append({
@@ -332,7 +332,7 @@ export class AgentInbox extends AgentInboxService {
     // The durable cursor still advances in consumeThrough, but this Agent's
     // configured policy forbids creating semantic memories from conversation.
     if (descriptor.memoryPolicy === 'none') return
-    if (!this.ctx.llm.configured) return
+    if (!this.ctx.llm.configuredFor(descriptor.llmProfileRef)) return
     try {
       const result = await this.ctx.llm.chat([
         { role: 'system', content: memorySystem },
@@ -341,7 +341,7 @@ export class AgentInbox extends AgentInboxService {
           sessionId: event.sessionId,
           event: { id: event.id, seq: event.seq, authorKind: event.authorKind, text: redactSecrets(event.text) },
         }) },
-      ], { model: descriptor.modelRef || undefined })
+      ], { model: descriptor.modelRef || undefined, profileRef: descriptor.llmProfileRef || undefined })
       const candidates = parseCandidates(result)
       for (const [index, candidate] of candidates.entries()) {
         const weight = Number.isFinite(candidate.weight) ? Math.max(0, Math.min(1, candidate.weight!)) : 0.5

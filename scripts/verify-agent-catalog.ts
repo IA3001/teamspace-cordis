@@ -14,18 +14,22 @@ const migrationsDir = join(root, 'packages/impl/space-store-sqlite/migrations')
 const migrations = loadMigrations(migrationsDir)
 assert.equal(migrations.find((m) => m.name === 'agent_catalog')?.version, 14)
 const migration = readFileSync(join(migrationsDir, '0014_agent_catalog.up.sql'), 'utf8')
+const profileMigration = migrations.find((m) => m.version === 27)
+assert.ok(profileMigration, 'per-Agent text model profile migration must be present')
 const dir = mkdtempSync(join(tmpdir(), 'agent-catalog-verify-'))
 const path = join(dir, 'catalog.db')
 
 try {
   let db = new DatabaseSync(path)
   db.exec(migration)
+  db.exec(profileMigration.up)
   let catalog = new SqliteAgentCatalog(new Context(), db)
   const created = catalog.create({
     title: '研究助手',
     description: '检索资料并给出依据。',
     promptRef: 'prompt.research',
     modelRef: 'model.reasoning',
+    llmProfileRef: 'ark-coding',
     toolIds: ['web.search', 'kb.search'],
     contextSources: ['session', 'agent-memory', 'team-kb'],
     memoryPolicy: 'agent',
@@ -33,6 +37,7 @@ try {
   }, 'a_shared_research')
   assert.equal(created.id, 'a_shared_research')
   assert.equal(created.status, 'active')
+  assert.equal(created.llmProfileRef, 'ark-coding')
   assert.deepEqual(created.toolIds, ['web.search', 'kb.search'])
   assert.deepEqual(catalog.list().map((a) => a.id), [created.id])
   assert.throws(() => catalog.create({
@@ -42,11 +47,20 @@ try {
 
   const updated = catalog.update(created.id, { description: '检索并引用团队资料。', toolIds: ['kb.search'] })
   assert.equal(updated.description, '检索并引用团队资料。')
+  assert.equal(updated.llmProfileRef, 'ark-coding', 'patches that omit the profile retain it')
   assert.deepEqual(updated.toolIds, ['kb.search'])
 
   const columns = db.prepare(`PRAGMA table_info(agent_definitions)`).all() as Array<{ name: string }>
   assert.equal(columns.some((column) => /creator|owner/i.test(column.name)), false, 'catalog must not assign personal ownership')
   db.close()
+
+  const rollbackDb = new DatabaseSync(':memory:')
+  rollbackDb.exec(migration)
+  rollbackDb.exec(profileMigration.up)
+  rollbackDb.exec(profileMigration.down)
+  const rolledBackColumns = rollbackDb.prepare(`PRAGMA table_info(agent_definitions)`).all() as Array<{ name: string }>
+  assert.equal(rolledBackColumns.some((column) => column.name === 'llm_profile_ref'), false, 'profile migration down removes the additive column')
+  rollbackDb.close()
 
   // Definitions survive a process/database reopen and remain globally enumerable.
   db = new DatabaseSync(path)

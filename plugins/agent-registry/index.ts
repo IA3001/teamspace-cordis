@@ -63,6 +63,7 @@ export class AgentRegistry extends AgentService {
       capabilities: [...definition.toolIds],
       description: definition.description,
       modelRef: definition.modelRef,
+      llmProfileRef: definition.llmProfileRef,
       toolIds: [...definition.toolIds],
       contextSources: [...definition.contextSources],
       memoryPolicy: definition.memoryPolicy,

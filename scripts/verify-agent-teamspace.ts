@@ -153,7 +153,7 @@ async function main() {
   await new Promise((resolve) => setImmediate(resolve))
   const input: AgentDefinitionInput = {
     title: '研究助手', description: '检索并汇总资料', promptRef: 'prompt.research',
-    modelRef: 'model.reasoning', toolIds: ['kb.search'],
+    modelRef: 'model.reasoning', llmProfileRef: 'ark-coding', toolIds: ['kb.search'],
     contextSources: ['session', 'agent-memory', 'team-kb'],
     memoryPolicy: 'agent', speechPolicy: 'passive',
   }
@@ -168,6 +168,10 @@ async function main() {
   assert.deepEqual(agentTemplates.find((template: { id: string }) => template.id === 'coding')?.input.toolIds,
     ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute'])
   assert.equal(await rpc.agentTemplates('agent-token'), null, 'Agent identities cannot manage shared Agent templates')
+  settings.set('llm.profiles', [{ id: 'ark-coding', name: 'Ark Coding' }])
+  settings.set('llm.profile.ark-coding.model', 'coding-model')
+  assert.deepEqual(await rpc.llmProfiles('team-a'), [{ id: 'ark-coding', name: 'Ark Coding', model: 'coding-model' }])
+  assert.equal(await rpc.llmProfiles('agent-token'), null, 'Agent identities cannot read model profile metadata')
   assert.deepEqual(await rpc.promptTemplates('team-a'), [], 'Team humans can read the shared prompt catalog')
   assert.deepEqual(await rpc.toolCatalog('team-a'), [
     { id: 'web.search', title: '网页搜索', capabilities: ['web-search'] },
@@ -266,11 +270,12 @@ async function main() {
   assert.deepEqual(hydrated.toolIds, ['kb.search'], 'startup hydration retains tool metadata')
   assert.deepEqual(hydrated.contextSources, ['session', 'agent-memory', 'team-kb'])
   assert.equal(hydrated.modelRef, 'model.reasoning')
+  assert.equal(hydrated.llmProfileRef, 'ark-coding')
   assert.ok(hydrated.capabilities.includes('kb.search'))
 
   const workdirRoot = mkdtempSync(join(tmpdir(), 'agent-runtime-verify-'))
   let llmMessages: Array<{ role: string; content: string }> = []
-  let llmOptions: { model?: string } | undefined
+  let llmOptions: { model?: string; profileRef?: string } | undefined
   let toolInvocations = 0
   let toolGraphMode = false
   let toolGraphStep = 0
@@ -280,6 +285,7 @@ async function main() {
     prompts: { get: (ref: string) => ({ title: `placeholder:${ref}`, body: '【占位提示词】待补充正文' }) },
     llm: {
       configured: true,
+      configuredFor: () => true,
       async chat(messages: typeof llmMessages, options?: typeof llmOptions) {
         llmMessages = [...messages]
         llmOptions = options
@@ -359,6 +365,7 @@ async function main() {
   assert.equal(toolInvocations, 0, 'the shared runtime does not invoke tools unless the model requests one')
   toolGraphMode = true
   const toolReceipt = await runtime.perform(created.id, '检索设计资料', { sessionId: 's_open' })
+  assert.equal(llmOptions?.profileRef, 'ark-coding', 'shared Agent selects its configured provider profile')
   assert.equal(toolInvocations, 1, 'LangGraph executes only tools enabled in the Agent definition')
   assert.equal(toolReceipt.toolResults?.[0]?.ok, true)
   assert.match(readFileSync(join(toolReceipt.root, toolReceipt.files.at(-1)!), 'utf8'), /Graph answer with a cited result/)

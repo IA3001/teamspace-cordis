@@ -11,6 +11,7 @@ interface AgentDefinition {
   description: string
   promptRef: string
   modelRef: string
+  llmProfileRef: string
   toolIds: string[]
   contextSources: string[]
   memoryPolicy: string
@@ -24,6 +25,7 @@ interface AgentInput {
   description: string
   promptRef: string
   modelRef: string
+  llmProfileRef: string
   toolIds: string[]
   contextSources: string[]
   memoryPolicy: string
@@ -32,7 +34,8 @@ interface AgentInput {
 interface SessionOption { id: string; title: string; status: string }
 interface PromptTemplate { ref: string; title: string; body: string; updatedAt: string }
 interface ToolOption { id: string; title: string; capabilities: string[] }
-interface AgentTemplate { id: string; title: string; summary: string; input: AgentInput }
+interface LlmProfileOption { id: string; name: string; model: string }
+interface AgentTemplate { id: string; title: string; summary: string; input: Omit<AgentInput, 'llmProfileRef'> & { llmProfileRef?: string } }
 type ApiError = { error: string; detail: string }
 const isError = (value: unknown): value is ApiError => Boolean(value && typeof value === 'object' && 'error' in value)
 
@@ -42,6 +45,7 @@ export const AgentManagementPage = defineComponent({
     const rpc = useRpc<{
       agentDefinitions(token: string): Promise<AgentDefinition[] | null>
       agentTemplates(token: string): Promise<AgentTemplate[] | null>
+      llmProfiles(token: string): Promise<LlmProfileOption[] | null>
       promptTemplates(token: string): Promise<PromptTemplate[] | null>
       toolCatalog(token: string): Promise<ToolOption[] | null>
       savePromptTemplate(token: string, ref: string, title: string, body: string): Promise<{ ok: true; template: PromptTemplate } | ApiError | null>
@@ -56,6 +60,7 @@ export const AgentManagementPage = defineComponent({
     const sessions = ref<SessionOption[]>([])
     const prompts = ref<PromptTemplate[]>([])
     const toolOptions = ref<ToolOption[]>([])
+    const llmProfiles = ref<LlmProfileOption[]>([])
     const templates = ref<AgentTemplate[]>([])
     const selectedTemplate = ref('')
     const sessionId = ref('')
@@ -70,7 +75,7 @@ export const AgentManagementPage = defineComponent({
     const promptSelection = ref('')
     const promptForm = ref({ ref: '', title: '', body: '' })
     const form = ref<AgentInput>({
-      title: '', description: '', promptRef: '', modelRef: '', toolIds: [],
+      title: '', description: '', promptRef: '', modelRef: '', llmProfileRef: '', toolIds: [],
       contextSources: ['session', 'agent-memory', 'team-kb'],
       memoryPolicy: 'agent', speechPolicy: 'passive',
     })
@@ -83,7 +88,7 @@ export const AgentManagementPage = defineComponent({
       editingId.value = ''
       selectedTemplate.value = ''
       form.value = {
-        title: '', description: '', promptRef: '', modelRef: '', toolIds: [],
+        title: '', description: '', promptRef: '', modelRef: '', llmProfileRef: '', toolIds: [],
         contextSources: ['session', 'agent-memory', 'team-kb'],
         memoryPolicy: 'agent', speechPolicy: 'passive',
       }
@@ -91,15 +96,16 @@ export const AgentManagementPage = defineComponent({
     async function refresh() {
       loading.value = true
       try {
-        const [defs, allSessions, promptRows, registeredTools, templateRows] = await Promise.all([
+        const [defs, allSessions, promptRows, registeredTools, templateRows, modelRows] = await Promise.all([
           rpc.value.agentDefinitions(token()), rpc.value.sessions(token()), rpc.value.promptTemplates(token()),
-          rpc.value.toolCatalog(token()), rpc.value.agentTemplates(token()),
+          rpc.value.toolCatalog(token()), rpc.value.agentTemplates(token()), rpc.value.llmProfiles(token()),
         ])
-        if (!defs || !promptRows || !registeredTools || !templateRows) { window.location.assign('/login'); return }
+        if (!defs || !promptRows || !registeredTools || !templateRows || !modelRows) { window.location.assign('/login'); return }
         definitions.value = defs
         prompts.value = promptRows
         toolOptions.value = registeredTools
         templates.value = templateRows
+        llmProfiles.value = modelRows
         sessions.value = allSessions.filter((s) => s.status === 'open')
         if (!sessionId.value && sessions.value.length) sessionId.value = sessions.value[0]!.id
       } catch (e) {
@@ -111,7 +117,7 @@ export const AgentManagementPage = defineComponent({
       selectedTemplate.value = ''
       form.value = {
         title: def.title, description: def.description, promptRef: def.promptRef,
-        modelRef: def.modelRef, toolIds: [...def.toolIds], contextSources: [...def.contextSources],
+        modelRef: def.modelRef, llmProfileRef: def.llmProfileRef || '', toolIds: [...def.toolIds], contextSources: [...def.contextSources],
         memoryPolicy: def.memoryPolicy, speechPolicy: def.speechPolicy,
       }
       notice.value = ''
@@ -122,6 +128,7 @@ export const AgentManagementPage = defineComponent({
       if (!template || editingId.value) return
       form.value = {
         ...template.input,
+        llmProfileRef: template.input.llmProfileRef ?? '',
         toolIds: template.input.toolIds.filter((toolId) => toolOptions.value.some((tool) => tool.id === toolId)),
         contextSources: [...template.input.contextSources],
       }
@@ -222,8 +229,13 @@ export const AgentManagementPage = defineComponent({
               'onUpdate:modelValue': (v: string) => { form.value.promptRef = v }, placeholder: '选择提示词模板', clearable: true }, {
               default: () => prompts.value.map((item) => h(ElOption, { key: item.ref, label: `${item.title}（${item.ref}）`, value: item.ref })),
             })),
-            field('文字模型配置 ref', h(ElInput, { modelValue: form.value.modelRef,
-              'onUpdate:modelValue': (v: string) => { form.value.modelRef = v }, placeholder: '可留空，使用当前运行时默认模型' })),
+            field('文字模型供应商', h(ElSelect, { modelValue: form.value.llmProfileRef,
+              'onUpdate:modelValue': (v: string) => { form.value.llmProfileRef = v }, placeholder: '留空使用后台系统默认', clearable: true }, {
+              default: () => llmProfiles.value.map((item) => h(ElOption, { key: item.id,
+                label: `${item.name}（${item.id} · ${item.model}）`, value: item.id })),
+            })),
+            field('供应商内模型 ID 覆盖（可选）', h(ElInput, { modelValue: form.value.modelRef,
+              'onUpdate:modelValue': (v: string) => { form.value.modelRef = v }, placeholder: '留空使用所选供应商配置中的模型 ID' })),
             field('可用工具', h(ElSelect, { modelValue: form.value.toolIds, multiple: true, filterable: true,
               'onUpdate:modelValue': (v: string[]) => { form.value.toolIds = v }, placeholder: '选择已注册的工具' }, {
               default: () => toolOptions.value.map((item) => h(ElOption, { key: item.id,
@@ -267,7 +279,8 @@ export const AgentManagementPage = defineComponent({
               default: () => [
                 h(ElText, {}, { default: () => def.description }),
                 h(ElSpace, { wrap: true }, { default: () => [
-                  h(ElTag, { size: 'small' }, { default: () => `模型 ref：${def.modelRef || '默认'}` }),
+                  h(ElTag, { size: 'small' }, { default: () => `供应商：${llmProfiles.value.find((item) => item.id === def.llmProfileRef)?.name ?? (def.llmProfileRef || '系统默认')}` }),
+                  def.modelRef ? h(ElTag, { size: 'small' }, { default: () => `模型覆盖：${def.modelRef}` }) : null,
                   h(ElTag, { size: 'small' }, { default: () => `工具：${def.toolIds.join(', ') || '未配置'}` }),
                   h(ElTag, { size: 'small' }, { default: () => `提示词：${def.promptRef || '未绑定'}` }),
                 ] }),

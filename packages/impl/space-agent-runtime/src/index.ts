@@ -156,11 +156,14 @@ export class AgentRuntime extends AgentRuntimeService {
 
       // ── 模式判定（确定性）：ctx.llm 在且 configured（.env 三件套齐）= 真模型 ──
       const llm = llmOrNull(this.ctx)
-      const llmReady = Boolean(llm && llm.configured)
+      const llmProfileRef = snap.descriptor.llmProfileRef?.trim() || undefined
+      const llmReady = Boolean(llm && llm.configuredFor(llmProfileRef))
       // 模型名现读 settings（/models 页）> env；面板改完即生效（A1 打磨）。
       const modelRef = snap.descriptor.modelRef?.trim() || ''
       const model = llmReady
-        ? modelRef || this.ctx.settings.get<string>('llm.model', '')?.trim() ||
+        ? modelRef || (llmProfileRef
+          ? this.ctx.settings.get<string>(`llm.profile.${llmProfileRef}.model`, '')?.trim()
+          : this.ctx.settings.get<string>('llm.model', '')?.trim()) ||
           process.env[LLM_MODEL_ENV]?.trim() || '(unset)'
         : null
 
@@ -239,6 +242,7 @@ export class AgentRuntime extends AgentRuntimeService {
           agentId,
           sessionId: runContext.sessionId,
           model: modelRef || undefined,
+          profileRef: llmProfileRef,
           allowedToolIds: snap.descriptor.toolIds ?? [],
           signal: controller.signal,
           onProgress: (phase, toolId, ok, delta) => {

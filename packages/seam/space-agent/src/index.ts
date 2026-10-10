@@ -74,6 +74,8 @@ export interface AgentDescriptor {
   /** Shared-template metadata; consumers may use supported fields generically. */
   description?: string
   modelRef?: string
+  /** Named administrator-managed model provider profile; empty uses system default. */
+  llmProfileRef?: string
   toolIds?: readonly string[]
   contextSources?: readonly string[]
   memoryPolicy?: string

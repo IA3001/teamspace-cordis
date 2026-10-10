@@ -29,6 +29,8 @@ interface MeRow { id: string; username: string }
 interface ApiShape { baseURL: string; model: string; hasKey: boolean; keyTail: string; timeoutMs?: number }
 interface ApiConfig {
   text: ApiShape
+  textProfiles: Array<{ id: string; name: string; baseURL: string; model: string; hasKey: boolean; keyTail: string }>
+  activeTextProfileRef: string
   embedding: ApiShape
   webSearch: ApiShape
   status: { text: boolean; embedding: boolean }
@@ -98,6 +100,10 @@ const AdminPage = defineComponent({
       removeUser(token: string, userId: string): Promise<WriteResult | null>
       getApiConfig(token: string): Promise<ApiConfig | null>
       saveTextApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string; timeoutMs?: number }): Promise<WriteResult | null>
+      saveTextProfile(token: string, cfg: { id: string; name: string; baseURL: string; model: string; apiKey?: string }): Promise<WriteResult | null>
+      removeTextProfile(token: string, id: string): Promise<WriteResult | null>
+      setDefaultTextProfile(token: string, id: string): Promise<WriteResult | null>
+      testTextProfile(token: string, id: string): Promise<WriteResult | null>
       saveEmbeddingApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }): Promise<WriteResult | null>
       saveWebSearchApi(token: string, cfg: { baseURL?: string; apiKey?: string }): Promise<WriteResult | null>
       testTextApi(token: string): Promise<WriteResult | null>
@@ -126,6 +132,7 @@ const AdminPage = defineComponent({
     const apiKeys = ref({ text: '', embedding: '', webSearch: '' })
     const apiNotice = ref('')
     const apiBusy = ref('')
+    const profileDraft = ref({ id: '', name: '', baseURL: '', model: '', apiKey: '' })
     // 筛选 + 分页（用户反馈①⑤，2026-10-07）。
     const query = ref('')
     const pageNo = ref(1)
@@ -261,6 +268,37 @@ const AdminPage = defineComponent({
           : await rpc.value.testWebSearchApi(getToken())
       apiBusy.value = ''
       apiNotice.value = result?.detail ?? result?.error ?? '测试失败'
+    }
+    async function saveTextProfile() {
+      apiBusy.value = 'save-profile'
+      apiNotice.value = ''
+      const result = await rpc.value.saveTextProfile(getToken(), {
+        ...profileDraft.value,
+        apiKey: profileDraft.value.apiKey || undefined,
+      })
+      apiBusy.value = ''
+      if (result?.ok) {
+        profileDraft.value.apiKey = ''
+        apiNotice.value = '文字模型配置已保存；密钥不会回显。'
+        await refresh()
+      } else apiNotice.value = result?.detail ?? result?.error ?? '保存失败'
+    }
+    async function testTextProfile(id: string) {
+      apiBusy.value = `test-profile-${id}`
+      const result = await rpc.value.testTextProfile(getToken(), id)
+      apiBusy.value = ''
+      apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '测试失败'}`
+    }
+    async function removeTextProfile(id: string) {
+      const result = await rpc.value.removeTextProfile(getToken(), id)
+      await handleResult(result)
+    }
+    async function setDefaultTextProfile(id: string) {
+      const result = await rpc.value.setDefaultTextProfile(getToken(), id)
+      await handleResult(result)
+    }
+    function editTextProfile(profile: NonNullable<ApiConfig['textProfiles']>[number]) {
+      profileDraft.value = { id: profile.id, name: profile.name, baseURL: profile.baseURL, model: profile.model, apiKey: '' }
     }
 
     async function decideApproval(row: SandboxApprovalRow, decision: 'approved' | 'rejected') {
@@ -533,6 +571,72 @@ const AdminPage = defineComponent({
                 h(ElButton, { loading: apiBusy.value === `test-${kind}`, onClick: () => void testApi(kind) }, { default: () => '连通测试' }),
               ] }),
             ])
+          }),
+        ]),
+        section('文字模型供应商配置', '可保存多组 OpenAI 兼容供应商配置，并单独测试；默认配置供协调器与未指定模型的 Agent 使用。', [
+          h(ElFormItem, { label: '系统默认文字模型配置' }, {
+            default: () => h(ElSelect, {
+              modelValue: apiConfig.value?.activeTextProfileRef ?? '',
+              onChange: (value: string) => void setDefaultTextProfile(value),
+              placeholder: '使用兼容默认配置',
+            }, {
+              default: () => [
+                h(ElOption, { label: '兼容默认配置（上方文字模型 API）', value: '' }),
+                ...(apiConfig.value?.textProfiles ?? []).map((profile) => h(ElOption, {
+                  label: `${profile.name}（${profile.id}）`, value: profile.id,
+                })),
+              ],
+            }),
+          }),
+          h(ElTable, { data: apiConfig.value?.textProfiles ?? [], size: 'small', rowKey: 'id' }, {
+            default: () => [
+              h(ElTableColumn, { prop: 'name', label: '名称', width: 150 }),
+              h(ElTableColumn, { prop: 'id', label: '配置 ID', width: 150 }),
+              h(ElTableColumn, { prop: 'baseURL', label: 'Base URL', minWidth: 220 }),
+              h(ElTableColumn, { prop: 'model', label: '模型', minWidth: 150 }),
+              h(ElTableColumn, { label: '密钥', width: 125 }, { default: (scope: { row: ApiConfig['textProfiles'][number] }) => scope.row.hasKey ? `已保存 · …${scope.row.keyTail}` : '未配置' }),
+              h(ElTableColumn, { label: '操作', minWidth: 310, fixed: 'right' }, {
+                default: (scope: { row: ApiConfig['textProfiles'][number] }) => h(ElSpace, null, { default: () => [
+                  h(ElButton, { size: 'small', onClick: () => editTextProfile(scope.row) }, { default: () => '编辑' }),
+                  h(ElButton, { size: 'small', loading: apiBusy.value === `test-profile-${scope.row.id}`, onClick: () => void testTextProfile(scope.row.id) }, { default: () => '测试' }),
+                  h(ElButton, { size: 'small', type: 'primary', disabled: apiConfig.value?.activeTextProfileRef === scope.row.id, onClick: () => void setDefaultTextProfile(scope.row.id) }, { default: () => apiConfig.value?.activeTextProfileRef === scope.row.id ? '当前默认' : '设为默认' }),
+                  h(ElButton, { size: 'small', type: 'danger', onClick: () => void removeTextProfile(scope.row.id) }, { default: () => '删除' }),
+                ] }),
+              }),
+            ],
+          }),
+          h(ElForm, { labelPosition: 'top' }, {
+            default: () => [
+              h(ElFormItem, { label: '配置 ID（Agent 引用用；如 qwen-prod、ark-coding）' }, { default: () => h(ElInput, {
+                modelValue: profileDraft.value.id,
+                'onUpdate:modelValue': (v: string) => { profileDraft.value.id = v },
+                placeholder: 'qwen-prod', clearable: true,
+              }) }),
+              h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
+                modelValue: profileDraft.value.name,
+                'onUpdate:modelValue': (v: string) => { profileDraft.value.name = v },
+                placeholder: '阿里云 Qwen', clearable: true,
+              }) }),
+              h(ElFormItem, { label: 'Base URL' }, { default: () => h(ElInput, {
+                modelValue: profileDraft.value.baseURL,
+                'onUpdate:modelValue': (v: string) => { profileDraft.value.baseURL = v },
+                placeholder: 'https://provider.example/v1', clearable: true,
+              }) }),
+              h(ElFormItem, { label: '模型 ID' }, { default: () => h(ElInput, {
+                modelValue: profileDraft.value.model,
+                'onUpdate:modelValue': (v: string) => { profileDraft.value.model = v },
+                placeholder: '供应商提供的模型 ID', clearable: true,
+              }) }),
+              h(ElFormItem, { label: 'API Key（编辑时留空保留现值；输入 - 清除）' }, { default: () => h(ElInput, {
+                modelValue: profileDraft.value.apiKey,
+                'onUpdate:modelValue': (v: string) => { profileDraft.value.apiKey = v },
+                type: 'password', showPassword: true, placeholder: '仅写入，不回显',
+              }) }),
+              h(ElSpace, null, { default: () => [
+                h(ElButton, { type: 'primary', loading: apiBusy.value === 'save-profile', onClick: () => void saveTextProfile() }, { default: () => '保存供应商配置' }),
+                h(ElButton, { onClick: () => { profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '' } } }, { default: () => '清空表单' }),
+              ] }),
+            ],
           }),
         ]),
       ]

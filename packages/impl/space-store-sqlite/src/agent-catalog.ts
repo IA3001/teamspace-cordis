@@ -32,6 +32,7 @@ function toDefinition(r: Row): AgentDefinition {
     description: r.description as string,
     promptRef: r.prompt_ref as string,
     modelRef: r.model_ref as string,
+    llmProfileRef: r.llm_profile_ref as string,
     toolIds: parseList(r.tool_ids, 'toolIds'),
     contextSources: parseList(r.context_sources, 'contextSources'),
     memoryPolicy: r.memory_policy as string,
@@ -56,6 +57,7 @@ function cleanInput(input: AgentDefinitionInput): AgentDefinitionInput {
     description,
     promptRef: String(input.promptRef ?? '').trim(),
     modelRef: String(input.modelRef ?? '').trim(),
+    llmProfileRef: String(input.llmProfileRef ?? '').trim(),
     toolIds: parseList(JSON.stringify(input.toolIds ?? []), 'toolIds'),
     contextSources: parseList(JSON.stringify(input.contextSources ?? ['session', 'agent-memory', 'team-kb']), 'contextSources'),
     memoryPolicy: String(input.memoryPolicy ?? 'agent').trim() || 'agent',
@@ -74,14 +76,16 @@ export class SqliteAgentCatalog extends AgentCatalogService {
     try {
       this.db.prepare(`
         INSERT INTO agent_definitions(
-          id, title, description, prompt_ref, model_ref, tool_ids,
+          id, title, description, prompt_ref, model_ref, llm_profile_ref, tool_ids,
           context_sources, memory_policy, speech_policy, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-      `).run(
-        id, value.title, value.description, value.promptRef, value.modelRef,
-        JSON.stringify(value.toolIds), JSON.stringify(value.contextSources),
-        value.memoryPolicy, value.speechPolicy, timestamp, timestamp,
-      )
+        ) VALUES ($id, $title, $description, $promptRef, $modelRef, $llmProfileRef, $toolIds, $contextSources, $memoryPolicy, $speechPolicy, 'active', $createdAt, $updatedAt)
+      `).run({
+        $id: id, $title: value.title, $description: value.description,
+        $promptRef: value.promptRef, $modelRef: value.modelRef, $llmProfileRef: value.llmProfileRef ?? '',
+        $toolIds: JSON.stringify(value.toolIds), $contextSources: JSON.stringify(value.contextSources),
+        $memoryPolicy: value.memoryPolicy, $speechPolicy: value.speechPolicy,
+        $createdAt: timestamp, $updatedAt: timestamp,
+      })
     } catch (e) {
       if (/UNIQUE/i.test(String((e as Error).message))) {
         throw new AgentCatalogError('duplicate_title', `已有同名 Agent「${value.title}」`)
@@ -99,14 +103,17 @@ export class SqliteAgentCatalog extends AgentCatalogService {
     const value = cleanInput({ ...current, ...patch })
     try {
       this.db.prepare(`
-        UPDATE agent_definitions SET title = ?, description = ?, prompt_ref = ?, model_ref = ?,
-          tool_ids = ?, context_sources = ?, memory_policy = ?, speech_policy = ?, updated_at = ?
-        WHERE id = ?
-      `).run(
-        value.title, value.description, value.promptRef, value.modelRef,
-        JSON.stringify(value.toolIds), JSON.stringify(value.contextSources),
-        value.memoryPolicy, value.speechPolicy, now(), id,
-      )
+        UPDATE agent_definitions SET title = $title, description = $description, prompt_ref = $promptRef,
+          model_ref = $modelRef, llm_profile_ref = $llmProfileRef, tool_ids = $toolIds,
+          context_sources = $contextSources, memory_policy = $memoryPolicy,
+          speech_policy = $speechPolicy, updated_at = $updatedAt
+        WHERE id = $id
+      `).run({
+        $id: id, $title: value.title, $description: value.description,
+        $promptRef: value.promptRef, $modelRef: value.modelRef, $llmProfileRef: value.llmProfileRef ?? '',
+        $toolIds: JSON.stringify(value.toolIds), $contextSources: JSON.stringify(value.contextSources),
+        $memoryPolicy: value.memoryPolicy, $speechPolicy: value.speechPolicy, $updatedAt: now(),
+      })
     } catch (e) {
       if (/UNIQUE/i.test(String((e as Error).message))) {
         throw new AgentCatalogError('duplicate_title', `已有同名 Agent「${value.title}」`)

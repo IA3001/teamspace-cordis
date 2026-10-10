@@ -9,7 +9,8 @@
     "space-ui": "*",
     "space-identity": "*",
     "space-admin-auth": "*",
-    "space-sandbox-approval": "*"
+    "space-sandbox-approval": "*",
+    "space-agent-catalog": "*"
   },
   "peerDependencies": {
     "cordis": "^4.0.0-rc.10"

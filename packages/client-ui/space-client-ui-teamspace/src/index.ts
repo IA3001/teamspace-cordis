@@ -185,6 +185,14 @@ export function apply(ctx: Context) {
         if (!(await authTeamHuman(ctx, token))) return null
         return AGENT_TEMPLATES
       },
+      /** Only public model-profile metadata is visible to Team members; credentials stay Admin-only. */
+      async llmProfiles(token: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        return (ctx.settings.get<Array<{ id: string; name: string }>>('llm.profiles', []) ?? []).map((profile) => ({
+          id: profile.id, name: profile.name,
+          model: ctx.settings.get<string>(`llm.profile.${profile.id}.model`, ''),
+        }))
+      },
       /** Available registered tools; handlers and other runtime internals stay server-side. */
       async toolCatalog(token: string) {
         if (!(await authTeamHuman(ctx, token))) return null

@@ -22,6 +22,13 @@ try {
   assert.equal(settings.get('llm.apiKey', ''), secret)
   assert.equal(settings.all('llm.')['llm.apiKey'], secret)
 
+  const profileSecret = 'profile-key-never-print'
+  settings.set('llm.profile.ark-coding.apiKey', profileSecret)
+  const profileEncrypted = db.prepare("SELECT value FROM settings WHERE key = 'llm.profile.ark-coding.apiKey'").get() as { value: string }
+  assert.match(profileEncrypted.value, /^encrypted:v1:/)
+  assert.equal(profileEncrypted.value.includes(profileSecret), false, 'named profile credentials are encrypted at rest')
+  assert.equal(settings.get('llm.profile.ark-coding.apiKey', ''), profileSecret)
+
   const legacySecret = 'legacy-provider-key-never-print'
   db.prepare("INSERT INTO settings(key, value, updated_at) VALUES ('embed.apiKey', ?, ?)")
     .run(JSON.stringify(legacySecret), new Date().toISOString())

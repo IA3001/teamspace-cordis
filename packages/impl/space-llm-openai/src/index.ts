@@ -54,8 +54,23 @@ export class OpenAiChatLlm extends LlmService {
   }
 
   /** 取值优先级：settings（面板设置页）> Config > env 兜底（每次现算）。 */
-  private resolve(): { key: string; base: string; model: string } {
+  private resolve(profileRef?: string): { key: string; base: string; model: string } {
     const s = this.settings
+    const selectedRef = profileRef || s?.get<string>('llm.activeProfileRef', '').trim()
+    if (selectedRef) {
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(selectedRef)) {
+        throw new LlmError('not_configured', '文字模型配置引用格式无效')
+      }
+      const profiles = s?.get<Array<{ id?: string }>>('llm.profiles', []) ?? []
+      if (!profiles.some((profile) => profile.id === selectedRef)) {
+        throw new LlmError('not_configured', `文字模型配置「${selectedRef}」不存在`)
+      }
+      return {
+        key: s?.get<string>(`llm.profile.${selectedRef}.apiKey`, '').trim() ?? '',
+        base: s?.get<string>(`llm.profile.${selectedRef}.baseURL`, '').trim() ?? '',
+        model: s?.get<string>(`llm.profile.${selectedRef}.model`, '').trim() ?? '',
+      }
+    }
     return {
       key:
         (s && s.get<string>('llm.apiKey', '').trim()) ||
@@ -76,12 +91,20 @@ export class OpenAiChatLlm extends LlmService {
   }
 
   get configured(): boolean {
-    const { key, base, model } = this.resolve()
-    return Boolean(key && base && model)
+    return this.configuredFor()
+  }
+
+  override configuredFor(profileRef?: string): boolean {
+    try {
+      const { key, base, model } = this.resolve(profileRef)
+      return Boolean(key && base && model)
+    } catch {
+      return false
+    }
   }
 
   async chat(messages: readonly ChatMessage[], options?: ChatOptions): Promise<string> {
-    const { base, key, model: configuredModel } = this.resolve()
+    const { base, key, model: configuredModel } = this.resolve(options?.profileRef)
     const model = options?.model?.trim() || configuredModel
     if (!base || !key || !model) {
       throw new LlmError(

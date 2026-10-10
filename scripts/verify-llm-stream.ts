@@ -5,9 +5,15 @@ import { runAgentExecutionGraph } from '../packages/impl/space-agent-runtime/src
 
 const originalFetch = globalThis.fetch
 let sentBody: Record<string, unknown> | undefined
+let sentUrl = ''
+let sentAuthorization = ''
+let jsonResponse = false
 const deltas: string[] = []
-globalThis.fetch = (async (_url, init) => {
+globalThis.fetch = (async (url, init) => {
+  sentUrl = String(url)
+  sentAuthorization = new Headers(init?.headers).get('authorization') ?? ''
   sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+  if (jsonResponse) return Response.json({ choices: [{ message: { content: 'profile reply' } }] })
   const encoder = new TextEncoder()
   const chunks = [
     'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n',
@@ -31,6 +37,33 @@ try {
   assert.equal(answer, '你好，团队')
   assert.deepEqual(deltas, ['你好', '，团队'])
   assert.doesNotMatch(JSON.stringify({ answer, deltas }), /stream-test-key/)
+
+  const profileSettings = {
+    get(key: string, fallback: unknown) {
+      const values: Record<string, unknown> = {
+        'llm.profiles': [{ id: 'provider-b' }],
+        'llm.activeProfileRef': 'provider-b',
+        'llm.profile.provider-b.apiKey': 'profile-secret',
+        'llm.profile.provider-b.baseURL': 'https://provider-b.example/v1',
+        'llm.profile.provider-b.model': 'provider-b-model',
+      }
+      return key in values ? values[key] : fallback
+    },
+  }
+  jsonResponse = true
+  const profileLlm = new OpenAiChatLlm(new Context(), {}, profileSettings as never)
+  assert.equal(profileLlm.configuredFor('provider-b'), true)
+  assert.equal(profileLlm.configuredFor('missing'), false)
+  const profileAnswer = await profileLlm.chat([{ role: 'user', content: 'hello' }], { profileRef: 'provider-b' })
+  assert.equal(profileAnswer, 'profile reply')
+  assert.equal(sentUrl, 'https://provider-b.example/v1/chat/completions')
+  assert.equal(sentAuthorization, 'Bearer profile-secret')
+  assert.equal(sentBody?.model, 'provider-b-model')
+  assert.equal(profileLlm.configured, true, 'the selected system default profile determines configured state')
+  await profileLlm.chat([{ role: 'user', content: 'default profile' }])
+  assert.equal(sentUrl, 'https://provider-b.example/v1/chat/completions', 'calls without an Agent override use the selected default profile')
+  await assert.rejects(profileLlm.chat([{ role: 'user', content: 'hello' }], { profileRef: '../missing' }), /格式无效/)
+  console.log('✓ named text-model profiles select their own endpoint, model, and credential')
 
   const progress: string[] = []
   const graphCtx = Object.assign(new Context(), {

@@ -57,6 +57,7 @@ export async function runAgentExecutionGraph(input: {
   agentId: string
   sessionId?: string
   model?: string
+  profileRef?: string
   allowedToolIds: readonly string[]
   messages: ChatMessage[]
   signal?: AbortSignal
@@ -77,6 +78,7 @@ export async function runAgentExecutionGraph(input: {
     }
     const raw = await input.ctx.llm.chat(state.messages, {
       model: input.model,
+      profileRef: input.profileRef,
       signal: input.signal,
       onToken: (delta) => {
         buffered += delta

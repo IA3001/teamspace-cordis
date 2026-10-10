@@ -21,6 +21,7 @@ export interface AgentDefinition {
   description: string
   promptRef: string
   modelRef: string
+  llmProfileRef: string
   toolIds: string[]
   contextSources: string[]
   memoryPolicy: string
@@ -30,7 +31,7 @@ export interface AgentDefinition {
   updatedAt: string
 }
 
-export type AgentDefinitionInput = Omit<AgentDefinition, 'id' | 'status' | 'createdAt' | 'updatedAt'>
+export type AgentDefinitionInput = Omit<AgentDefinition, 'id' | 'status' | 'createdAt' | 'updatedAt' | 'llmProfileRef'> & { llmProfileRef?: string }
 export type AgentDefinitionPatch = Partial<AgentDefinitionInput>
 
 /** Reusable starter configuration; creating from one copies data into an Agent instance. */

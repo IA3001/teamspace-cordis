@@ -13,6 +13,9 @@ const entries = [
 const approval = { id: 'sar_test', agentId: 'agent-x', sessionId: 'session-y', sourcePath: '/tmp/input.txt', sourceSize: 3, sourceMtimeMs: 1, sourceCtimeMs: 1, sourceInode: 1, reason: 'fixture', status: 'pending', createdAt: '2026-10-09T00:00:00.000Z', decidedAt: null, decidedBy: null, decisionNote: '', deliveryPath: null }
 let decision: string | undefined
 let delivered = false
+const settingValues = new Map<string, unknown>()
+let testedProfile = ''
+let agentProfileRefs: Array<{ llmProfileRef: string }> = []
 const ctx = {
   webui: { addEntry: (_entry: unknown, exposed: Record<string, (...args: any[]) => Promise<any>>) => { rpc = exposed } },
   adminAuth: { verifyToken: async (token: string) => {
@@ -28,6 +31,16 @@ const ctx = {
     },
   },
   sandboxApprovalDelivery: { deliver: async () => { delivered = true; return { relativePath: 'approvals/sar_test/input.txt' } } },
+  settings: {
+    get: (key: string, fallback: unknown) => settingValues.has(key) ? settingValues.get(key) : fallback,
+    set: (key: string, value: unknown) => { if (value === undefined) settingValues.delete(key); else settingValues.set(key, value) },
+  },
+  llm: {
+    configured: true,
+    chat: async (_messages: unknown, options?: { profileRef?: string }) => { testedProfile = options?.profileRef ?? ''; return 'pong' },
+  },
+  embeddings: { configured: true },
+  agentCatalog: { list: () => agentProfileRefs },
   logger: { info: () => undefined },
 } as unknown as Context
 
@@ -51,5 +64,26 @@ const decisionResult = await rpc.decideSandboxApproval('admin-session', 'sar_tes
 assert.equal(decisionResult.ok, true)
 assert.equal(delivered, true, 'approval copies only through the trusted delivery service')
 assert.equal(decision, 'approved:admin-root:reviewed:approvals/sar_test/input.txt')
-console.log('✓ Admin plugin inventory and sandbox approvals are authenticated; inventory is read-only and secrets are redacted')
+assert.equal(await rpc.saveTextProfile('invalid-session', { id: 'ark-code', name: 'Ark', baseURL: 'https://provider.invalid/v1', model: 'model', apiKey: 'profile-secret' }), null)
+const savedProfile = await rpc.saveTextProfile('admin-session', {
+  id: 'ark-code', name: 'Ark Coding', baseURL: 'https://provider.invalid/v1', model: 'coding-model', apiKey: 'profile-secret',
+})
+assert.equal(savedProfile.ok, true)
+const apiConfig = await rpc.getApiConfig('admin-session')
+assert.deepEqual(apiConfig.textProfiles[0], {
+  id: 'ark-code', name: 'Ark Coding', baseURL: 'https://provider.invalid/v1', model: 'coding-model',
+  hasKey: true, keyTail: 'cret',
+})
+assert.equal(JSON.stringify(apiConfig).includes('profile-secret'), false, 'profile credentials are never returned by admin config')
+assert.equal((await rpc.testTextProfile('admin-session', 'ark-code')).ok, true)
+assert.equal(testedProfile, 'ark-code')
+assert.equal((await rpc.setDefaultTextProfile('admin-session', 'ark-code')).ok, true)
+assert.equal((await rpc.getApiConfig('admin-session')).activeTextProfileRef, 'ark-code')
+agentProfileRefs = [{ llmProfileRef: 'ark-code' }]
+assert.equal((await rpc.removeTextProfile('admin-session', 'ark-code')).error, 'in_use', 'referenced profiles cannot be removed')
+agentProfileRefs = []
+assert.equal((await rpc.removeTextProfile('admin-session', 'ark-code')).ok, true)
+assert.equal((await rpc.getApiConfig('admin-session')).activeTextProfileRef, '')
+assert.equal(settingValues.has('llm.profile.ark-code.apiKey'), false, 'removing a profile clears its secret')
+console.log('✓ Admin plugin inventory, sandbox approvals, and multi-provider API profiles enforce auth and redact credentials')
 execFileSync(process.execPath, ['scripts/record-action.mjs', 'verify-admin-plugins', '{"ok":true}'], { stdio: 'inherit' })

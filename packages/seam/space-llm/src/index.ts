@@ -36,7 +36,9 @@ export interface ChatMessage {
 export interface ChatOptions {
   /** 单次调用超时（毫秒）。缺省 60_000。 */
   timeoutMs?: number
-  /** Per-call model override; credentials/base URL remain the shared configured values. */
+  /** Named administrator-managed provider profile; missing profiles fail closed. */
+  profileRef?: string
+  /** Per-call model override within the selected provider. */
   model?: string
   /** Cancel a request when its causal Agent run is withdrawn. */
   signal?: AbortSignal
@@ -79,6 +81,11 @@ export abstract class LlmService extends Service {
   }
 
   abstract get configured(): boolean
+
+  /** Whether a specific named provider profile can serve a request. */
+  configuredFor(profileRef?: string): boolean {
+    return !profileRef && this.configured
+  }
 
   abstract chat(messages: readonly ChatMessage[], options?: ChatOptions): Promise<string>
 }

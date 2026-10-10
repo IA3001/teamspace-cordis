@@ -34,6 +34,7 @@ const release: Array<() => void> = []
 Object.assign(ctx, {
   llm: {
     configured: true,
+    configuredFor: () => true,
     async chat(messages: Array<{ role: string; content: string }>) {
       modelInputs.push(messages[1]!.content)
       const input = JSON.parse(messages[1]!.content) as { sessionId: string; event: { id: string } }
@@ -202,6 +203,7 @@ async function main(): Promise<void> {
   let recoveryCalls = 0
   Object.assign(recoveryCtx, { llm: {
     configured: true,
+    configuredFor: () => true,
     async chat() { recoveryCalls++; return JSON.stringify({ memories: [{ text: '重启后追赶的持久记忆', weight: 0.9 }] }) },
   } })
   const recoveredInbox = new AgentInbox(recoveryCtx)

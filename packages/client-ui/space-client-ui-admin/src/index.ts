@@ -8,9 +8,10 @@ import type { TeamRole } from 'space-identity'
 import { AdminAuthError } from 'space-admin-auth'
 import type { AdminPrincipal } from 'space-admin-auth'
 import type {} from 'space-sandbox-approval'
+import type {} from 'space-agent-catalog'
 
 export const name = 'space-client-ui-admin'
-export const inject = ['webui', 'users', 'settings', 'adminAuth', 'sandboxApproval', 'sandboxApprovalDelivery', 'llm', 'embeddings', 'loader']
+export const inject = ['webui', 'users', 'settings', 'adminAuth', 'sandboxApproval', 'sandboxApprovalDelivery', 'llm', 'embeddings', 'loader', 'agentCatalog']
 
 async function auth(ctx: Context, token: string): Promise<AdminPrincipal | null> {
   try { return await ctx.adminAuth.verifyToken(String(token ?? '')) }
@@ -121,6 +122,16 @@ export function apply(ctx: Context) {
       }
       return {
         text: { ...shape('llm'), timeoutMs: ctx.settings.get<number>('llm.timeoutMs', 60000) },
+        textProfiles: (ctx.settings.get<Array<{ id: string; name: string }>>('llm.profiles', []) ?? []).map((profile) => {
+          const key = ctx.settings.get<string>(`llm.profile.${profile.id}.apiKey`, '')
+          return {
+            id: profile.id, name: profile.name,
+            baseURL: ctx.settings.get<string>(`llm.profile.${profile.id}.baseURL`, ''),
+            model: ctx.settings.get<string>(`llm.profile.${profile.id}.model`, ''),
+            hasKey: Boolean(key), keyTail: key ? key.slice(-4) : '',
+          }
+        }),
+        activeTextProfileRef: ctx.settings.get<string>('llm.activeProfileRef', ''),
         embedding: shape('embed'),
         webSearch: { ...shape('search'), model: '' },
         status: { text: ctx.llm.configured, embedding: ctx.embeddings.configured },
@@ -132,6 +143,54 @@ export function apply(ctx: Context) {
       saveApi(ctx, 'llm', cfg)
       if (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0) ctx.settings.set('llm.timeoutMs', Math.floor(cfg.timeoutMs))
       audit(ctx, admin.id, 'save_api_config', 'text')
+      return { ok: true }
+    },
+    async saveTextProfile(token: string, cfg: { id?: string; name?: string; baseURL?: string; model?: string; apiKey?: string }) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      const id = String(cfg.id ?? '').trim()
+      const name = String(cfg.name ?? '').trim()
+      const baseURL = String(cfg.baseURL ?? '').trim()
+      const model = String(cfg.model ?? '').trim()
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id) || !name || !baseURL || !model) {
+        return { ok: false, error: 'invalid_input', detail: '配置 ID、名称、Base URL 和模型名均为必填项；ID 仅允许字母、数字、下划线和连字符。' }
+      }
+      const profiles = ctx.settings.get<Array<{ id: string; name: string }>>('llm.profiles', []) ?? []
+      const existing = profiles.some((profile) => profile.id === id)
+      if (!existing && profiles.length >= 32) return { ok: false, error: 'limit', detail: '最多保存 32 组文字模型配置。' }
+      ctx.settings.set('llm.profiles', existing
+        ? profiles.map((profile) => profile.id === id ? { id, name } : profile)
+        : [...profiles, { id, name }])
+      ctx.settings.set(`llm.profile.${id}.baseURL`, baseURL)
+      ctx.settings.set(`llm.profile.${id}.model`, model)
+      if (cfg.apiKey === '-') ctx.settings.set(`llm.profile.${id}.apiKey`, undefined)
+      else if (typeof cfg.apiKey === 'string' && cfg.apiKey.trim()) ctx.settings.set(`llm.profile.${id}.apiKey`, cfg.apiKey.trim())
+      audit(ctx, admin.id, 'save_text_model_profile', id)
+      return { ok: true }
+    },
+    async removeTextProfile(token: string, idInput: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      const id = String(idInput ?? '').trim()
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id)) return { ok: false, error: 'invalid_input', detail: '配置 ID 格式无效。' }
+      const profiles = ctx.settings.get<Array<{ id: string; name: string }>>('llm.profiles', []) ?? []
+      if (!profiles.some((profile) => profile.id === id)) return { ok: false, error: 'not_found', detail: '文字模型配置不存在。' }
+      const references = ctx.agentCatalog.list().filter((agent) => agent.llmProfileRef === id).length
+      if (references > 0) return { ok: false, error: 'in_use', detail: `仍有 ${references} 个团队 Agent 使用此配置；请先更换它们的模型配置 ref。` }
+      ctx.settings.set('llm.profiles', profiles.filter((profile) => profile.id !== id))
+      for (const key of ['apiKey', 'baseURL', 'model']) ctx.settings.set(`llm.profile.${id}.${key}`, undefined)
+      if (ctx.settings.get<string>('llm.activeProfileRef', '') === id) ctx.settings.set('llm.activeProfileRef', '')
+      audit(ctx, admin.id, 'remove_text_model_profile', id)
+      return { ok: true }
+    },
+    async setDefaultTextProfile(token: string, idInput: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      const id = String(idInput ?? '').trim()
+      const profiles = ctx.settings.get<Array<{ id: string; name: string }>>('llm.profiles', []) ?? []
+      if (id && !profiles.some((profile) => profile.id === id)) return { ok: false, error: 'not_found', detail: '文字模型配置不存在。' }
+      ctx.settings.set('llm.activeProfileRef', id)
+      audit(ctx, admin.id, 'set_default_text_model_profile', id || 'legacy')
       return { ok: true }
     },
     async saveEmbeddingApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }) {
@@ -153,6 +212,16 @@ export function apply(ctx: Context) {
       const started = Date.now()
       try {
         const answer = await ctx.llm.chat([{ role: 'user', content: 'ping，只回复 pong' }], { timeoutMs: 20000 })
+        return { ok: true, detail: `连通正常（${Date.now() - started}ms）：${answer.slice(0, 80)}` }
+      } catch (e) { return { ok: false, ...fail(e) } }
+    },
+    async testTextProfile(token: string, idInput: string) {
+      if (!(await auth(ctx, token))) return null
+      const started = Date.now()
+      try {
+        const answer = await ctx.llm.chat([{ role: 'user', content: 'ping，只回复 pong' }], {
+          timeoutMs: 20000, profileRef: String(idInput ?? '').trim(),
+        })
         return { ok: true, detail: `连通正常（${Date.now() - started}ms）：${answer.slice(0, 80)}` }
       } catch (e) { return { ok: false, ...fail(e) } }
     },

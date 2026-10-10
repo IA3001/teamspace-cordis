@@ -202,7 +202,30 @@ export class OrchestratorEngine extends OrchestratorService {
       this.workQueue.unshift({ kind: 'external', sessionId: payload.sessionId, eventId: payload.eventId,
         target: payload.target, instruction: payload.instruction })
     }
+    // A crash can persist a chain turn after its active decision/delegation was
+    // already removed. Such a turn has nothing left to replay, but activeSession()
+    // would otherwise treat it as busy forever and strand every later session.
+    const recoverableSessions = new Set<string>([
+      ...[...this.activeDecisions.values()].map(({ payload }) => payload.sessionId),
+      ...[...this.delegationPayloads.values()].map(({ sessionId }) => sessionId),
+      ...this.workQueue.map((item) => item.kind === 'external' ? item.sessionId : item.payload.sessionId),
+    ])
+    const orphaned: string[] = []
+    for (const [sessionId, turn] of this.turns) {
+      if (turn.state !== 'chain' || recoverableSessions.has(sessionId)) continue
+      turn.state = 'static'
+      turn.stopReason = 'recovery_orphaned'
+      turn.stopDetail = '进程恢复时没有找到可恢复的决策、委托或队列任务；已暂停该回合并释放会话槽位。'
+      this.recoveringSessions.delete(sessionId)
+      orphaned.push(sessionId)
+    }
     this.persistState()
+    for (const sessionId of orphaned) {
+      const turn = this.turns.get(sessionId)!
+      this.ctx.emit('orchestrator/pause', { sessionId, stopReason: turn.stopReason, stopDetail: turn.stopDetail })
+      this.ctx.logger.warn('[orchestrator] 恢复时暂停无可恢复任务的遗留回合（session=%s）', sessionId)
+      this.releaseSessionIfIdle(sessionId)
+    }
     this.scheduleQueueDrain()
   }
 
@@ -1000,5 +1023,8 @@ export function apply(ctx: Context, config: Config = {}) {
   })
   // The application entry emits this after the entire composed manifest loads,
   // so recovered delegates cannot race Agent listeners that appear later in it.
-  ctx.on('app/ready', () => engine.recoverPersistedWork())
+  ctx.on('app/ready', () => {
+    ctx.logger.info('[orchestrator] 应用清单就绪，恢复持久回合与队列')
+    engine.recoverPersistedWork()
+  }, { global: true })
 }

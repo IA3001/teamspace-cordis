@@ -294,6 +294,33 @@ async function verifyDurableRecovery(): Promise<void> {
   interrupted.db.close()
 }
 
+async function verifyOrphanedChainRecovery(): Promise<void> {
+  section('持久恢复：没有待恢复工作的遗留 chain 必须释放会话槽位')
+  const seed = openInMemory()
+  seed.ctx.settings.set('orchestrator.runtime.v1', {
+    version: 1,
+    turns: [['s_a', {
+      state: 'chain', decisionCalls: 1, autonomousActions: 1,
+      delegatedTargets: [], stopReason: '', stopDetail: '',
+    }]],
+    delegations: [], queue: [], activeDecisions: [],
+  })
+  const restarted = new Context()
+  new SqliteSessionStore(restarted, seed.db)
+  new SqliteEventLog(restarted, seed.db)
+  new SqliteSettingsStore(restarted, seed.db)
+  new SessionWork(restarted)
+  let pauseReason = ''
+  restarted.on('orchestrator/pause', (payload) => { pauseReason = payload.stopReason })
+  const engine = new OrchestratorEngine(restarted)
+  engine.recoverPersistedWork()
+  check('R6 无活跃决策/委托/队列任务的 chain 被标记为 recovery_orphaned',
+    engine.turn('s_a').state === 'static' && engine.turn('s_a').stopReason === 'recovery_orphaned' &&
+      pauseReason === 'recovery_orphaned')
+  check('R7 孤儿 chain 恢复后不再占用单会话槽位', restarted.sessionWork.state().activeSessionId === null)
+  seed.db.close()
+}
+
 const lastEvent = (ctx: Context, sessionId: string) => {
   const evs = ctx.eventLog.listBySession(sessionId)
   return evs[evs.length - 1]
@@ -563,12 +590,12 @@ async function partB(): Promise<void> {
     db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
       VALUES (?, ?, '群主', 'active', ?, NULL, ?)`).run(S, user.id, now, user.display_name)
     const agents = [
-      ['a_coordinator', '协调者'], ['a_analyst', '需求分析师'],
-      ['a_challenger', '挑战者'], ['a_recorder', '会议记录官'],
+      ['a_coordinator', '协调者', '协调者'],
+      ['a_analyst', '成员', '需求分析师'],
     ] as const
-    for (const [id, duty] of agents) {
+    for (const [id, role, duty] of agents) {
       db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
-        VALUES (?, ?, '成员', 'active', ?, NULL, ?)`).run(S, id, now, duty)
+        VALUES (?, ?, ?, 'active', ?, NULL, ?)`).run(S, id, role, now, duty)
     }
     db.exec('COMMIT')
   } catch (error) {
@@ -579,8 +606,9 @@ async function partB(): Promise<void> {
   }
   check('B0c 为验收账号创建仅限成员访问的临时会话', true, S)
 
-  // B1: 普通 @ 提及消息直接触发 Plan（暂存与 /commit 已退役）。
-  const b1 = await post('@需求分析师 verify-orchestrator 接线验收')
+  // B1: @ 仍触发 Plan，但验收指令明确要求协调者直接结束，不派发后台
+  // Agent 工作；这样 runtime gate 不会遗留真实模型驱动的长任务占用全局槽位。
+  const b1 = await post('@需求分析师 接线验收：请协调者只回复“接线正常”，不要委托任何 Agent 执行任务。')
   check('B1a 接受已登录 Team 的 @ 提及消息', b1.status === 200, JSON.stringify(b1.body))
   let inboxPaused = false
   // Memory catch-up calls the configured LLM for each invited Agent. Allow the
@@ -589,7 +617,8 @@ async function partB(): Promise<void> {
   const decisionDeadline = Date.now() + 60_000
   while (Date.now() < decisionDeadline) {
     const current = await getTurn()
-    if (current.body.decisionCalls === 1) break
+    if (current.body.stopReason === 'completed' ||
+      (current.body.state === 'static' && current.body.stopReason)) break
     const events = await getEvents()
     if (events.some((event) => event.text.includes('Agent 尚未完成此前消息的顺序处理'))) {
       inboxPaused = true
@@ -598,13 +627,15 @@ async function partB(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   const t1 = await getTurn()
-  check('B1b 回合状态可读，或记忆顺序屏障已给出会话内暂停提示',
-    (t1.status === 200 && typeof t1.body.decisionCalls === 'number') || inboxPaused, JSON.stringify(t1))
-  // A reachable model proceeds to a decision. A configured-but-unreachable
-  // provider must instead leave a visible pause; it may never skip memory sync.
+  check('B1b 大脑完成直接回复，或记忆屏障明确暂停且未越过顺序约束',
+    (t1.status === 200 && t1.body.stopReason === 'completed' && t1.body.state === 'static') || inboxPaused,
+    JSON.stringify({ turn: t1.body, inboxPaused }))
+  // A configured-but-unreachable provider must leave a visible pause; it may
+  // never skip memory sync or leave a chain with no live delegated work.
   check(
-    'B1c 大脑开始决策，或记忆屏障明确暂停且未越过顺序约束',
-    (t1.body.decisionCalls === 1 && (t1.body.state === 'static' || t1.body.state === 'chain')) || inboxPaused,
+    'B1c 接线验收不派发 Agent 后台任务',
+    (t1.body.stopReason === 'completed' && Array.isArray(t1.body.delegatedTargets) &&
+      t1.body.delegatedTargets.length === 0) || inboxPaused,
     JSON.stringify({ turn: t1.body, inboxPaused }),
   )
 
@@ -623,6 +654,7 @@ async function main(): Promise<void> {
   await verifyDecisionPause()
   await verifyCancelledDelegationLedger()
   await verifyDurableRecovery()
+  await verifyOrphanedChainRecovery()
   await verifyQueuedPlans()
   await partB()
   console.log(`\n结果：${passes} 过 / ${failures} 红`)

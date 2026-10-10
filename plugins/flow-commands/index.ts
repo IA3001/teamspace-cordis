@@ -265,7 +265,7 @@ export function apply(ctx: Context, config: Config = {}) {
   ctx.on('space/event-appended', ({ event }) => advanceFlow(event))
 
   // 应用入口在整份组合插件清单加载后发出，避免恢复时目标 Agent 监听器尚未注册。
-  ctx.on('app/ready', recoverInterruptedFlows)
+  ctx.on('app/ready', recoverInterruptedFlows, { global: true })
 
   console.log(`[${name}] 就绪：${Object.keys(flows).map((k) => `/${k}`).join(' ')}（确定性服务流程）`)
 }

@@ -52,6 +52,9 @@ await ctx.loader.create({
   name: '@cordisjs/plugin-include',
   config: { path: config.loader.configPath },
 })
+// Loader.create() registers the include fiber before its nested plugin tree has
+// finished starting. Wait for that tree so app/ready reaches every recovery hook.
+await ctx.loader.await()
 ctx.emit('app/ready')
 
 console.log(`[${config.app.name}] 框架启动完成（插件清单：${config.loader.configPath}）`)

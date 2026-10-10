@@ -221,11 +221,16 @@ console.log('== 断言区 ==')
     const cardBounds = await page.locator('.right-sidebar .el-tab-pane').nth(1).evaluate((pane) => {
       const right = pane.getBoundingClientRect().right
       const cards = Array.from(pane.querySelectorAll('.sp-activity-card'))
-      return { paneRight: right, cardRights: cards.map((card) => card.getBoundingClientRect().right) }
+      return { paneRight: right, paneWidth: pane.getBoundingClientRect().width,
+        sidebarWidth: pane.closest('.right-sidebar').getBoundingClientRect().width,
+        cardRights: cards.map((card) => card.getBoundingClientRect().right) }
     })
     const cardsFit = cardBounds.cardRights.length > 0 && cardBounds.cardRights.every((right) => right <= cardBounds.paneRight + 1)
     detail.push(`活动卡片均在 Tab 内=${cardsFit}（Tab 右界=${Math.round(cardBounds.paneRight)}px，最右卡片=${Math.round(Math.max(...cardBounds.cardRights))}px）`)
     ok &&= cardsFit
+    const sidebarFitsContent = cardBounds.sidebarWidth >= 280
+    detail.push(`桌面协作栏宽度=${Math.round(cardBounds.sidebarWidth)}px（≥280px=${sidebarFitsContent}）`)
+    ok &&= sidebarFitsContent
     // 额外卡片可能是正在运行的 Agent 进度卡，不属于历史活动批次。
     ok &&= firstBatch <= 110
     const more = page.getByRole('button', { name: /加载更早活动/ })

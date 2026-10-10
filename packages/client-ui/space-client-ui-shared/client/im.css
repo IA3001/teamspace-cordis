@@ -159,6 +159,11 @@
 }
 .sp-identity-actions { display: flex; gap: 2px; flex: none; }
 
+/* Keep the desktop collaboration panel wide enough for member names and activity summaries. */
+@media (min-width: 1280px) {
+  .sp-team-layout .right-sidebar { width: 288px; min-width: 288px; flex: none; }
+}
+
 /* ── 协作面板 v2 ─────────────────────────────────────────────────────── */
 .sp-panel-title { font-size: 12px; font-weight: 500; color: var(--el-text-color-secondary); margin: 10px 0 6px; }
 .sp-panel-block { display: block; margin: 2px 0; }

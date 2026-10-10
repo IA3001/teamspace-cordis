@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -76,6 +76,17 @@ async function main(): Promise<void> {
   assert.match(approvalNeeded.output, /已提交后台管理员审批/)
   const pending = ctx.sandboxApproval.list('pending')[0]!
   approvalDir = resolve(process.cwd(), 'data/shared-workspace/approvals', pending.id)
+  mkdirSync(approvalDir, { recursive: true })
+  const staleTemp = join(approvalDir, `.delivery-${pending.id}-${randomUUID()}.tmp`)
+  writeFileSync(staleTemp, 'partial interrupted copy', { mode: 0o000 })
+  assert.equal(statSync(staleTemp).mode & 0o777, 0, 'incomplete staging files are unreadable')
+  const sandboxTempRead = await tools.invoke('tool.code.execute', JSON.stringify({
+    code: `await import('node:fs/promises').then(fs => fs.readFile('/shared/approvals/${pending.id}/${staleTemp.split('/').at(-1)}'))`,
+  }), invoker)
+  assert.equal(sandboxTempRead.ok, false, 'the unprivileged sandbox cannot read an interrupted approval temp')
+  assert.match(sandboxTempRead.output, /EACCES|permission denied/u)
+  const staleAt = new Date(Date.now() - 2 * 60 * 60 * 1000)
+  utimesSync(staleTemp, staleAt, staleAt)
   assert.equal(pending.agentId, invoker.id)
   assert.equal(pending.sessionId, invoker.sessionId)
   const repeatedPending = ctx.sandboxApproval.request({
@@ -85,14 +96,21 @@ async function main(): Promise<void> {
   })
   assert.equal(repeatedPending.id, pending.id, 'repeated tool calls reuse one pending review request')
   const delivered = await ctx.sandboxApprovalDelivery.deliver(pending)
+  assert.equal(readdirSync(approvalDir).some((name) => name.startsWith('.delivery-')), false,
+    'retry removes an old interrupted temp copy')
   assert.equal(ctx.sandboxApproval.get(pending.id).status, 'pending', 'copying alone does not commit the decision')
+  const approvedFile = resolve(process.cwd(), 'data/shared-workspace', delivered.relativePath)
+  assert.equal(statSync(approvedFile).mode & 0o777, 0o400, 'published file is read-only')
   assert.deepEqual(await ctx.sandboxApprovalDelivery.deliver(pending), delivered,
     'retry after a completed copy but before the decision record reuses the verified file')
-  const approvedFile = resolve(process.cwd(), 'data/shared-workspace', delivered.relativePath)
+  chmodSync(approvedFile, 0o600)
   writeFileSync(approvedFile, 'tampered destination')
   await assert.rejects(ctx.sandboxApprovalDelivery.deliver(pending), /内容不匹配/,
     'retry refuses to overwrite a destination that no longer matches the reviewed source')
+  assert.equal(readdirSync(approvalDir).some((name) => name.startsWith('.delivery-')), false,
+    'failed retries remove their own temporary copy')
   writeFileSync(approvedFile, 'admin approved content')
+  chmodSync(approvedFile, 0o400)
   const approved = ctx.sandboxApproval.decide(pending.id, 'approved', 'admin-test', '已检查并复制', delivered.relativePath)
   assert.equal(approved.status, 'approved')
   const approvedRead = await tools.invoke('tool.workspace.read', JSON.stringify({ path: delivered.relativePath, scope: 'shared' }), invoker)
@@ -112,6 +130,10 @@ async function main(): Promise<void> {
   const executed = await tools.invoke('tool.code.execute', JSON.stringify({ code: 'console.log("sandbox-ok")' }), invoker)
   assert.equal(executed.ok, true, executed.output)
   assert.match(executed.output, /sandbox-ok/)
+  const sandboxUid = await tools.invoke('tool.code.execute', JSON.stringify({ code: 'console.log(process.getuid())' }), invoker)
+  assert.equal(sandboxUid.ok, true, sandboxUid.output)
+  assert.match(sandboxUid.output, new RegExp(String(typeof process.getuid === 'function' ? process.getuid() : 1000), 'u'),
+    'code execution uses the service account UID rather than container root')
   const protectedWrite = await tools.invoke('tool.code.execute', JSON.stringify({
     code: `await import('node:fs/promises').then(fs => fs.writeFile('/shared/${sharedFile}', 'changed'))`,
   }), invoker)
@@ -120,7 +142,7 @@ async function main(): Promise<void> {
   rmSync(sharedPath, { force: true })
   rmSync(sandbox, { recursive: true, force: true })
   rmSync(outside, { recursive: true, force: true })
-  console.log('✓ workspace read/write boundaries, symlink escape checks, Docker limits, and read-only shared mount passed')
+  console.log('✓ workspace boundaries, symlink checks, Docker limits, atomic approval delivery, stale-temp cleanup, and read-only shared mount passed')
 }
 
 try {

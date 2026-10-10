@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { lstat, mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { link, lstat, mkdir, open, readFile, readdir, realpath, stat, unlink, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -13,12 +13,14 @@ const MAX_FILE_BYTES = 1024 * 1024
 const MAX_CODE_BYTES = 128 * 1024
 const MAX_OUTPUT_CHARS = 16_000
 const SHARED_ROOT = resolve(process.cwd(), 'data/shared-workspace')
+const STALE_DELIVERY_TEMP_MS = 60 * 60 * 1000
 
 export const name = 'sandbox-tools'
 export const inject = ['tools', 'workdir', 'sandboxApproval', 'eventLog']
 
 class SharedApprovalDelivery extends SandboxApprovalDeliveryService {
   async deliver(request: SandboxApprovalRequest): Promise<{ relativePath: string }> {
+    if (!/^sar_[a-f0-9-]{36}$/u.test(request.id)) throw new Error('审批请求 ID 无效')
     const source = await open(request.sourcePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
     try {
       const info = await source.stat()
@@ -36,13 +38,36 @@ class SharedApprovalDelivery extends SandboxApprovalDeliveryService {
       const folder = resolve(SHARED_ROOT, 'approvals', request.id)
       await mkdir(folder, { recursive: true })
       const destination = resolve(folder, leaf)
+      // Temps stay hidden and unreadable while being written. A same-filesystem
+      // hard link publishes a complete file atomically without replacing a path.
+      const tempPrefix = `.delivery-${request.id}-`
+      for (const name of await readdir(folder)) {
+        if (!name.startsWith(tempPrefix) || !name.endsWith('.tmp')) continue
+        const stalePath = resolve(folder, name)
+        try {
+          const stale = await lstat(stalePath)
+          if (stale.isFile() && Date.now() - stale.mtimeMs > STALE_DELIVERY_TEMP_MS) await unlink(stalePath)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+      }
+      const tempPath = resolve(folder, `${tempPrefix}${randomUUID()}.tmp`)
       let output
-      try { output = await open(destination, 'wx', 0o600) }
-      catch (error) {
+      try {
+        output = await open(tempPath, 'wx', 0o000)
+        await output.writeFile(content)
+        await output.sync()
+        await output.chmod(0o400)
+        await output.sync()
+      } finally { await output?.close() }
+      try {
+        await link(tempPath, destination)
+        const directory = await open(folder, constants.O_RDONLY)
+        try { await directory.sync() } finally { await directory.close() }
+      } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        // A process may stop after publishing the copy but before committing the
-        // approval row. Let an Admin retry only when the existing regular file
-        // is exactly the reviewed source; never overwrite an unrelated path.
+        // A retry after publication may find the canonical path already present.
+        // Reuse it only when it exactly matches the reviewed source.
         const existing = await open(destination, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
         try {
           const existingInfo = await existing.stat()
@@ -51,9 +76,10 @@ class SharedApprovalDelivery extends SandboxApprovalDeliveryService {
             throw new Error('审批交付路径已存在且内容不匹配，拒绝覆盖')
           }
         } finally { await existing.close() }
-        return { relativePath: `approvals/${request.id}/${leaf}` }
+      } finally {
+        try { await unlink(tempPath) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       }
-      try { await output.writeFile(content); await output.sync() } finally { await output.close() }
       return { relativePath: `approvals/${request.id}/${leaf}` }
     } finally { await source.close() }
   }
@@ -199,8 +225,10 @@ export async function apply(ctx: Context) {
       catch (error) { reportQuotaFailure(ctx, invoker, error); throw error }
       assertActive(invoker)
       try {
+        const uid = typeof process.getuid === 'function' ? process.getuid() : 1000
+        const gid = typeof process.getgid === 'function' ? process.getgid() : 1000
         const result = await execFileAsync('docker', [
-          'run', '--rm', '--network=bridge', '--memory=512m', '--cpus=0.75', '--pids-limit=64',
+          'run', '--rm', '--user', `${uid}:${gid}`, '--network=bridge', '--memory=512m', '--cpus=0.75', '--pids-limit=64',
           '--storage-opt', 'size=256m', '--ulimit', 'fsize=67108864:67108864',
           '--read-only', '--tmpfs', '/tmp:rw,exec,size=64m',
           '--mount', `type=bind,src=${root},dst=/workspace`,

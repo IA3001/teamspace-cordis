@@ -176,6 +176,14 @@ export class OrchestratorEngine extends OrchestratorService {
     // first process finished. Its local snapshot is now stale; reload the
     // durable turn, delegation ledger, and FIFO before allowing any replay.
     this.refreshPersistedState()
+    // The reply event is appended just before the winning process persists the
+    // terminal turn. A peer can acquire the lease in that small window and
+    // otherwise mistake the still-chain snapshot (with no replayable decision)
+    // for an orphan, overwriting the winner's completion. The idempotent reply
+    // is the durable outcome marker, so reconcile the turn before recovery.
+    if (this.turns.get(payload.sessionId)?.state === 'chain') {
+      this.pause(payload.sessionId, 'completed', '协调结果已由其他实例写入；恢复为已完成回合')
+    }
     this.activeDecisions.delete(payload.event.id)
     for (let index = this.workQueue.length - 1; index >= 0; index--) {
       const item = this.workQueue[index]!

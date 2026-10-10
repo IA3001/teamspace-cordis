@@ -20,6 +20,7 @@ new SqliteSettingsStore(ctx, db)
 const engine = new OrchestratorEngine(ctx)
 const startedPath = `${signalDir}/${processId}.brain-started`
 const releasePath = `${signalDir}/${processId}.release`
+const peerActivePath = `${signalDir}/${processId}.saw-peer-active`
 
 engine.registerBrain({ async plan() {
   writeFileSync(startedPath, 'started')
@@ -33,13 +34,21 @@ engine.registerBrain({ async plan() {
 ctx.on('session-work/changed', () => engine.wakeQueue())
 
 writeFileSync(`${signalDir}/${processId}.ready`, 'ready')
-const poll = setInterval(() => engine.wakeQueue(), 15)
+const poll = setInterval(() => {
+  const activeOwner = db.prepare(`SELECT process_id FROM session_work_owners
+    WHERE session_id = ? AND owner = ?`).get(sessionId, `orchestrator:${sessionId}`) as { process_id: string } | undefined
+  if (activeOwner && activeOwner.process_id !== processId) writeFileSync(peerActivePath, activeOwner.process_id)
+  engine.wakeQueue()
+}, 15)
 const beginDeadline = Date.now() + 8_000
 while (!existsSync(`${signalDir}/begin`) && Date.now() < beginDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10))
 }
 if (!existsSync(`${signalDir}/begin`)) throw new Error('test harness did not start recovery workers')
 engine.recoverPersistedWork()
+if (sessionWork.state().activeSessionId === sessionId) {
+  writeFileSync(`${signalDir}/${processId}.waiting-for-lease`, 'waiting')
+}
 
 const deadline = Date.now() + 15_000
 let turn = engine.turn(sessionId)

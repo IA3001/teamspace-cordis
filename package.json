@@ -29,6 +29,7 @@
     "lint:observe": "./scripts/lint-observability.sh",
     "gate": "npm run gate:static && npm run gate:runtime",
     "verify:orchestrator": "tsx scripts/verify-orchestrator.ts",
+    "verify:orchestrator:core": "tsx scripts/verify-orchestrator.ts --core-only",
     "verify:flow-recovery": "tsx scripts/verify-flow-recovery.ts",
     "verify:agents": "npm run verify:agent-teamspace",
     "build:web": "./scripts/build-web.sh",

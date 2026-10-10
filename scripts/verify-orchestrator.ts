@@ -12,6 +12,7 @@
 //
 // 前提：后端已在 APP_PORT 运行（属于 gate:runtime，运行前需启动后端）。
 // 用法：npm run verify:orchestrator    退出码 0 = 全过；1 = 判红。
+//   npm run verify:orchestrator:core    只跑离线引擎、双进程恢复与队列断言。
 // 留痕：全部通过后记一行 action_log: verify-orchestrator（断言 ⑨）。
 import { DatabaseSync } from 'node:sqlite'
 import { execFileSync, spawn } from 'node:child_process'
@@ -345,6 +346,10 @@ async function verifyConcurrentEngineRecovery(): Promise<void> {
       VALUES ('a_engine_race', 'a_engine_race', '!', '并发验收协调者', 'agent', ?)`).run(timestamp)
     db.prepare(`INSERT INTO session_members(session_id, principal_id, role, status, joined_at)
       VALUES ('s_engine_race', 'a_engine_race', '协调者', 'active', ?)`).run(timestamp)
+    // Hold the shared slot before either process starts recovery. This forces
+    // both engines down recoveryPending and exercises the post-wait refresh.
+    db.prepare(`INSERT INTO session_work_owners(process_id, session_id, owner, expires_at)
+      VALUES ('test-lease-holder', 's_engine_race', 'orchestrator:s_engine_race', ?)`).run(Date.now() + 30_000)
     const seed = new Context()
     new SqliteSessionStore(seed, db)
     new SqliteEventLog(seed, db)
@@ -386,8 +391,16 @@ async function verifyConcurrentEngineRecovery(): Promise<void> {
     }
     await waitUntil(() => roles.every((role) => existsSync(join(dir, `${role}.ready`))), '两个 worker 初始化')
     writeFileSync(join(dir, 'begin'), 'start')
+    await waitUntil(() => roles.every((role) => existsSync(join(dir, `${role}.waiting-for-lease`))), '两个 worker 等待旧租约')
+    const waitingWorkers = roles.filter((role) => existsSync(join(dir, `${role}.waiting-for-lease`))).length
+    const releaseDb = new DatabaseSync(dbPath)
+    releaseDb.exec('PRAGMA busy_timeout = 5000')
+    releaseDb.prepare("DELETE FROM session_work_owners WHERE process_id = 'test-lease-holder'").run()
+    releaseDb.close()
     await waitUntil(() => roles.some((role) => existsSync(join(dir, `${role}.brain-started`))), '协调大脑启动')
     const winner = roles.find((role) => existsSync(join(dir, `${role}.brain-started`)))!
+    const loser = roles.find((role) => role !== winner)!
+    await waitUntil(() => existsSync(join(dir, `${loser}.saw-peer-active`)), '落败进程观察到胜者持有会话槽位')
     writeFileSync(join(dir, `${winner}.release`), 'release')
     await new Promise((resolve) => setTimeout(resolve, 300))
     // Release a second brain too if a regression started it, so the verifier
@@ -419,6 +432,8 @@ async function verifyConcurrentEngineRecovery(): Promise<void> {
       })
     check('M1 两个独立 OS 进程恢复同一 Plan 时，大脑只调用一次', brainCalls === 1 && workerErrors.length === 0,
       `brainCalls=${brainCalls}, workers=${workerErrors.join(' | ') || 'ok'}`)
+    check('M1b 两个进程均先等待旧会话租约，再恢复持久 Plan', waitingWorkers === 2,
+      `waitingWorkers=${waitingWorkers}`)
     check('M2 协调者结果唯一，持久回合最终完成', outcomeCount === 1 && finalTurn?.stopReason === 'completed',
       `outcomes=${outcomeCount}, turn=${JSON.stringify(finalTurn)}`)
   } finally {
@@ -727,7 +742,10 @@ async function partB(): Promise<void> {
 
   // B1: @ 仍触发 Plan，但验收指令明确要求协调者直接结束，不派发后台
   // Agent 工作；这样 runtime gate 不会遗留真实模型驱动的长任务占用全局槽位。
-  const b1 = await post('@需求分析师 接线验收：请协调者只回复“接线正常”，不要委托任何 Agent 执行任务。')
+  // Mention the coordinator itself: it is a valid trigger but deliberately not
+  // a dispatch target, so this runtime check cannot accidentally start real
+  // Agent work when a model treats an @Agent hint as a delegation request.
+  const b1 = await post('@协调者 接线验收：请只回复“接线正常”，不要委托任何 Agent 执行任务。')
   check('B1a 接受已登录 Team 的 @ 提及消息', b1.status === 200, JSON.stringify(b1.body))
   let inboxPaused = false
   // Memory catch-up calls the configured LLM for each invited Agent. Allow the
@@ -768,6 +786,7 @@ async function partB(): Promise<void> {
 
 // ══════════════════════════════════════════════════════════════════════════
 async function main(): Promise<void> {
+  const coreOnly = process.argv.includes('--core-only')
   console.log(`verify-orchestrator：P3 协作大脑端到端验收（APP_PORT=${PORT}）`)
   await partA()
   await verifyDecisionPause()
@@ -776,14 +795,15 @@ async function main(): Promise<void> {
   await verifyOrphanedChainRecovery()
   await verifyConcurrentEngineRecovery()
   await verifyQueuedPlans()
-  await partB()
+  if (!coreOnly) await partB()
   console.log(`\n结果：${passes} 过 / ${failures} 红`)
   if (failures > 0) {
     console.log('✗ verify-orchestrator 判红 —— 改坏了（铁律 2：断言必须能红）')
     process.exit(1)
   }
-  execFileSync(process.execPath, ['scripts/record-action.mjs', 'verify-orchestrator', '{"ok":true}'], { stdio: 'inherit' })
-  console.log('✓ verify-orchestrator 全过（断言留痕：action_log: verify-orchestrator）')
+  const action = coreOnly ? 'verify-orchestrator-core' : 'verify-orchestrator'
+  execFileSync(process.execPath, ['scripts/record-action.mjs', action, '{"ok":true}'], { stdio: 'inherit' })
+  console.log(`✓ ${action} 全过（断言留痕：action_log: ${action}）`)
 }
 
 await main()

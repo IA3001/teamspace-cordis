@@ -1,0 +1,24 @@
+[Unit]
+Description=Teamspace Cordis collaboration service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=teamspace
+Group=teamspace
+# For the system Docker daemon; remove this when using rootless Docker.
+SupplementaryGroups=docker
+# Keep the checkout and data directory at a stable path across releases.
+WorkingDirectory=/srv/teamspace-cordis
+ExecStart=/usr/bin/env npm start
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -8,7 +8,17 @@
 2. 执行 `npm ci` 安装锁定依赖；复制 `.env.example` 为 `.env`，设置 `NODE_ENV=production`、监听地址和端口、日志时区，以及后台独立凭据 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD`。生成 `SETTINGS_ENCRYPTION_KEY`（`openssl rand -base64 32`）并保存在部署密钥管理处；它用于加密数据库中的模型和搜索 API 密钥，必须与数据库备份分开备份，丢失后需重新录入 API 凭据。确保默认 `PATH` 中的 Node.js 至少为 22.5；只有需要固定某个 Node 安装时才设置 `NODE_BIN_DIR`（例如 `/usr/bin`）。生产密码至少 6 位，建议使用密码管理器生成的长随机值。不要把 `.env` 提交到 Git。
 3. 首次启动前运行 `npm run migrate` 创建或升级 SQLite schema。后续版本升级前先运行 `npm run backup`，再运行迁移。
 4. 执行 `npm run gate:static`。在隔离、合成数据的预发副本先用 `NODE_ENV=development` 启动候选版本，再执行 `npm run gate:runtime`；该门禁包含后台/Teamspace 可达性、Playwright UI 回归、写入型 `smoke` 和运行时验证。预发主机需安装可运行的 Chromium；非标准路径通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定。Runtime gate 会创建验收账号和会话、调整 seed demo 会话成员，并可能触发真实模型调用，因此不要对有真实团队数据的生产实例运行。随后使用独立 `.env`、数据库和密钥，以 `NODE_ENV=production` 重启隔离副本，核对 `/healthz`、后台管理员登录、Team 注册/登录及两类 token 互相拒绝；生产模式不要运行 `smoke` 或完整 `gate:runtime`，smoke 会主动拒绝生产环境。确认检查通过后再将版本切为当前发布。
-5. 以专用账号运行 `npm start`。推荐由 systemd 或同类服务管理器托管，并设置工作目录为仓库根目录、失败自动重启、日志进入 journald。不要以 root 运行应用。
+5. 以专用账号运行 `npm start`。systemd 部署可使用仓库模板 `deploy/teamspace-cordis.service`：模板固定以 `teamspace` 用户运行 `/srv/teamspace-cordis` 下的 checkout，失败后自动重启，stdout/stderr 进入 journald。确保稳定路径、`.env` 和 `data/` 属于该账号；模板默认授予系统 Docker daemon 的 `docker` 组访问权，改用 rootless Docker 时移除此行并配置该账号的 rootless socket。按实际 Node/npm 安装位置调整 `PATH` 或 `/usr/bin/env`。不要以 root 运行应用。
+
+```sh
+sudo install -o root -g root -m 0644 deploy/teamspace-cordis.service /etc/systemd/system/teamspace-cordis.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now teamspace-cordis
+sudo systemctl status teamspace-cordis
+journalctl -u teamspace-cordis -n 100 --no-pager
+```
+
+配额助手需要通过 sudo 更新 XFS project 映射，因此不要在 unit 中启用 `NoNewPrivileges=true` 或只读 `/etc` 沙箱，除非同时为助手设计并验收了相应的 systemd 文件权限例外。更新时用 `systemctl stop/start teamspace-cordis`；发布路径固定时无需改 unit。
 
 ## 预发验收与恢复演练
 

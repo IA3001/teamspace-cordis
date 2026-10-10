@@ -344,6 +344,9 @@ const TeamspacePage = defineComponent({
     const nearBottom = ref(true)
     const hasRail = computed(() => (appCtx.client.router.views['space-teamspace-sidebar']?.length ?? 0) > 0)
     const scrollbar = ref<{ setScrollTop: (v: number) => unknown } | null>(null)
+    /** 非贴底阅读时，保留视口顶部附近的消息及其相对位置，供窗口缩放后恢复。 */
+    let scrollAnchor: { id: string; offset: number } | null = null
+    let resizeFrame = 0
     let replyTimer: ReturnType<typeof setTimeout> | undefined
     let socket: WebSocket | undefined
     let replySeq = 0 // 乐观事件本地 id 序号
@@ -972,6 +975,14 @@ const TeamspacePage = defineComponent({
       if (!wrap) return
       const gap = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight
       nearBottom.value = gap < 80
+      if (!nearBottom.value) {
+        const wrapTop = wrap.getBoundingClientRect().top
+        const row = [...wrap.querySelectorAll<HTMLElement>('[data-ev-id]')]
+          .find((item) => item.getBoundingClientRect().bottom > wrapTop)
+        if (row?.dataset.evId) {
+          scrollAnchor = { id: row.dataset.evId, offset: row.getBoundingClientRect().top - wrapTop }
+        }
+      }
     }
     function scrollToBottom() {
       void scrollbar.value?.setScrollTop(999999)
@@ -1032,9 +1043,32 @@ const TeamspacePage = defineComponent({
       panelOpen.value = !event.matches
     }
 
+    function onWindowResize() {
+      const stickToBottom = nearBottom.value
+      const anchor = scrollAnchor
+      cancelAnimationFrame(resizeFrame)
+      // 等浏览器完成新宽度下的换行与布局，再按消息行恢复阅读位置。
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = requestAnimationFrame(() => {
+          if (stickToBottom) { scrollToBottom(); return }
+          if (!anchor) return
+          const wrap = document.querySelector('.content-body .el-scrollbar__wrap') as HTMLElement | null
+          const row = [...(wrap?.querySelectorAll<HTMLElement>('[data-ev-id]') ?? [])]
+            .find((item) => item.dataset.evId === anchor.id)
+          if (!wrap || !row) return
+          const wrapTop = wrap.getBoundingClientRect().top
+          const offset = row.getBoundingClientRect().top - wrapTop
+          wrap.scrollTop += offset - anchor.offset
+        })
+      })
+    }
+
     onMounted(async () => {
       document.addEventListener('visibilitychange', onVisibilityChange)
       mobileViewport.addEventListener('change', onViewportChange)
+      window.addEventListener('resize', onWindowResize)
+      document.querySelector('.content-body .el-scrollbar__wrap')
+        ?.addEventListener('scroll', onScroll, { passive: true })
       const meRes = await rpc.value.me(getToken())
       if (!meRes || isUnauth(meRes)) { unauthed(); return }
       me.value = meRes
@@ -1063,8 +1097,10 @@ const TeamspacePage = defineComponent({
     onUnmounted(() => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       mobileViewport.removeEventListener('change', onViewportChange)
+      window.removeEventListener('resize', onWindowResize)
       document.querySelector('.content-body .el-scrollbar__wrap')
         ?.removeEventListener('scroll', onScroll)
+      cancelAnimationFrame(resizeFrame)
       socket?.removeEventListener('message', onSocketMessage)
       socket?.removeEventListener('open', onSocketOpen)
       clearTimeout(replyTimer)

@@ -60,7 +60,9 @@ if (!(await page.locator('textarea').count())) {
   } finally { db.close() }
   await page.goto(`${teamspaceBase}/teamspace`, { waitUntil: 'networkidle', timeout: 20000 })
 }
-if (!(await page.locator('textarea').count())) throw new Error('登录后未进入 Teamspace 消息输入区')
+if (!(await page.locator('textarea').count())) throw new Error(
+  `登录后未进入 Teamspace 消息输入区；url=${page.url()}；body=${(await page.locator('body').innerText()).slice(0, 240)}；errors=${errs.join(' | ')}`,
+)
 await page.waitForTimeout(2500)
 const ta = page.locator('textarea')
 const reds = []
@@ -102,6 +104,43 @@ const judge = (name, ok, detail) => { console.log(`[AS] ${name}: ${ok ? 'GREEN' 
     ok &&= offset <= 12 && placement.gap > 80
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
   judge('AS6 未读定位按真实消息行高度精确滚动', ok, detail.join(' | '))
+}
+
+// A viewport resize must preserve the message currently being read, even when
+// narrow-screen wrapping changes the transcript's total height substantially.
+{
+  let ok = true; const detail = []
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.waitForTimeout(150)
+    const rows = page.locator('.sp-list .sp-msg[data-ev-id]')
+    const target = await rows.nth(Math.floor((await rows.count()) * 0.6)).getAttribute('data-ev-id')
+    const wrap = page.locator('.content-body .el-scrollbar__wrap')
+    await page.evaluate((id) => {
+      const scroller = document.querySelector('.content-body .el-scrollbar__wrap')
+      const row = document.querySelector(`.sp-msg[data-ev-id="${id}"]`)
+      scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientHeight / 2
+    }, target)
+    await page.waitForTimeout(200)
+    const anchor = await wrap.evaluate((element) => {
+      const top = element.getBoundingClientRect().top
+      const row = [...element.querySelectorAll('.sp-msg[data-ev-id]')]
+        .find((item) => item.getBoundingClientRect().bottom > top)
+      return row && { id: row.getAttribute('data-ev-id'), offset: row.getBoundingClientRect().top - top }
+    })
+    if (!anchor) throw new Error('resize 前未能捕获可见消息锚点')
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.waitForTimeout(500)
+    const after = await page.locator(`.sp-msg[data-ev-id="${anchor.id}"]`).evaluate((row) => {
+      const scroller = document.querySelector('.content-body .el-scrollbar__wrap')
+      return row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    })
+    const drift = Math.abs(after - anchor.offset)
+    detail.push(`同一消息=${anchor.id}，缩放前后偏移差=${Math.round(drift)}px`)
+    ok &&= drift <= 12
+    await page.setViewportSize({ width: 1440, height: 900 })
+  } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
+  judge('AS9 窗口缩放保留时间线阅读位置', ok, detail.join(' | '))
 }
 
 console.log('== 常规回归（草稿 / 菜单 / 抽屉 / 消息卡）==')

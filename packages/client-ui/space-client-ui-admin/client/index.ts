@@ -104,6 +104,7 @@ const AdminPage = defineComponent({
       removeTextProfile(token: string, id: string): Promise<WriteResult | null>
       setDefaultTextProfile(token: string, id: string): Promise<WriteResult | null>
       testTextProfile(token: string, id: string): Promise<WriteResult | null>
+      testTextProfileStream(token: string, id: string): Promise<WriteResult | null>
       saveEmbeddingApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }): Promise<WriteResult | null>
       saveWebSearchApi(token: string, cfg: { baseURL?: string; apiKey?: string }): Promise<WriteResult | null>
       testTextApi(token: string): Promise<WriteResult | null>
@@ -288,6 +289,12 @@ const AdminPage = defineComponent({
       const result = await rpc.value.testTextProfile(getToken(), id)
       apiBusy.value = ''
       apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '测试失败'}`
+    }
+    async function testTextProfileStream(id: string) {
+      apiBusy.value = `test-profile-stream-${id}`
+      const result = await rpc.value.testTextProfileStream(getToken(), id)
+      apiBusy.value = ''
+      apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '流式测试失败'}`
     }
     async function removeTextProfile(id: string) {
       const result = await rpc.value.removeTextProfile(getToken(), id)
@@ -592,10 +599,11 @@ const AdminPage = defineComponent({
               h(ElTableColumn, { prop: 'baseURL', label: 'Base URL', minWidth: 220 }),
               h(ElTableColumn, { prop: 'model', label: '模型', minWidth: 150 }),
               h(ElTableColumn, { label: '密钥', width: 125 }, { default: (scope: { row: ApiConfig['textProfiles'][number] }) => scope.row.hasKey ? `已保存 · …${scope.row.keyTail}` : '未配置' }),
-              h(ElTableColumn, { label: '操作', minWidth: 310, fixed: 'right' }, {
+              h(ElTableColumn, { label: '操作', minWidth: 390, fixed: 'right' }, {
                 default: (scope: { row: ApiConfig['textProfiles'][number] }) => h(ElSpace, null, { default: () => [
                   h(ElButton, { size: 'small', onClick: () => editTextProfile(scope.row) }, { default: () => '编辑' }),
                   h(ElButton, { size: 'small', loading: apiBusy.value === `test-profile-${scope.row.id}`, onClick: () => void testTextProfile(scope.row.id) }, { default: () => '测试' }),
+                  h(ElButton, { size: 'small', loading: apiBusy.value === `test-profile-stream-${scope.row.id}`, onClick: () => void testTextProfileStream(scope.row.id) }, { default: () => '流式测试' }),
                   h(ElButton, { size: 'small', type: 'primary', disabled: apiConfig.value?.activeTextProfileRef === scope.row.id, onClick: () => void setDefaultTextProfile(scope.row.id) }, { default: () => apiConfig.value?.activeTextProfileRef === scope.row.id ? '当前默认' : '设为默认' }),
                   h(ElButton, { size: 'small', type: 'danger', onClick: () => void removeTextProfile(scope.row.id) }, { default: () => '删除' }),
                 ] }),

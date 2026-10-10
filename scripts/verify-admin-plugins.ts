@@ -15,6 +15,7 @@ let decision: string | undefined
 let delivered = false
 const settingValues = new Map<string, unknown>()
 let testedProfile = ''
+let streamedProfile = ''
 let agentProfileRefs: Array<{ llmProfileRef: string }> = []
 const ctx = {
   webui: { addEntry: (_entry: unknown, exposed: Record<string, (...args: any[]) => Promise<any>>) => { rpc = exposed } },
@@ -37,7 +38,16 @@ const ctx = {
   },
   llm: {
     configured: true,
-    chat: async (_messages: unknown, options?: { profileRef?: string }) => { testedProfile = options?.profileRef ?? ''; return 'pong' },
+    chat: async (_messages: unknown, options?: { profileRef?: string; onToken?: (delta: string) => void }) => {
+      if (options?.onToken) {
+        streamedProfile = options.profileRef ?? ''
+        options.onToken('流式')
+        options.onToken('测试成功')
+        return '流式测试成功'
+      }
+      testedProfile = options?.profileRef ?? ''
+      return 'pong'
+    },
   },
   embeddings: { configured: true },
   agentCatalog: { list: () => agentProfileRefs },
@@ -77,6 +87,12 @@ assert.deepEqual(apiConfig.textProfiles[0], {
 assert.equal(JSON.stringify(apiConfig).includes('profile-secret'), false, 'profile credentials are never returned by admin config')
 assert.equal((await rpc.testTextProfile('admin-session', 'ark-code')).ok, true)
 assert.equal(testedProfile, 'ark-code')
+assert.equal(await rpc.testTextProfileStream('invalid-session', 'ark-code'), null)
+const streamResult = await rpc.testTextProfileStream('admin-session', 'ark-code')
+assert.equal(streamResult.ok, true)
+assert.match(streamResult.detail, /2 段/u)
+assert.match(streamResult.detail, /6 字符/u)
+assert.equal(streamedProfile, 'ark-code')
 assert.equal((await rpc.setDefaultTextProfile('admin-session', 'ark-code')).ok, true)
 assert.equal((await rpc.getApiConfig('admin-session')).activeTextProfileRef, 'ark-code')
 agentProfileRefs = [{ llmProfileRef: 'ark-code' }]

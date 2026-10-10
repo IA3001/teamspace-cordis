@@ -225,6 +225,33 @@ export function apply(ctx: Context) {
         return { ok: true, detail: `连通正常（${Date.now() - started}ms）：${answer.slice(0, 80)}` }
       } catch (e) { return { ok: false, ...fail(e) } }
     },
+    async testTextProfileStream(token: string, idInput: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      const started = Date.now()
+      let firstDeltaMs: number | undefined
+      let chunks = 0
+      let characters = 0
+      try {
+        const answer = await ctx.llm.chat([{ role: 'user', content: '请只回复：流式测试成功' }], {
+          timeoutMs: 30000,
+          profileRef: String(idInput ?? '').trim(),
+          onToken: (delta) => {
+            if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - started
+            chunks += 1
+            characters += Array.from(delta).length
+          },
+        })
+        audit(ctx, admin.id, 'test_text_profile_stream', String(idInput ?? '').trim())
+        return {
+          ok: true,
+          detail: `流式请求完成（首段 ${firstDeltaMs ?? '无'}ms，${chunks} 段，${characters || answer.length} 字符，总计 ${Date.now() - started}ms）`,
+        }
+      } catch (e) {
+        audit(ctx, admin.id, 'test_text_profile_stream_failed', String(idInput ?? '').trim())
+        return { ok: false, ...fail(e) }
+      }
+    },
     async testEmbeddingApi(token: string) {
       if (!(await auth(ctx, token))) return null
       const started = Date.now()

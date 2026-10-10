@@ -233,7 +233,7 @@ export function apply(ctx: Context) {
       let chunks = 0
       let characters = 0
       try {
-        const answer = await ctx.llm.chat([{ role: 'user', content: '请只回复：流式测试成功' }], {
+        await ctx.llm.chat([{ role: 'user', content: '请只回复：流式测试成功' }], {
           timeoutMs: 30000,
           profileRef: String(idInput ?? '').trim(),
           onToken: (delta) => {
@@ -245,11 +245,16 @@ export function apply(ctx: Context) {
         audit(ctx, admin.id, 'test_text_profile_stream', String(idInput ?? '').trim())
         return {
           ok: true,
-          detail: `流式请求完成（首段 ${firstDeltaMs ?? '无'}ms，${chunks} 段，${characters || answer.length} 字符，总计 ${Date.now() - started}ms）`,
+          detail: `流式请求完成（${streamMetrics()}）`,
         }
       } catch (e) {
         audit(ctx, admin.id, 'test_text_profile_stream_failed', String(idInput ?? '').trim())
-        return { ok: false, ...fail(e) }
+        const failure = fail(e)
+        return { ok: false, ...failure, detail: `${failure.detail}（${streamMetrics()}）` }
+      }
+
+      function streamMetrics() {
+        return `首段 ${firstDeltaMs === undefined ? '未收到' : `${firstDeltaMs}ms`}，${chunks} 段，${characters} 字符，总计 ${Date.now() - started}ms`
       }
     },
     async testEmbeddingApi(token: string) {

@@ -16,6 +16,7 @@ let delivered = false
 const settingValues = new Map<string, unknown>()
 let testedProfile = ''
 let streamedProfile = ''
+let failStreamTest = false
 let agentProfileRefs: Array<{ llmProfileRef: string }> = []
 const ctx = {
   webui: { addEntry: (_entry: unknown, exposed: Record<string, (...args: any[]) => Promise<any>>) => { rpc = exposed } },
@@ -41,6 +42,10 @@ const ctx = {
     chat: async (_messages: unknown, options?: { profileRef?: string; onToken?: (delta: string) => void }) => {
       if (options?.onToken) {
         streamedProfile = options.profileRef ?? ''
+        if (failStreamTest) {
+          options.onToken('部分')
+          throw new Error('mock stream timeout')
+        }
         options.onToken('流式')
         options.onToken('测试成功')
         return '流式测试成功'
@@ -93,6 +98,12 @@ assert.equal(streamResult.ok, true)
 assert.match(streamResult.detail, /2 段/u)
 assert.match(streamResult.detail, /6 字符/u)
 assert.equal(streamedProfile, 'ark-code')
+failStreamTest = true
+const interruptedStreamResult = await rpc.testTextProfileStream('admin-session', 'ark-code')
+assert.equal(interruptedStreamResult.ok, false)
+assert.match(interruptedStreamResult.detail, /mock stream timeout/u)
+assert.match(interruptedStreamResult.detail, /1 段，2 字符/u, 'failed stream tests retain partial output metrics')
+failStreamTest = false
 assert.equal((await rpc.setDefaultTextProfile('admin-session', 'ark-code')).ok, true)
 assert.equal((await rpc.getApiConfig('admin-session')).activeTextProfileRef, 'ark-code')
 agentProfileRefs = [{ llmProfileRef: 'ark-code' }]

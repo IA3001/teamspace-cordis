@@ -47,9 +47,11 @@ engine.registerBrain({
     brainCalls++
     const cursorRows = await memory.recall('agent:a_mixed_worker', { kind: 'cursor:s_mixed', limit: 10 })
     const memories = await memory.recall('agent:a_mixed_worker', { kind: 'conversation_fact:0', limit: 10 })
+    const causalMemory = memories.find((item) =>
+      item.sourceEventId === eventId || item.sourceEventIds.includes(eventId))
     writeFileSync(`${signalDir}/brain-started`, JSON.stringify({
       cursor: Math.max(0, ...cursorRows.map((row) => Number(row.text) || 0)),
-      memory: memories[0]?.text ?? null,
+      memory: causalMemory?.text ?? null,
     }))
     const deadline = Date.now() + 10_000
     while (!existsSync(`${signalDir}/release-brain`) && Date.now() < deadline) {

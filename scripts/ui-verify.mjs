@@ -2,6 +2,7 @@
 // 断言区（AS1~AS10）任何一条不满足 → 输出 RED，进程退出码 1。
 // Playwright 使用标准浏览器缓存；自定义浏览器路径通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定。
 import { chromium } from 'playwright-core'
+import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readFileSync } from 'node:fs'
 const envPath = new URL('../.env', import.meta.url)
@@ -16,6 +17,7 @@ if (!teamspacePort || Number(teamspacePort) < 1 || Number(teamspacePort) > 65535
 }
 const teamspaceBase = `http://127.0.0.1:${teamspacePort}`
 let temporaryDemoMember = null
+let temporaryDecisionSession = null
 function cleanTemporaryDemoMember() {
   if (!temporaryDemoMember) return true
   const { sessionId, userId } = temporaryDemoMember
@@ -33,7 +35,25 @@ function cleanTemporaryDemoMember() {
     return false
   } finally { db.close() }
 }
+function cleanTemporaryDecisionSession() {
+  if (!temporaryDecisionSession) return true
+  const sessionId = temporaryDecisionSession
+  const db = new DatabaseSync('data/database.db')
+  try {
+    db.exec('PRAGMA foreign_keys=ON')
+    const events = db.prepare('SELECT rowid, text FROM events WHERE session_id=?').all(sessionId)
+    const removeSearchEntry = db.prepare("INSERT INTO events_fts(events_fts, rowid, text) VALUES ('delete', ?, ?)")
+    for (const event of events) removeSearchEntry.run(event.rowid, event.text)
+    db.prepare('DELETE FROM sessions WHERE id=?').run(sessionId)
+    temporaryDecisionSession = null
+    return !db.prepare('SELECT 1 FROM sessions WHERE id=?').get(sessionId)
+  } catch (error) {
+    console.error(`[ui-verify] 无法清理临时 DRI 决策会话：${String(error?.message ?? error)}`)
+    return false
+  } finally { db.close() }
+}
 process.once('exit', cleanTemporaryDemoMember)
+process.once('exit', cleanTemporaryDecisionSession)
 const browser = await chromium.launch(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
   ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }
   : {})
@@ -270,7 +290,13 @@ console.log('== 断言区 ==')
     const maxMs = Math.max(...steps.map((x) => x[1]))
     detail.push(`10步耗时=${JSON.stringify(steps.map((x) => x[1]))}ms max=${maxMs}ms`)
     ok &&= maxMs < 1000
-    await toggle.click(); await page.waitForTimeout(150) // 恢复展开态
+    if (!(await page.locator('aside.page-sidebar').count())) {
+      await toggle.click()
+      await page.waitForTimeout(150)
+    }
+    const restoredExpanded = (await page.locator('aside.page-sidebar').count()) === 1
+    detail.push(`交互探针后恢复桌面会话栏=${restoredExpanded}`)
+    ok &&= restoredExpanded
     // Do not leave the interaction probe in the composer shown in the final screenshot.
     await page.locator('textarea').fill('')
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 80)) }
@@ -561,6 +587,107 @@ console.log('== 断言区 ==')
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 120)) }
   finally { await mobileContext?.close() }
   judge('AS8 Agent 管理页桌面双栏与窄屏堆叠', ok, detail.join(' | '))
+}
+
+// AS11 A real isolated session verifies the complete DRI decision card lifecycle.
+{
+  let ok = true; const detail = []
+  let eventId = ''
+  try {
+    const token = await page.evaluate(() => localStorage.getItem('space_token'))
+    const db = new DatabaseSync('data/database.db')
+    try {
+      const user = db.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)
+      const agent = db.prepare('SELECT id FROM agent_definitions WHERE id=?').get('a_analyst')
+      if (!user?.user_id || !agent?.id) throw new Error('缺少 UI 验收账号或共享 Agent')
+      temporaryDecisionSession = `s_ui_decision_${randomUUID().replaceAll('-', '')}`
+      eventId = `e_ui_decision_${randomUUID().replaceAll('-', '')}`
+      const now = new Date().toISOString()
+      db.prepare(`INSERT INTO sessions(id,title,status,created_at,updated_at)
+        VALUES (?, 'UI 决策卡片验收', 'open', ?, ?)`).run(temporaryDecisionSession, now, now)
+      db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
+        VALUES (?, ?, 'DRI', 'active', ?, NULL, ''), (?, 'a_analyst', '成员', 'active', ?, NULL, '')`)
+        .run(temporaryDecisionSession, user.user_id, now, temporaryDecisionSession, now)
+      const addEvent = (id, seq, authorId, authorKind, kind, text, replyTo = null) =>
+        db.prepare(`INSERT INTO events(id,session_id,seq,phase_id,ts,author_id,author_kind,kind,text,
+          mentions,tool_calls,reply_mode,reply_to) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, '[]', '[]', '', ?)`)
+          .run(id, temporaryDecisionSession, seq, new Date(Date.now() + seq).toISOString(), authorId,
+            authorKind, kind, text, replyTo)
+      addEvent(eventId, 1, 'a_analyst', 'agent', 'message',
+        '建议采用方案 A。\n【需要DRI决策】是否接受方案 A？')
+    } finally { db.close() }
+
+    await page.goto(`${teamspaceBase}/teamspace?session=${encodeURIComponent(temporaryDecisionSession)}`,
+      { waitUntil: 'networkidle', timeout: 20000 })
+    const message = page.locator(`.sp-msg[data-ev-id="${eventId}"]`)
+    await message.waitFor({ timeout: 10000 })
+    const bubble = await message.locator('.sp-bubble').innerText()
+    const pendingCard = message.locator('.el-alert')
+    const pendingText = await pendingCard.innerText()
+    const pendingVisible = bubble.includes('建议采用方案 A。') && !bubble.includes('【需要DRI决策】') &&
+      pendingText.includes('待 DRI 决策') && pendingText.includes('是否接受方案 A？')
+    detail.push(`建议正文与待决问题分开展示=${pendingVisible}`)
+    ok &&= pendingVisible
+    const authorName = await message.locator('.sp-msg-name').innerText()
+    const namedAgent = authorName === '需求分析师'
+    detail.push(`消息作者优先显示共享 Agent 名称=${namedAgent}（${authorName}）`)
+    ok &&= namedAgent
+    await page.screenshot({ path: '/tmp/ui-decision-card.png' })
+
+    await message.locator('.sp-msg-meta .el-dropdown').click()
+    await page.getByText('通过（先复核）', { exact: true }).click()
+    const commandDraft = await page.locator('textarea').inputValue()
+    const fixedCommand = commandDraft === `/decision pass ${eventId}`
+    detail.push(`DRI 菜单填入固定命令草稿=${fixedCommand}`)
+    ok &&= fixedCommand
+    await page.locator('textarea').fill('')
+
+    const decisionDb = new DatabaseSync('data/database.db')
+    try {
+      const addEvent = (id, seq, authorId, authorKind, kind, text, replyTo = null) =>
+        decisionDb.prepare(`INSERT INTO events(id,session_id,seq,phase_id,ts,author_id,author_kind,kind,text,
+          mentions,tool_calls,reply_mode,reply_to) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, '[]', '[]', '', ?)`)
+          .run(id, temporaryDecisionSession, seq, new Date(Date.now() + seq).toISOString(), authorId,
+            authorKind, kind, text, replyTo)
+      const reviewId = `e_ui_review_${randomUUID().replaceAll('-', '')}`
+      addEvent(reviewId, 2, (decisionDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)).user_id,
+        'human', 'decision', '【撤回复核请求】\n拟决策：pass', eventId)
+      await page.reload({ waitUntil: 'networkidle' })
+      const reviewing = await message.locator('.el-alert').innerText()
+      detail.push(`正在复核状态显示=${reviewing.includes('正在收集复核意见')}`)
+      ok &&= reviewing.includes('正在收集复核意见')
+
+      addEvent(`e_ui_review_done_${randomUUID().replaceAll('-', '')}`, 3, null, 'system', 'system',
+        '【复核完成】1 个 Agent 提出问题。', reviewId)
+      await page.reload({ waitUntil: 'networkidle' })
+      const reviewDone = await message.locator('.el-alert').innerText()
+      detail.push(`复核完成待定案状态显示=${reviewDone.includes('复核完成，待 DRI 定案')}`)
+      ok &&= reviewDone.includes('复核完成，待 DRI 定案')
+
+      addEvent(`e_ui_decision_done_${randomUUID().replaceAll('-', '')}`, 4,
+        (decisionDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)).user_id,
+        'human', 'approval', 'DRI 决策：通过\n目标事件：' + eventId, eventId)
+    } finally { decisionDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+    const resolvedText = await message.locator('.el-alert').innerText()
+    const resolved = resolvedText.includes('DRI 已通过')
+    detail.push(`最终决定状态显示=${resolved}`)
+    ok &&= resolved
+  } catch (e) {
+    ok = false
+    detail.push('异常:' + String(e).slice(0, 140))
+  } finally {
+    const sessionId = temporaryDecisionSession
+    const cleaned = cleanTemporaryDecisionSession()
+    detail.push(`验收会话及全文索引已清理=${cleaned}`)
+    ok &&= cleaned
+    if (sessionId) await page.evaluate((id) => {
+      localStorage.removeItem(`space_seen_${id}`)
+      localStorage.removeItem(`space_draft_${id}`)
+    }, sessionId).catch(() => {})
+    await page.goto(`${teamspaceBase}/teamspace?session=s_seed_demo`, { waitUntil: 'networkidle' }).catch(() => {})
+  }
+  judge('AS11 DRI 决策卡片状态与固定命令草稿', ok, detail.join(' | '))
 }
 
 console.log('页面错误:', errs.length ? errs : '（无）')

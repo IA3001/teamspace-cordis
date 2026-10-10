@@ -39,6 +39,8 @@ import { authorLabel, formatTime, memberLabel } from 'space-client-ui-shared/cli
 import type { EventLite, MemberLite } from 'space-client-ui-shared/client/labels.ts'
 import { AgentManagementPage, AGENT_PAGE_ICON } from './agents.ts'
 import { appendProgressDelta, progressPreviewLabel } from './progress.ts'
+import { groupActivityEvents } from './activity-groups.ts'
+import { decisionPresentation } from './decision-presentation.ts'
 
 interface SessionLite { id: string; title: string; status: string; updatedAt?: string }
 interface SessionWorkLite {
@@ -1165,6 +1167,7 @@ const TeamspacePage = defineComponent({
       const ElTabPane = resolveComponent('el-tab-pane') as unknown as string
       const ElCollapse = resolveComponent('el-collapse') as unknown as string
       const ElCollapseItem = resolveComponent('el-collapse-item') as unknown as string
+      const ElAlert = resolveComponent('el-alert') as unknown as string
 
       const work = sessionWork.value
       const busySession = work?.activeSessionId
@@ -1294,6 +1297,7 @@ const TeamspacePage = defineComponent({
 
       const messageRow = (ev: TEvent, flowView?: FlowEventView | null, causalCounts: ReadonlyMap<string, number> = new Map()) => {
         const isFlow = ev.authorKind === 'system' && !ev.voided && !!flowView
+        const decision = ev.voided ? null : decisionPresentation(ev, events.value)
         // 服务流程进度卡片：el-card 内 el-text 说明行 + el-steps（active = 已完成步数）。
         const flowCard = flowView
           ? h('div', { key: `flow-${ev.id}`, class: 'sp-flow' }, [
@@ -1352,19 +1356,21 @@ const TeamspacePage = defineComponent({
           return h('div', { class: 'sp-sys', key: ev.id },
             h(ElText, { size: 'small', type: 'info' }, { default: () => ev.text }))
         }
-        const membersView = [...members.value,
-      ...humans.value.map((u) => ({ principalId: u.id, role: u.displayName, duty: u.displayName })),
-      ...agents.value.map((a) => ({ principalId: a.id, role: a.title, duty: a.title }))]
-    // 聊天名字只显示显示名（id 收进悬停 title，不占版面）。
-    const m0 = membersView.find((x) => x.principalId === ev.authorId)
-    const name = m0 ? (m0.duty?.trim() ? m0.duty : m0.role) : (ev.authorId ?? '系统')
+        const sessionMember = members.value.find((item) => item.principalId === ev.authorId)
+        const directoryAgent = agents.value.find((item) => item.id === ev.authorId)
+        const directoryHuman = humans.value.find((item) => item.id === ev.authorId)
+        const memberName = sessionMember?.duty?.trim() || sessionMember?.role
+        // A generic session role such as “成员” must not mask the shared Agent title.
+        const name = ev.authorKind === 'agent'
+          ? directoryAgent?.title || memberName || ev.authorId || 'Agent'
+          : memberName || directoryHuman?.displayName || directoryHuman?.username || ev.authorId || '系统'
         const bubble: VNodeChild = ev.voided
           ? h(ElText, { size: 'small', type: 'info' }, { default: () => '消息已撤回' })
           : isFlow
             ? flowCard
             : ev.authorKind === 'human'
               ? renderText(ev.text)
-              : renderMarkdown(ev.text, h, { ElText })
+              : renderMarkdown(decision?.recommendation ?? ev.text, h, { ElText })
         const metaRow = !ev.voided || canDecide
           ? h('div', { class: 'sp-msg-meta' }, [
               h('span', formatTime(ev.ts)),
@@ -1439,6 +1445,15 @@ const TeamspacePage = defineComponent({
             h('div', {
               class: `sp-bubble${ev.authorKind === 'agent' && !ev.voided && !isFlow ? ' agent' : ''}`,
             }, [bubble]),
+            decision
+              ? h(ElAlert, {
+                  title: decision.title,
+                  description: decision.question,
+                  type: decision.type,
+                  showIcon: true,
+                  closable: false,
+                })
+              : null,
             ...progressCards,
             metaRow,
             reactionsRow,
@@ -1715,7 +1730,8 @@ const TeamspacePage = defineComponent({
       // 实时送达。Agent 上下文层会过滤这些人类专属过程事件。
       const activityLog = () => {
         const activityEvents = events.value.slice().reverse()
-        const visibleEvents = activityEvents.slice(0, activityLimit.value)
+        const loadedEvents = activityEvents.slice(0, activityLimit.value)
+        const visibleEvents = groupActivityEvents(loadedEvents)
         const liveRuns = progressRuns.value.filter((run) =>
           run.sessionId === activeId.value &&
           !['completed', 'failed', 'cancelled'].includes(run.phase) &&
@@ -1739,14 +1755,14 @@ const TeamspacePage = defineComponent({
                   }),
                 ],
               })),
-              activityEvents.length > visibleEvents.length
+              activityEvents.length > loadedEvents.length
                 ? h(ElButton, {
                     text: true,
                     type: 'primary',
                     onClick: () => { activityLimit.value += 100 },
-                  }, { default: () => `加载更早活动（还有 ${activityEvents.length - visibleEvents.length} 条）` })
+                  }, { default: () => `加载更早活动（还有 ${activityEvents.length - loadedEvents.length} 条）` })
                 : null,
-              ...visibleEvents.map((ev) => {
+              ...visibleEvents.map(({ event: ev, count: repeatCount }) => {
                 const jumpToEvent = () => {
                   panelTab.value = 'info'
                   if (isMobileViewport.value) panelOpen.value = false
@@ -1763,7 +1779,7 @@ const TeamspacePage = defineComponent({
                 return h(ElCard, { key: `activity-${ev.id}`, shadow: 'never', class: 'sp-activity-card' }, {
                   default: () => [
                     h(ElButton, { text: true, type: 'primary', size: 'small', class: 'sp-activity-meta', onClick: jumpToEvent }, {
-                      default: () => `#${ev.seq} ${activityAuthorLabel(ev.authorId)} · ${formatTime(ev.ts)}`,
+                      default: () => `#${ev.seq} ${activityAuthorLabel(ev.authorId)} · ${formatTime(ev.ts)}${repeatCount > 1 ? ` · 连续 ${repeatCount} 条` : ''}`,
                     }),
                     h(ElText, { size: 'small', truncated: true, title: summary }, {
                       default: () => `${activityKindLabel(ev.kind)}：${preview}`,

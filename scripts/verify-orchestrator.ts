@@ -15,9 +15,10 @@
 // 留痕：全部通过后记一行 action_log: verify-orchestrator（断言 ⑨）。
 import { DatabaseSync } from 'node:sqlite'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from 'cordis'
 import type { PlanRequest } from 'space-orchestrator'
@@ -28,6 +29,7 @@ import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { SqliteSettingsStore } from '../packages/impl/space-store-sqlite/src/settings.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
+import { SqliteSessionWork } from '../packages/impl/space-store-sqlite/src/session-work.ts'
 import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
 import { SessionWork } from '../plugins/session-work/index.ts'
 
@@ -319,6 +321,92 @@ async function verifyOrphanedChainRecovery(): Promise<void> {
       pauseReason === 'recovery_orphaned')
   check('R7 孤儿 chain 恢复后不再占用单会话槽位', restarted.sessionWork.state().activeSessionId === null)
   seed.db.close()
+}
+
+async function verifyConcurrentEngineRecovery(): Promise<void> {
+  section('跨实例恢复：同一持久 Plan 只允许一个 Orchestrator 决策')
+  const dir = mkdtempSync(join(tmpdir(), 'teamspace-orchestrator-race-'))
+  const dbPath = join(dir, 'orchestrator.db')
+  const dbA = new DatabaseSync(dbPath)
+  const dbB = new DatabaseSync(dbPath)
+  const ctxA = new Context()
+  const ctxB = new Context()
+  let workA: SqliteSessionWork | undefined
+  let workB: SqliteSessionWork | undefined
+  try {
+    dbA.exec('PRAGMA foreign_keys = ON')
+    const migrationsDir = fileURLToPath(new URL('../packages/impl/space-store-sqlite/migrations/', import.meta.url))
+    for (const migration of loadMigrations(migrationsDir)) dbA.exec(migration.up)
+    workA = new SqliteSessionWork(ctxA, dbA, { processId: 'orchestrator-a', heartbeatMs: 10 })
+    workB = new SqliteSessionWork(ctxB, dbB, { processId: 'orchestrator-b', heartbeatMs: 10 })
+    const timestamp = new Date().toISOString()
+    dbA.prepare(`INSERT INTO sessions(id, title, status, created_at, updated_at)
+      VALUES ('s_engine_race', '并发恢复验收', 'open', ?, ?)`).run(timestamp, timestamp)
+    dbA.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at)
+      VALUES ('a_engine_race', 'a_engine_race', '!', '并发验收协调者', 'agent', ?)`).run(timestamp)
+    dbA.prepare(`INSERT INTO session_members(session_id, principal_id, role, status, joined_at)
+      VALUES ('s_engine_race', 'a_engine_race', '协调者', 'active', ?)`).run(timestamp)
+    for (const [ctx, db] of [[ctxA, dbA], [ctxB, dbB]] as const) {
+      new SqliteSessionStore(ctx, db)
+      new SqliteEventLog(ctx, db)
+      new SqliteSettingsStore(ctx, db)
+    }
+    const event = ctxA.eventLog.append({
+      id: 'event_engine_race', sessionId: 's_engine_race', authorId: 'u_dri', phaseId: null,
+      authorKind: 'human', kind: 'message', text: '恢复验收计划', mentions: [], toolCalls: [], replyMode: '',
+    })
+    const payload = { sessionId: event.sessionId, authorId: event.authorId!, event }
+    ctxA.settings.set('orchestrator.runtime.v1', {
+      version: 1,
+      turns: [['s_engine_race', {
+        state: 'chain', decisionCalls: 0, autonomousActions: 0, delegatedTargets: [], stopReason: '', stopDetail: '',
+      }]],
+      delegations: [], queue: [], activeDecisions: [{ payload, resetTurn: true }],
+    })
+
+    const engineA = new OrchestratorEngine(ctxA)
+    const engineB = new OrchestratorEngine(ctxB)
+    let callsA = 0
+    let callsB = 0
+    let releaseBrain!: () => void
+    let markStarted!: () => void
+    const blocked = new Promise<void>((resolve) => { releaseBrain = resolve })
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    engineA.registerBrain({ async plan() {
+      callsA++
+      markStarted()
+      await blocked
+      return JSON.stringify({ reply: '已处理一次', reason: '完成', delegate: null })
+    } })
+    engineB.registerBrain({ async plan() {
+      callsB++
+      return JSON.stringify({ reply: '重复处理', reason: '完成', delegate: null })
+    } })
+    ctxA.on('session-work/changed', () => engineA.wakeQueue())
+    ctxB.on('session-work/changed', () => engineB.wakeQueue())
+    engineA.recoverPersistedWork()
+    engineB.recoverPersistedWork()
+    await started
+    releaseBrain()
+    for (let attempt = 0; attempt < 100 && engineA.turn('s_engine_race').stopReason !== 'completed'; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    engineB.wakeQueue()
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    const outcomes = ctxA.eventLog.listBySession('s_engine_race').filter((row) =>
+      row.authorId === 'a_engine_race' && row.sourceEventId === event.id)
+    check('M1 两个独立引擎同时恢复时，大脑只决策一次', callsA === 1 && callsB === 0,
+      `callsA=${callsA}, callsB=${callsB}`)
+    check('M2 同一触发事件仅有一条协调者结果，第二引擎刷新为已完成回合',
+      outcomes.length === 1 && engineB.turn('s_engine_race').stopReason === 'completed',
+      `outcomes=${outcomes.length}, turnB=${JSON.stringify(engineB.turn('s_engine_race'))}`)
+  } finally {
+    workA?.dispose()
+    workB?.dispose()
+    dbA.close()
+    dbB.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 const lastEvent = (ctx: Context, sessionId: string) => {
@@ -668,6 +756,7 @@ async function main(): Promise<void> {
   await verifyCancelledDelegationLedger()
   await verifyDurableRecovery()
   await verifyOrphanedChainRecovery()
+  await verifyConcurrentEngineRecovery()
   await verifyQueuedPlans()
   await partB()
   console.log(`\n结果：${passes} 过 / ${failures} 红`)

@@ -147,6 +147,46 @@ export class OrchestratorEngine extends OrchestratorService {
     }
   }
 
+  /** Reload shared state after a peer already emitted the idempotent result for a queued Plan. */
+  private reconcileCompletedPlan(payload: PlanPayload): boolean {
+    const coordinator = this.ctx.session.listMembers(payload.sessionId, true).find((member) => member.role === '协调者')
+    if (!coordinator) return false
+    let completed = false
+    try {
+      completed = this.ctx.eventLog.listBySession(payload.sessionId).some((event) =>
+        event.authorId === coordinator.principalId && event.sourceEventId === payload.event.id)
+    } catch { return false }
+    if (!completed) return false
+    this.ctx.logger.info('[orchestrator] 丢弃其他实例已完成的 Plan（session=%s, event=%s）',
+      payload.sessionId, payload.event.id)
+
+    // A second process may have hydrated the same active decision before the
+    // first process finished. Its local snapshot is now stale; reload the
+    // durable turn, delegation ledger, and FIFO before allowing any replay.
+    this.turns.clear()
+    this.delegationSources.clear()
+    this.delegationPayloads.clear()
+    this.workQueue.length = 0
+    this.activeDecisions.clear()
+    this.queuedEventIds.clear()
+    this.recoveringSessions.clear()
+    this.hydrateState()
+    this.activeDecisions.delete(payload.event.id)
+    for (let index = this.workQueue.length - 1; index >= 0; index--) {
+      const item = this.workQueue[index]!
+      if (item.kind !== 'external' && item.payload.event.id === payload.event.id) this.workQueue.splice(index, 1)
+    }
+    this.queuedEventIds.delete(payload.event.id)
+
+    // Release the short replay-check lease. Persisted delegations and remaining
+    // queued work are then recovered from the now-current shared snapshot.
+    try { this.ctx.sessionWork.leave(payload.sessionId, `orchestrator:${payload.sessionId}`) }
+    catch { /* standalone engine verifiers may omit the shared scheduler */ }
+    this.recoverPersistedWork()
+    this.scheduleQueueDrain()
+    return true
+  }
+
   private persistState(): boolean {
     try {
       if (!this.ctx.settings?.set) return true // isolated engine verifiers may omit persistence
@@ -431,6 +471,7 @@ export class OrchestratorEngine extends OrchestratorService {
         return this.enqueue(payload, `${owner} 正在处理其它任务`)
       }
     } catch { /* retain standalone engine support for isolated verifier contexts */ }
+    if (this.reconcileCompletedPlan(payload)) return null
     this.inFlight.add(sessionId)
     this.activeDecisions.set(event.id, { payload, resetTurn: true })
     if (!this.persistState()) {

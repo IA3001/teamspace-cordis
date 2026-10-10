@@ -3,6 +3,14 @@
 // Playwright 使用标准浏览器缓存；自定义浏览器路径通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定。
 import { chromium } from 'playwright-core'
 import { DatabaseSync } from 'node:sqlite'
+import { existsSync, readFileSync } from 'node:fs'
+const envPath = new URL('../.env', import.meta.url)
+const envSource = readFileSync(existsSync(envPath) ? envPath : new URL('../.env.example', import.meta.url), 'utf8')
+const teamspacePort = process.env.TEAMSPACE_PORT ?? envSource.match(/^TEAMSPACE_PORT=(\d+)\s*$/m)?.[1]
+if (!teamspacePort || Number(teamspacePort) < 1 || Number(teamspacePort) > 65535) {
+  throw new Error('TEAMSPACE_PORT 缺失或无效；请在 .env 中配置唯一监听端口')
+}
+const teamspaceBase = `http://127.0.0.1:${teamspacePort}`
 const browser = await chromium.launch(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
   ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }
   : {})
@@ -10,12 +18,12 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errs = []
 page.on('pageerror', (e) => errs.push('[pageerror] ' + String(e).slice(0, 150)))
 page.on('console', (m) => { if (m.type() === 'error') errs.push('[console] ' + m.text().slice(0, 150)) })
-await page.goto('http://127.0.0.1:5174/teamspace', { waitUntil: 'networkidle', timeout: 20000 })
+await page.goto(`${teamspaceBase}/teamspace`, { waitUntil: 'networkidle', timeout: 20000 })
 if (!(await page.locator('textarea').count())) {
   // 直接运行也可自举隔离账号，不要求操作者先手工登录。
   const username = 'ui_verify_gate'
   const password = 'UiVerify-pass-1'
-  await page.goto('http://127.0.0.1:5174/login', { waitUntil: 'networkidle', timeout: 20000 })
+  await page.goto(`${teamspaceBase}/login`, { waitUntil: 'networkidle', timeout: 20000 })
   await page.getByRole('tab', { name: '注册' }).click()
   await page.getByPlaceholder('用户名（登录用，全库唯一）').fill(username)
   await page.locator('input[type="password"]:visible').fill(password)
@@ -50,7 +58,7 @@ if (!(await page.locator('textarea').count())) {
       session.id, user.user_id, new Date().toISOString(),
     )
   } finally { db.close() }
-  await page.goto('http://127.0.0.1:5174/teamspace', { waitUntil: 'networkidle', timeout: 20000 })
+  await page.goto(`${teamspaceBase}/teamspace`, { waitUntil: 'networkidle', timeout: 20000 })
 }
 if (!(await page.locator('textarea').count())) throw new Error('登录后未进入 Teamspace 消息输入区')
 await page.waitForTimeout(2500)
@@ -194,7 +202,7 @@ console.log('== 断言区 ==')
     const mobile = await mobileContext.newPage()
     const mobileErrors = []
     mobile.on('pageerror', (e) => mobileErrors.push(String(e).slice(0, 100)))
-    await mobile.goto('http://127.0.0.1:5174/teamspace', { waitUntil: 'networkidle', timeout: 20000 })
+    await mobile.goto(`${teamspaceBase}/teamspace`, { waitUntil: 'networkidle', timeout: 20000 })
     await mobile.locator('.sp-session-title').waitFor({ timeout: 10000 })
     await mobile.waitForTimeout(500)
     const layout = await mobile.evaluate(() => {

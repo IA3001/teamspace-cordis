@@ -86,6 +86,7 @@ async function main(): Promise<void> {
   }), invoker)
   assert.equal(approvalNeeded.ok, false)
   assert.match(approvalNeeded.output, /已提交后台管理员审批/)
+  assert.match(approvalNeeded.output, /批准后请重试相同读取/u)
   const pending = ctx.sandboxApproval.list('pending')[0]!
   approvalDir = resolve(process.cwd(), 'data/shared-workspace/approvals', pending.id)
   mkdirSync(approvalDir, { recursive: true })
@@ -131,6 +132,9 @@ async function main(): Promise<void> {
   assert.equal(approved.status, 'approved')
   const approvedRead = await tools.invoke('tool.workspace.read', JSON.stringify({ path: delivered.relativePath, scope: 'shared' }), invoker)
   assert.equal(approvedRead.output, 'admin approved content')
+  const approvedRetry = await tools.invoke('tool.workspace.read', JSON.stringify({ path: join(outside, 'approved.txt') }), invoker)
+  assert.equal(approvedRetry.ok, true, 'retrying the original boundary-crossing request resolves its approved shared copy')
+  assert.equal(approvedRetry.output, 'admin approved content', 'approved retries do not require relaying the shared path')
   const duplicate = ctx.sandboxApproval.request({
     agentId: invoker.id, sessionId: invoker.sessionId, sourcePath: join(outside, 'approved.txt'),
     sourceSize: pending.sourceSize, sourceMtimeMs: pending.sourceMtimeMs,

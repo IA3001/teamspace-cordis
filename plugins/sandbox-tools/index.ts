@@ -162,6 +162,17 @@ export async function apply(ctx: Context) {
         const detail = error instanceof Error ? error.message : String(error)
         if (!detail.includes('越出工作区边界')) throw error
         const requested = resolve(root, String(args.path ?? ''))
+        const approved = ctx.sandboxApproval.list('approved').find((item) =>
+          item.agentId === invoker.id && item.sessionId === (invoker.sessionId ?? null) && item.sourcePath === requested,
+        )
+        if (approved?.deliveryPath) {
+          const deliveredPath = await realPathWithin(SHARED_ROOT, within(SHARED_ROOT, approved.deliveryPath))
+          const deliveredInfo = await stat(deliveredPath)
+          if (!deliveredInfo.isFile() || deliveredInfo.size > MAX_FILE_BYTES) {
+            throw new Error('已批准的共享区副本不存在、类型无效或超过读取上限')
+          }
+          return await readFile(deliveredPath, 'utf8')
+        }
         const requestedInfo = await lstat(requested).catch(() => null)
         if (!requestedInfo?.isFile() || requestedInfo.isSymbolicLink() || requestedInfo.size > MAX_FILE_BYTES) {
           throw new Error('路径越出工作区边界；仅普通文件可提交后台审批，且文件大小不得超过 1 MB')
@@ -172,7 +183,7 @@ export async function apply(ctx: Context) {
           sourceCtimeMs: requestedInfo.ctimeMs, sourceInode: requestedInfo.ino,
           reason: String(args.reason ?? '').slice(0, 1000),
         })
-        throw new Error(`路径越出工作区边界，已提交后台管理员审批（请求 ${request.id}）。管理员决定后，请团队成员告知是否获批及共享区路径。`)
+        throw new Error(`路径越出工作区边界，已提交后台管理员审批（请求 ${request.id}）。批准后请重试相同读取；系统会直接读取已交付的共享区副本。`)
       }
       const info = await stat(path)
       if (!info.isFile() || info.size > MAX_FILE_BYTES) throw new Error(`文件不存在或超过读取上限 ${MAX_FILE_BYTES} 字节`)

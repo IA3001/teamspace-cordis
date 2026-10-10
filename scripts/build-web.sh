@@ -13,11 +13,11 @@ resolve_node_bin
 
 # Build only pages loaded by active bundles. Settings and Agents administration
 # now live in the Teamspace/Admin pages; the old bridge is retired.
-PAGES=(space-client-ui-teamspace space-client-ui-sessions space-client-ui-auth space-client-ui-kb space-client-ui-admin)
+source "$REPO_ROOT/scripts/web-pages.sh"
 
 printf '构建 client-ui 页面包（产物 dist/ 不入库，运行时 devMode:false 只读产物）\n'
 python3 scripts/build-theme.py
-for p in "${PAGES[@]}"; do
+for p in "${WEB_PAGES[@]}"; do
   dir="packages/client-ui/$p"
   if [ ! -f "$dir/package.json" ]; then
     printf '  ✗ %s 缺 package.json\n' "$dir"

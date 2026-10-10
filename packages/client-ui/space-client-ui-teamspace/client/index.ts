@@ -353,6 +353,18 @@ const TeamspacePage = defineComponent({
 
     const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
     const closed = computed(() => activeSession.value?.status === 'closed')
+    const activityAuthorLabel = (authorId: string | null) => {
+      if (!authorId) return '系统'
+      const human = humans.value.find((item) => item.id === authorId)
+      if (human) return human.displayName || human.username
+      const agent = agents.value.find((item) => item.id === authorId)
+      if (agent) return agent.title
+      const member = members.value.find((item) => item.principalId === authorId)
+      return member ? (member.duty?.trim() || member.role) : authorId
+    }
+    const activityKindLabel = (kind: string) => ({
+      message: '发言', decision: '决策', approval: '审批', system: '系统',
+    }[kind] ?? '活动')
 
     const mentionCandidates = () => members.value.filter((m) => MENTION_ROLES.has(m.role))
     const invitableAgents = () => {
@@ -1751,10 +1763,10 @@ const TeamspacePage = defineComponent({
                 return h(ElCard, { key: `activity-${ev.id}`, shadow: 'never', class: 'sp-activity-card' }, {
                   default: () => [
                     h(ElButton, { text: true, type: 'primary', size: 'small', class: 'sp-activity-meta', onClick: jumpToEvent }, {
-                      default: () => `#${ev.seq} ${authorLabel(ev.authorId, members.value)} · ${formatTime(ev.ts)}`,
+                      default: () => `#${ev.seq} ${activityAuthorLabel(ev.authorId)} · ${formatTime(ev.ts)}`,
                     }),
                     h(ElText, { size: 'small', truncated: true, title: summary }, {
-                      default: () => `${ev.kind === 'message' ? '发言' : ev.kind}：${preview}`,
+                      default: () => `${activityKindLabel(ev.kind)}：${preview}`,
                     }),
                     ...calls.map((call, i) => {
                       const outcome = call.err ? `失败：${call.err}` : call.result ? `结果：${call.result}` : '已调用'

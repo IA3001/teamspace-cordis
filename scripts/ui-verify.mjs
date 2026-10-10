@@ -327,6 +327,48 @@ console.log('== 断言区 ==')
     item.whiteSpace === 'nowrap' && item.title.length > 0)
   detail.push(`单行摘要=${compact ? '是' : '否'}（${summaryMetrics.length}项）`)
   ok &&= compact
+  const db = new DatabaseSync('data/database.db')
+  let knownAuthors, latestSystem
+  try {
+    const latestHuman = db.prepare(`SELECT e.seq, e.author_id, u.display_name
+      FROM events e
+        JOIN users u ON u.id=e.author_id
+      WHERE e.session_id='s_seed_demo' AND e.author_id IS NOT NULL
+        ORDER BY e.seq DESC LIMIT 1`).get()
+    const latestAgent = db.prepare(`SELECT e.seq, e.author_id, a.title
+        FROM events e
+        JOIN agent_definitions a ON a.id=e.author_id
+        WHERE e.session_id='s_seed_demo' AND e.author_id IS NOT NULL
+        ORDER BY e.seq DESC LIMIT 1`).get()
+    latestSystem = db.prepare(`SELECT seq FROM events
+      WHERE session_id='s_seed_demo' AND kind='system' ORDER BY seq DESC LIMIT 1`).get()
+    knownAuthors = [
+      latestHuman && { ...latestHuman, displayName: latestHuman.display_name, kind: 'human' },
+      latestAgent && { ...latestAgent, displayName: latestAgent.title, kind: 'agent' },
+    ].filter(Boolean)
+  } finally { db.close() }
+  if (knownAuthors.length) {
+    for (const author of knownAuthors) {
+      const label = await page.locator('.sp-activity-meta')
+        .filter({ hasText: `#${author.seq}` }).first().innerText()
+      const readable = label.includes(author.displayName || '\u0000') && !label.includes(author.author_id)
+      detail.push(`${author.kind === 'human' ? '人类' : 'Agent'}历史发言者显示名称=${readable}（${author.author_id}）`)
+      ok &&= readable
+    }
+  } else {
+    detail.push('没有可用于发言者名称映射的历史事件')
+    ok = false
+  }
+  if (latestSystem) {
+    const systemMeta = page.locator('.sp-activity-meta').filter({ hasText: `#${latestSystem.seq}` }).first()
+    const summary = await systemMeta.locator('xpath=../..').locator('.el-text.is-truncated').innerText()
+    const localized = summary.startsWith('系统：') && !summary.startsWith('system：')
+    detail.push(`系统事件类型使用中文标签=${localized}`)
+    ok &&= localized
+  } else {
+    detail.push('没有可用于系统事件类型映射的历史事件')
+    ok = false
+  }
   judge('AS4 活动日志按需分批渲染且摘要单行可追溯', ok, detail.join(' | '))
 }
 
@@ -335,7 +377,9 @@ console.log('== 断言区 ==')
   let ok = true; const detail = []
   try {
     const token = await page.evaluate(() => localStorage.getItem('space_token'))
-    const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 } })
+    const mobileContext = await browser.newContext({
+      viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+    })
     await mobileContext.addInitScript((value) => localStorage.setItem('space_token', value), token)
     const mobile = await mobileContext.newPage()
     const mobileErrors = []
@@ -370,7 +414,7 @@ console.log('== 断言区 ==')
     ok &&= layout.panelText === '面板' && layout.panelRight <= layout.viewportWidth
     ok &&= layout.searchWidth >= 150 && layout.searchRight <= layout.viewportWidth && layout.documentWidth <= layout.viewportWidth
 
-    await mobile.locator('.sp-collab-toggle').click()
+    await mobile.locator('.sp-collab-toggle').tap()
     const rightDrawer = mobile.locator('aside.right-sidebar')
     await rightDrawer.waitFor({ timeout: 3000 })
     const rightGeometry = await rightDrawer.evaluate((node) => {
@@ -382,21 +426,21 @@ console.log('== 断言区 ==')
       rightGeometry.right <= 390 && rightGeometry.left >= 390 - rightGeometry.width - 1
     detail.push(`右抽屉固定且互斥=${firstDrawerExclusive}（${Math.round(rightGeometry.left)}–${Math.round(rightGeometry.right)}px）`)
     ok &&= firstDrawerExclusive
-    await mobile.locator('.sp-drawer-backdrop').click({ position: { x: 10, y: 20 } })
+    await mobile.locator('.sp-drawer-backdrop').tap({ position: { x: 10, y: 20 } })
     ok &&= !(await mobile.locator('aside.right-sidebar, aside.page-sidebar').count())
 
-    await mobile.locator('.layout-header button').first().click()
+    await mobile.locator('.layout-header button').first().tap()
     await mobile.locator('aside.page-sidebar').waitFor({ timeout: 3000 })
     const leftDrawerExclusive = !(await mobile.locator('aside.right-sidebar').count()) &&
       (await mobile.locator('.sp-drawer-backdrop').count()) === 1
     detail.push(`左抽屉打开时右抽屉关闭=${leftDrawerExclusive}`)
     ok &&= leftDrawerExclusive
-    await mobile.locator('.sp-collab-toggle').click()
+    await mobile.locator('.sp-collab-toggle').tap()
     const switchExclusive = !(await mobile.locator('aside.page-sidebar').count()) &&
       (await mobile.locator('aside.right-sidebar').count()) === 1
     detail.push(`两侧切换保持互斥=${switchExclusive}`)
     ok &&= switchExclusive
-    await mobile.locator('.sp-drawer-backdrop').click({ position: { x: 10, y: 20 } })
+    await mobile.locator('.sp-drawer-backdrop').tap({ position: { x: 10, y: 20 } })
     ok &&= !(await mobile.locator('aside.right-sidebar, aside.page-sidebar').count())
     ok &&= mobileErrors.length === 0
     await mobile.screenshot({ path: '/tmp/ui-mobile-final.png' })

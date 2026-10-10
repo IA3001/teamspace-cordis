@@ -218,11 +218,40 @@ async function main(): Promise<void> {
     text: `${DECISION_REVIEW_REQUEST_MARKER}\n拟决策：reject\n目标事件：${reviewTarget.id}\n说明：需要确认影响范围`,
     mentions: ['a_alpha'], toolCalls: [], replyMode: '', replyTo: reviewTarget.id,
   })
-  await inbox.waitThrough('a_alpha', 's_review', review.seq)
+  let reviewModelCalls = 0
+  const remember = memory.remember.bind(memory)
+  let failReviewCursorOnce = true
+  memory.remember = async (scope, kind, text, opts) => {
+    const questionExists = ctx.eventLog.listBySession('s_review').some((event) =>
+      event.sourceEventId === review.id && event.text.startsWith('【复核疑问】'))
+    if (failReviewCursorOnce && kind === 'cursor:s_review' && questionExists) {
+      failReviewCursorOnce = false
+      throw new Error('simulated crash after review question append')
+    }
+    return remember(scope, kind, text, opts)
+  }
+  const originalReviewChat = ctx.llm.chat
+  ctx.llm.chat = async (messages: Array<{ role: string; content: string }>) => {
+    if (messages[0]!.content.includes('协助 DRI 审议')) reviewModelCalls++
+    return originalReviewChat(messages)
+  }
+  await assert.rejects(inbox.waitThrough('a_alpha', 's_review', review.seq), /simulated crash after review question append/,
+    'a cursor failure after publishing the review question leaves the request replayable')
+  assert.equal(await inbox.cursor('a_alpha', 's_review'), reviewTarget.seq,
+    'a failed durable cursor write does not mark the review request consumed')
+  const replayReview = inbox.waitThrough('a_alpha', 's_review', review.seq)
+  await Promise.race([
+    replayReview,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('review request replay timed out')), 5_000)),
+  ])
   const question = ctx.eventLog.listBySession('s_review').find((event) => event.sourceEventId === review.id)
   assert(question && question.authorId === 'a_alpha' && question.replyTo === reviewTarget.id,
     'the invited Agent can publish an auditable question linked to the target answer')
   assert.match(question.text, /^【复核疑问】/)
+  assert.equal(ctx.eventLog.listBySession('s_review').filter((event) =>
+    event.sourceEventId === review.id && event.text.startsWith('【复核疑问】')).length, 1,
+  'replaying the review request after a cursor failure does not append a duplicate question')
+  assert.equal(reviewModelCalls, 1, 'the already-persisted review question avoids a duplicate model call')
   await Promise.all(['a_alpha', 'a_beta', 'a_gamma'].map((id) => inbox.waitThrough(id, 's_review', question.seq)))
   assert.equal((await memory.recall('agent:a_alpha')).some((item) => item.sourceEventId === question.id), false,
     'review questions are not converted into Agent memory or normal answers')

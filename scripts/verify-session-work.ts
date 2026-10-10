@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -111,6 +111,73 @@ try {
   assert.equal((sameOwnerDb.prepare('SELECT count(*) AS n FROM session_work_owners WHERE session_id = ? AND owner = ?').get('s-coordinator', 'orchestrator:s-coordinator') as { n: number }).n, 1)
   assert.equal((sameOwnerDb.prepare('SELECT count(*) AS n FROM session_work_queue WHERE session_id = ? AND owner = ?').get('s-coordinator', 'orchestrator:s-coordinator') as { n: number }).n, 1, 'losing process retains a durable retry intent')
   sameOwnerDb.close()
+
+  // Deterministic scheduler-level FIFO handoff: use the production Inbox and
+  // Orchestrator owner labels to verify queue ordering across OS processes.
+  const fifoDbPath = join(dir, 'fifo.db')
+  const fifoDb = new DatabaseSync(fifoDbPath)
+  fifoDb.exec(migration)
+  fifoDb.exec(ownerMigration)
+  const fifoSignals = join(dir, 'fifo-signals')
+  mkdirSync(fifoSignals)
+  const fifoHolder = new SqliteSessionWork(new Context(), fifoDb, {
+    processId: 'fifo-active-holder', leaseMs: 30_000, heartbeatMs: 1_000_000,
+  })
+  const fifoChildren: ReturnType<typeof spawn>[] = []
+  try {
+    assert.equal(fifoHolder.tryEnter('s-fifo-active', 'active-worker'), true)
+    const spawnFifoWorker = (sessionId: string, owner: string, label: string) => {
+      const child = spawn(process.execPath, [
+        '--import', 'tsx', 'scripts/session-work-fifo-worker.ts', fifoDbPath, sessionId, owner, fifoSignals, label,
+      ], { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] })
+      let output = '', errors = ''
+      child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => { errors += chunk })
+      const closed = new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject)
+        child.once('close', resolve)
+      })
+      fifoChildren.push(child)
+      return { child, closed, get output() { return output }, get errors() { return errors } }
+    }
+    const waitFifoSignal = async (worker: ReturnType<typeof spawnFifoWorker>, label: string, signal: string) => {
+      const path = join(fifoSignals, signal)
+      const deadline = Date.now() + 10_000
+      while (!existsSync(path) && Date.now() < deadline) {
+        if (worker.child.exitCode !== null) throw new Error(`${label} worker exited early: ${worker.errors || worker.output}`)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      assert(existsSync(path), `timed out waiting for ${label}; ${worker.errors || worker.output}`)
+    }
+    const inboxRetry = spawnFifoWorker('s-fifo-inbox-retry', 'agent-inbox', 'inbox-retry')
+    await waitFifoSignal(inboxRetry, 'Inbox retry', 'inbox-retry.queued')
+    const orchestratorRestore = spawnFifoWorker('s-fifo-orchestrator-restore', 'orchestrator-queue', 'orchestrator-restore')
+    await waitFifoSignal(orchestratorRestore, 'Orchestrator restore', 'orchestrator-restore.queued')
+    const queued = fifoDb.prepare('SELECT session_id, owner FROM session_work_queue ORDER BY queue_id').all() as Array<{ session_id: string; owner: string }>
+    assert.deepEqual(queued.map((item) => [item.session_id, item.owner]), [
+      ['s-fifo-inbox-retry', 'agent-inbox'],
+      ['s-fifo-orchestrator-restore', 'orchestrator-queue'],
+    ], 'the shared durable queue preserves cross-process arrival order')
+
+    fifoHolder.leave('s-fifo-active', 'active-worker')
+    await waitFifoSignal(inboxRetry, 'Inbox retry acquisition', 'inbox-retry.acquired')
+    assert.equal(fifoHolder.state().activeSessionId, 's-fifo-inbox-retry')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(existsSync(join(fifoSignals, 'orchestrator-restore.acquired')), false,
+      'the later Orchestrator restore cannot pass the Inbox session while it owns the slot')
+    writeFileSync(join(fifoSignals, 'inbox-retry.release'), 'release')
+    await waitFifoSignal(orchestratorRestore, 'Orchestrator restore acquisition', 'orchestrator-restore.acquired')
+    assert.equal(fifoHolder.state().activeSessionId, 's-fifo-orchestrator-restore')
+    writeFileSync(join(fifoSignals, 'orchestrator-restore.release'), 'release')
+    assert.equal(await inboxRetry.closed, 0, `Inbox retry worker failed: ${inboxRetry.errors || inboxRetry.output}`)
+    assert.equal(await orchestratorRestore.closed, 0,
+      `Orchestrator restore worker failed: ${orchestratorRestore.errors || orchestratorRestore.output}`)
+    assert.equal(fifoHolder.state().activeSessionId, null, 'the final worker releases the global slot')
+  } finally {
+    for (const child of fifoChildren) if (child.exitCode === null) child.kill('SIGKILL')
+    fifoHolder.dispose()
+    fifoDb.close()
+  }
   console.log('✓ SQLite session gate enforces one active session, one process per logical owner, FIFO order, and crash lease recovery')
 } finally {
   for (const service of services) service.dispose()

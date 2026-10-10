@@ -46,7 +46,9 @@ while (!existsSync(`${signalDir}/begin`) && Date.now() < beginDeadline) {
 }
 if (!existsSync(`${signalDir}/begin`)) throw new Error('test harness did not start recovery workers')
 engine.recoverPersistedWork()
-if (sessionWork.state().activeSessionId === sessionId) {
+const activeSessionId = sessionWork.state().activeSessionId
+if (activeSessionId) writeFileSync(`${signalDir}/${processId}.waiting-for-shared-slot`, activeSessionId)
+if (activeSessionId === sessionId) {
   writeFileSync(`${signalDir}/${processId}.waiting-for-lease`, 'waiting')
 }
 

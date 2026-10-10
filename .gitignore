@@ -9,7 +9,7 @@ data/
 *.db
 *.db-journal
 
-# 组合产物（启动时生成，不入库；P5 组合收敛）
+# 运行时组合清单（生产 unit 仅为该单文件开放写权限）
 /composed.cordis.yml
 
 # 构建与日志

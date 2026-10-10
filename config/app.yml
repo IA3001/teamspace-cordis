@@ -13,6 +13,6 @@ app:
 
 loader:
   # loader/include 读取的组合清单（相对项目根目录）。
-  # 这是 src/compose.ts 的生成产物（bundle 层 + 用户层叠加，data/ 已 gitignore），
-  # 每次启动重新生成——手改无效，改 patch 层。
+  # 这是 src/compose.ts 每次启动重新生成的组合产物，路径位于代码根目录。
+  # 生产 unit 仅为此文件开写权限；手改无效，插件组合请改 bundle/profile patch 层。
   configPath: ./composed.cordis.yml

@@ -19,6 +19,10 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=45s
 UMask=0077
+# Release code and built UI are immutable at runtime; the generated plugin manifest and state are writable.
+ReadOnlyPaths=/srv/teamspace-cordis
+ReadWritePaths=/srv/teamspace-cordis/data
+ReadWritePaths=/srv/teamspace-cordis/composed.cordis.yml
 StandardOutput=journal
 StandardError=journal
 PrivateTmp=true

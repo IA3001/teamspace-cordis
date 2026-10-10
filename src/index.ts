@@ -9,7 +9,7 @@
 // 与官方 bin.js 的差异有两处：
 //   · 清单路径来自 config/app.yml（可按环境切换），不写死
 //   · 启动时先跑 P5 组合引擎（src/compose.ts）：bundle 层 + 用户层 patch 叠加
-//     生成组合清单（路径 = app.yml 的 loader.configPath，产物不入库）。
+//     生成组合清单（路径 = app.yml 的 loader.configPath，受 systemd 单文件写权限保护）。
 //     组合失败 / 断言 ③ 不过 = 启动失败（fail fast），不带旧产物裸奔。
 //
 // 端口等运行参数**不在这里解析** —— 它们是 .env 的职责（scripts/env.sh 用

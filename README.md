@@ -53,7 +53,7 @@ profiles/*/cordis.patch.yml ────────┘                         
                                                      src/index.ts → Cordis
 ```
 
-`composed.cordis.yml` 是生成物，不要手改。新增或停用插件，应改对应 bundle 或 profile 的
+`composed.cordis.yml` 是启动时生成的运行产物，不要手改。新增或停用插件，应改对应 bundle 或 profile 的
 `cordis.patch.yml`。`src/` 保持启动职责，业务逻辑放插件或对应的 package。
 
 ## 本地运行

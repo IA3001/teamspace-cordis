@@ -4,11 +4,11 @@
 
 ## 首次部署
 
-1. 在 Linux 主机创建专用运行账号和发布目录，安装 Node.js 22.5.0 或更新版本，以及 Docker Engine（Agent 代码执行依赖 Docker 隔离容器）。npm 会根据 `package.json` / `.npmrc` 强制检查 Node 版本。优先使用 rootless Docker；标准 Docker socket 的访问权限相当于主机管理员权限。检出经过验证的提交或版本标签。
-2. 执行 `npm ci` 安装锁定依赖；复制 `.env.example` 为 `.env`，设置 `NODE_ENV=production`、监听地址和端口、日志时区，以及后台独立凭据 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD`。生成 `SETTINGS_ENCRYPTION_KEY`（`openssl rand -base64 32`）并保存在部署密钥管理处；它用于加密数据库中的模型和搜索 API 密钥，必须与数据库备份分开备份，丢失后需重新录入 API 凭据。确保默认 `PATH` 中的 Node.js 至少为 22.5；只有需要固定某个 Node 安装时才设置 `NODE_BIN_DIR`（例如 `/usr/bin`）。生产密码至少 6 位，建议使用密码管理器生成的长随机值。不要把 `.env` 提交到 Git。
-3. 首次启动前运行 `npm run migrate` 创建或升级 SQLite schema。后续版本升级前先运行 `npm run backup`，再运行迁移。
-4. 执行 `npm run gate:static`。在隔离、合成数据的预发副本先用 `NODE_ENV=development` 启动候选版本，再执行 `npm run gate:runtime`；该门禁包含后台/Teamspace 可达性、Playwright UI 回归、写入型 `smoke` 和运行时验证。预发主机需安装可运行的 Chromium；非标准路径通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定。Runtime gate 会创建验收账号和会话、调整 seed demo 会话成员，并可能触发真实模型调用，因此不要对有真实团队数据的生产实例运行。随后使用独立 `.env`、数据库和密钥，以 `NODE_ENV=production` 重启隔离副本，核对 `/healthz`、后台管理员登录、Team 注册/登录及两类 token 互相拒绝；生产模式不要运行 `smoke` 或完整 `gate:runtime`，smoke 会主动拒绝生产环境。确认检查通过后再将版本切为当前发布。
-5. 以专用账号运行 `npm start`。systemd 部署可使用仓库模板 `deploy/teamspace-cordis.service`：模板固定以 `teamspace` 用户运行 `/srv/teamspace-cordis` 下的 checkout，失败后自动重启，stdout/stderr 进入 journald。确保稳定路径、`.env` 和 `data/` 属于该账号；模板默认授予系统 Docker daemon 的 `docker` 组访问权，改用 rootless Docker 时移除此行并配置该账号的 rootless socket。按实际 Node/npm 安装位置调整 `PATH` 或 `/usr/bin/env`。不要以 root 运行应用。
+1. 在 Linux 主机创建专用运行账号和发布目录，安装 Node.js 22.5.0 或更新版本，以及 Docker Engine（Agent 代码执行依赖 Docker 隔离容器）。npm 会根据 `package.json` / `.npmrc` 强制检查 Node 版本。优先使用 rootless Docker；标准 Docker socket 的访问权限相当于主机管理员权限。由运行账号检出经过验证的提交或版本标签；systemd 会在运行期间限制代码目录写入。
+2. 由运行账号执行 `npm ci` 安装锁定依赖。复制 `.env.example` 为 `.env`，设置 `NODE_ENV=production`、监听地址和端口、日志时区，以及后台独立凭据 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD`。生成 `SETTINGS_ENCRYPTION_KEY`（`openssl rand -base64 32`）并保存在部署密钥管理处；它用于加密数据库中的模型和搜索 API 密钥，必须与数据库备份分开备份，丢失后需重新录入 API 凭据。确保默认 `PATH` 中的 Node.js 至少为 22.5；只有需要固定某个 Node 安装时才设置 `NODE_BIN_DIR`（例如 `/usr/bin`）。生产密码至少 6 位，建议使用密码管理器生成的长随机值。不要把 `.env` 提交到 Git。
+3. 首次启动前运行 `npm run migrate` 创建或升级 SQLite schema，并执行 `npm run prepare:release` 构建 UI、生成组合清单和校验发布产物。后续版本升级前先运行 `npm run backup`；服务停止后执行 `npm ci`、`npm run prepare:release` 和 `npm run migrate`。
+4. 执行 `npm run gate:static`。在隔离、合成数据的预发副本先用 `NODE_ENV=development` 启动候选版本，再执行 `npm run gate:runtime`；该门禁包含后台/Teamspace 可达性、Playwright UI 回归、写入型 `smoke`、运行时验证，以及 `verify:release-start` 的只读代码树生产启动检查。发布启动检查会在临时副本执行迁移和 release build，锁定完整 checkout（含 `node_modules`）与 UI 产物，只允许数据目录和组合清单写入，再确认 API、Teamspace、调试页均可访问且源码哈希不变。预发主机需安装可运行的 Chromium；非标准路径通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定。Runtime gate 会创建验收账号和会话、调整 seed demo 会话成员，并可能触发真实模型调用，因此不要对有真实团队数据的生产实例运行。随后使用独立 `.env`、数据库和密钥，以 `NODE_ENV=production` 准备并启动隔离副本；确认 `npm run check:release-artifacts` 通过、`composed.cordis.yml` 存在且可写，再核对 `/healthz`、后台管理员登录、Team 注册/登录及两类 token 互相拒绝。生产模式不要运行 `smoke` 或完整 `gate:runtime`，smoke 会主动拒绝生产环境。确认检查通过后再将版本切为当前发布。
+5. 以专用账号运行 `npm start`。systemd 部署可使用仓库模板 `deploy/teamspace-cordis.service`：模板固定以 `teamspace` 用户运行 `/srv/teamspace-cordis` 下的 checkout，失败后自动重启，stdout/stderr 进入 journald。运行账号拥有 checkout 和数据目录；systemd 运行期间将 checkout 设为只读，仅对 `composed.cordis.yml` 和 `data/` 开放必要写入；`.env` 仅由运维人员在服务停止时更新。生产 UI 产物在发布准备阶段构建并于启动时校验，不重建源码；组合清单仍在项目根生成，以保持 Cordis 按清单目录解析插件的语义。模板默认授予系统 Docker daemon 的 `docker` 组访问权；改用 rootless Docker 时移除此行并配置该账号的 rootless socket。按实际 Node/npm 安装位置调整 `PATH` 或 `/usr/bin/env`。不要以 root 运行应用。
 
 ```sh
 sudo install -o root -g root -m 0644 deploy/teamspace-cordis.service /etc/systemd/system/teamspace-cordis.service
@@ -20,6 +20,8 @@ journalctl -u teamspace-cordis -n 100 --no-pager
 
 unit 模板通过 `RequiresMountsFor=` 等待工作区卷，并以 `ConditionPathIsMountPoint=` 拒绝在路径退化为普通目录时启动应用，避免把工作区写到系统盘。配额助手需要通过 sudo 更新 XFS project 映射，因此不要在 unit 中启用 `NoNewPrivileges=true` 或只读 `/etc` 沙箱，除非同时为助手设计并验收了相应的 systemd 文件权限例外。更新时用 `systemctl stop/start teamspace-cordis`；发布路径固定时无需改 unit。
 
+`ReadOnlyPaths=` 限制运行时对 checkout 的直接写入，组合清单是明确的单文件例外；它不构成完整进程沙箱。不要在 checkout 的代码目录下添加额外挂载；systemd 的路径限制不会约束传播进服务命名空间的子挂载，也不能阻止有足够权限的进程撤销挂载限制。[systemd.exec 文件系统路径限制](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)。使用系统 Docker socket 时，`docker` 组权限等同主机管理员权限；rootless Docker 可缩小这项权限。
+
 ## 预发验收与恢复演练
 
 预发必须使用独立 checkout 根目录和独立 `.env`；应用数据目录相对当前工作目录位于 `data/`，因此不要让预发和生产共用 `data/`、端口或密钥。使用合成/脱敏数据启动预发服务，先运行 `npm run gate:static`，再在开发模式运行 `npm run gate:runtime`。另在生产模式检查启动、后台管理员认证、Team 用户认证及身份域隔离；仅使用隔离预发数据库执行会写数据的检查。确认登录、Agent 记忆追赶、`@AI` 回复、工具调用和文件访问都通过后，才允许生产发布。
@@ -28,18 +30,19 @@ unit 模板通过 `RequiresMountsFor=` 等待工作区卷，并以 `ConditionPat
 
 ## 更新与回滚
 
-更新按维护窗口执行：先在运行中的旧版本执行 `npm run backup`，确认快照完成；再停止 systemd 服务，检出候选版本并运行 `npm ci` 和 `npm run migrate`，最后启动新版本。示例：
+更新按维护窗口执行：先在运行中的旧版本执行 `npm run backup`，确认快照完成；再停止 systemd 服务，检出候选版本并运行 `npm ci`、`npm run prepare:release` 和 `npm run migrate`，最后启动新版本。`prepare:release` 会构建 UI、重新组合 manifest 并验证所有静态产物。示例：
 
 ```sh
 npm run backup
 sudo systemctl stop teamspace-cordis
 git checkout <release-tag>
 npm ci
+npm run prepare:release
 npm run migrate
 sudo systemctl start teamspace-cordis
 ```
 
-不要让旧进程与迁移后的 schema 并行运行。启动后验证 `/healthz`、后台登录和 Teamspace 登录；写入型 smoke 只在隔离预发执行。若迁移或启动失败，停止服务并按下方流程恢复整套数据快照，再启动旧版本。`npm start` 会在启动时构建活动 UI 页面；构建失败会中止启动，不应复用旧构建产物掩盖失败。
+不要让旧进程与迁移后的 schema 并行运行。启动后验证 `/healthz`、后台登录和 Teamspace 登录；写入型 smoke 只在隔离预发执行。若迁移或启动失败，停止服务并按下方流程恢复整套数据快照，再启动旧版本。生产启动会检查活动 UI 页面所需构建产物与组合清单可写权限，构建应在发布阶段完成；开发环境的 `npm start` 仍会启动前构建。
 
 回滚代码前确认新迁移是否向后兼容。若旧版本不能读取新 schema，停止服务后从同一备份快照恢复 `database.db`、存在时的 `logs.db`、`uploads/` 和 `shared-workspace/`；若该快照包含 `workdirs/`，也一并恢复，再启动旧版本。恢复加密配置还需要对应的 `SETTINGS_ENCRYPTION_KEY`。不要在生产数据上直接运行 `npm run reset` 或未经演练的 `npm run migrate:down`。
 

@@ -371,6 +371,12 @@ export class AgentInbox extends AgentInboxService {
   private async reviewDecision(agentId: string, descriptor: AgentDescriptor, request: SessionEvent): Promise<void> {
     if (!request.replyTo || !this.ctx.llm.configuredFor(descriptor.llmProfileRef)) return
     try {
+      // If the process stops after appending a question but before the durable
+      // inbox cursor advances, replay must not ask the same Agent again.
+      const existingQuestion = this.ctx.eventLog.listBySession(request.sessionId).some((event) =>
+        event.authorId === agentId && event.sourceEventId === request.id &&
+        event.text.startsWith(AGENT_REVIEW_QUESTION_MARKER))
+      if (existingQuestion) return
       const history = this.ctx.eventLog.listBySession(request.sessionId)
         .filter((event) => !event.voided && isAgentVisibleEvent(event))
       const target = history.find((event) => event.id === request.replyTo)
@@ -441,8 +447,11 @@ export class AgentInbox extends AgentInboxService {
     const scope = `agent:${agentId}`
     const kind = cursorKind(sessionId)
     const old = await this.ctx.memory.recall(scope, { kind, limit: 100 })
-    for (const item of old) await this.ctx.memory.forget(item.id)
-    await this.ctx.memory.remember(scope, kind, String(seq), { weight: 1, authorId: agentId })
+    if (old.some((item) => Number(item.text) >= seq)) return
+    // Keep the last durable cursor if the new write fails. Deleting first made
+    // a transient SQLite failure reset the Agent all the way back to sequence 0.
+    const saved = await this.ctx.memory.remember(scope, kind, String(seq), { weight: 1, authorId: agentId })
+    for (const item of old) if (item.id !== saved.id) await this.ctx.memory.forget(item.id)
   }
 }
 

@@ -6,7 +6,7 @@
 #
 # 标准约定（不要绕过）：
 #   · 端口/主机只来自 .env（经 scripts/env.sh 校验后导出）
-#   · 插件清单来自组合产物 composed.cordis.yml（启动时由 patch 层叠加生成）
+#   · 插件清单来自 composed.cordis.yml（启动时由 patch 层叠加生成）
 #   · 用 node 官方的 --env-file 载入 .env，不自己写 dotenv 解析
 #
 # 交互修复（2026-09-30）：
@@ -32,9 +32,17 @@ if command -v lsof >/dev/null 2>&1; then
   fi
 fi
 
-# 构建进启动脚本（A2 口径，MODULE-PLAN 第 3.5 节）：页面产物 dist/ 不入库，
-# 启动前现构建 —— 构建失败 = 启动失败（fail fast，不带上旧产物裸奔）。
-npm run build:web --silent
+# 开发环境启动前构建页面；生产构建由发布阶段完成，使运行账号只读代码目录。
+# 生产启动只校验 dist 清单和入口文件，缺失即 fail fast，不重建或复用不完整产物。
+if [ "${NODE_ENV:-development}" = "production" ]; then
+  npm run check:release-artifacts --silent
+  if [ ! -f "$REPO_ROOT/composed.cordis.yml" ] || [ ! -w "$REPO_ROOT/composed.cordis.yml" ]; then
+    printf '✗ 生产组合清单不存在或不可写；发布前生成 composed.cordis.yml 并授予运行账号单文件写权限。\n' >&2
+    exit 1
+  fi
+else
+  npm run build:web --silent
+fi
 
 cat <<EOF
 

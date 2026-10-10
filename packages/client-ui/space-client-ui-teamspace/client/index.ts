@@ -1674,10 +1674,10 @@ const TeamspacePage = defineComponent({
           !events.value.some((ev) => ev.authorKind === 'agent' && ev.authorId === run.agentId &&
             new Set([ev.sourceEventId, ...(ev.sourceEventIds ?? [])].filter(Boolean)).has(run.sourceEventId)))
         return events.value.length || liveRuns.length
-          ? h(ElSpace, { direction: 'vertical', fill: true, size: 8 }, {
+          ? h(ElSpace, { direction: 'vertical', fill: true, size: 8, class: 'sp-activity-feed' }, {
             default: () => [
               ...liveRuns.map((run) => h(ElCard, {
-                key: `activity-run-${run.runId}`, shadow: 'never',
+                key: `activity-run-${run.runId}`, shadow: 'never', class: 'sp-activity-card',
               }, {
                 default: () => [
                   h(ElRow, { justify: 'space-between', align: 'middle' }, {

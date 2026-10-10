@@ -20,6 +20,8 @@ const templateMigration = migrations.find((m) => m.version === 28)
 assert.ok(templateMigration, 'Agent template provenance migration must be present')
 const teamTemplateMigration = migrations.find((m) => m.version === 29)
 assert.ok(teamTemplateMigration, 'team-authored Agent template migration must be present')
+const lifecycleMigration = migrations.find((m) => m.version === 30)
+assert.ok(lifecycleMigration, 'Agent template lifecycle migration must be present')
 const dir = mkdtempSync(join(tmpdir(), 'agent-catalog-verify-'))
 const path = join(dir, 'catalog.db')
 
@@ -29,6 +31,7 @@ try {
   db.exec(profileMigration.up)
   db.exec(templateMigration.up)
   db.exec(teamTemplateMigration.up)
+  db.exec(lifecycleMigration.up)
   let catalog = new SqliteAgentCatalog(new Context(), db)
   const created = catalog.create({
     title: '研究助手',
@@ -62,6 +65,19 @@ try {
   assert.equal(catalog.hasTemplateVersion(teamTemplate.id, 1), true, 'prior versions remain addressable for Agent provenance')
   assert.equal(catalog.listTemplates().find((template) => template.id === teamTemplate.id)?.version, 2,
     'the template picker exposes the newest shared version')
+  assert.equal(teamTemplateV2.status, 'active')
+  assert.equal(catalog.archiveTemplate(teamTemplate.id).status, 'archived')
+  assert.equal(catalog.listTemplates().some((template) => template.id === teamTemplate.id), false,
+    'archived team templates are hidden from the default picker')
+  assert.equal(catalog.listTemplates(true).find((template) => template.id === teamTemplate.id)?.status, 'archived',
+    'administration can enumerate archived templates')
+  assert.equal(catalog.hasTemplateVersion(teamTemplate.id, 1), true,
+    'archiving retains historical versions for Agent provenance')
+  assert.throws(() => catalog.saveTemplate({ title: teamTemplate.title, summary: 'blocked', input: teamTemplate.input }, teamTemplate.id), /已归档/u,
+    'archived templates cannot receive revisions')
+  assert.equal(catalog.restoreTemplate(teamTemplate.id).status, 'active')
+  assert.equal(catalog.saveTemplate({ title: teamTemplate.title, summary: 'restored', input: teamTemplate.input }, teamTemplate.id).version, 3,
+    'restoring allows a new revision without losing prior versions')
   assert.throws(() => catalog.saveTemplate({ title: '', summary: '无效', input: teamTemplate.input }), /模板名称/u)
   assert.deepEqual(catalog.list().map((a) => a.id), [created.id])
   assert.throws(() => catalog.create({
@@ -84,6 +100,8 @@ try {
   rollbackDb.exec(profileMigration.up)
   rollbackDb.exec(templateMigration.up)
   rollbackDb.exec(teamTemplateMigration.up)
+  rollbackDb.exec(lifecycleMigration.up)
+  rollbackDb.exec(lifecycleMigration.down)
   rollbackDb.exec(teamTemplateMigration.down)
   rollbackDb.exec(templateMigration.down)
   rollbackDb.exec(profileMigration.down)
@@ -93,6 +111,8 @@ try {
   assert.equal(rolledBackColumns.some((column) => column.name === 'llm_profile_ref'), false, 'profile migration down removes the additive column')
   assert.equal(rolledBackColumns.some((column) => column.name === 'template_id' || column.name === 'template_version'), false,
     'template provenance rollback removes both additive columns')
+  const templateColumns = rollbackDb.prepare(`PRAGMA table_info(agent_templates)`).all() as Array<{ name: string }>
+  assert.equal(templateColumns.some((column) => column.name === 'status'), false, 'lifecycle rollback removes template status')
   rollbackDb.close()
 
   // Definitions survive a process/database reopen and remain globally enumerable.
@@ -100,7 +120,7 @@ try {
   catalog = new SqliteAgentCatalog(new Context(), db)
   assert.equal(catalog.get(created.id).title, '研究助手')
   assert.equal(catalog.list().length, 1)
-  assert.equal(catalog.listTemplates().find((template) => template.id === teamTemplate.id)?.version, 2,
+  assert.equal(catalog.listTemplates().find((template) => template.id === teamTemplate.id)?.version, 3,
     'team-authored templates survive closing and reopening the database')
   assert.equal(catalog.archive(created.id).status, 'archived')
   assert.equal(catalog.list().length, 0)

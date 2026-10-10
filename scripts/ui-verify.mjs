@@ -333,7 +333,7 @@ console.log('== 断言区 ==')
     await agentPage.getByText(new RegExp(`团队模板「${templateTestTitle}」已保存为 v1`)).waitFor({ timeout: 8000 })
     const db = new DatabaseSync('data/database.db')
     try {
-      let rows = db.prepare('SELECT id, version, summary FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
+      let rows = db.prepare('SELECT id, version, summary, status FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
       const versionOne = rows.length === 1 && rows[0].version === 1
       detail.push(`团队模板 v1 持久化=${versionOne}`)
       ok &&= versionOne
@@ -342,10 +342,26 @@ console.log('== 断言区 ==')
       await agentPage.locator('input[placeholder="简要说明这个模板适合什么工作"]').fill('二版说明')
       await agentPage.getByRole('button', { name: '保存为所选模板新版本' }).click()
       await agentPage.getByText(new RegExp(`团队模板「${templateTestTitle}」已保存为 v2`)).waitFor({ timeout: 8000 })
-      rows = db.prepare('SELECT id, version, summary FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
+      rows = db.prepare('SELECT id, version, summary, status FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
       const revisioned = rows.length === 2 && rows[0].version === 1 && rows[1].version === 2 && rows[1].summary === '二版说明'
       detail.push(`v2 追加且保留 v1=${revisioned}`)
       ok &&= revisioned
+      await agentPage.getByRole('button', { name: '归档所选模板' }).click()
+      await agentPage.getByRole('button', { name: '归档模板', exact: true }).click()
+      await agentPage.getByText(new RegExp(`已归档团队模板「${templateTestTitle}」`)).waitFor({ timeout: 8000 })
+      rows = db.prepare('SELECT id, version, summary, status FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
+      const archived = rows.length === 2 && rows.every((row) => row.status === 'archived')
+      detail.push(`归档保留两版且统一隐藏=${archived}`)
+      ok &&= archived
+      await agentPage.getByRole('button', { name: '显示归档模板' }).click()
+      await agentPage.getByText('创建模板', { exact: true }).locator('xpath=..').locator('.el-select').click()
+      await agentPage.locator('.el-popper:visible .el-select-dropdown__item').filter({ hasText: templateTestTitle }).click()
+      await agentPage.getByRole('button', { name: '恢复所选模板' }).click()
+      await agentPage.getByText(new RegExp(`已恢复团队模板「${templateTestTitle}」`)).waitFor({ timeout: 8000 })
+      rows = db.prepare('SELECT id, version, summary, status FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
+      const restored = rows.length === 2 && rows.every((row) => row.status === 'active')
+      detail.push(`恢复后历史版本仍在=${restored}`)
+      ok &&= restored
     } finally {
       db.prepare('DELETE FROM agent_templates WHERE title = ?').run(templateTestTitle)
       db.close()

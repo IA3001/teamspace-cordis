@@ -98,6 +98,7 @@ function toTemplate(row: Row): AgentTemplate {
     summary: row.summary as string,
     input,
     teamOwned: true,
+    status: row.status as AgentTemplate['status'],
   }
 }
 
@@ -190,28 +191,53 @@ export class SqliteAgentCatalog extends AgentCatalogService {
     }
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      const previous = this.db.prepare('SELECT MAX(version) AS version FROM agent_templates WHERE id = ?').get(templateId) as Row
+      const previous = this.db.prepare('SELECT MAX(version) AS version, MAX(status) AS status FROM agent_templates WHERE id = ?').get(templateId) as Row
+      if (previous.status === 'archived') throw new AgentCatalogError('invalid_input', '模板已归档，请先恢复后再保存新版本')
       const version = Number(previous.version ?? 0) + 1
       this.db.prepare(`INSERT INTO agent_templates(id, version, title, summary, input, created_at)
         VALUES (?, ?, ?, ?, ?, ?)`).run(templateId, version, value.title, value.summary, JSON.stringify(value.input), now())
       this.db.exec('COMMIT')
-      return { ...value, id: templateId, version, teamOwned: true }
+      return this.getTeamTemplate(templateId)
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
     }
   }
 
-  listTemplates(): AgentTemplate[] {
+  listTemplates(includeArchived = false): AgentTemplate[] {
     const custom = this.db.prepare(`SELECT t.* FROM agent_templates t
       JOIN (SELECT id, MAX(version) AS version FROM agent_templates GROUP BY id) latest
-      ON latest.id = t.id AND latest.version = t.version ORDER BY t.title COLLATE NOCASE, t.id`).all() as Row[]
-    return [...AGENT_TEMPLATES, ...custom.map(toTemplate)]
+      ON latest.id = t.id AND latest.version = t.version
+      WHERE (? = 1 OR t.status = 'active') ORDER BY t.title COLLATE NOCASE, t.id`).all(Number(includeArchived)) as Row[]
+    const builtins = AGENT_TEMPLATES.map((template) => ({ ...template, status: 'active' as const }))
+    return [...builtins, ...custom.map(toTemplate)]
   }
 
   hasTemplateVersion(id: string, version: number): boolean {
     if (!Number.isSafeInteger(version) || version < 1) return false
     if (AGENT_TEMPLATES.some((template) => template.id === id && template.version === version)) return true
     return Boolean(this.db.prepare('SELECT 1 FROM agent_templates WHERE id = ? AND version = ?').get(id, version))
+  }
+
+  archiveTemplate(id: string): AgentTemplate {
+    this.setTemplateStatus(id, 'archived')
+    return this.getTeamTemplate(id)
+  }
+
+  restoreTemplate(id: string): AgentTemplate {
+    this.setTemplateStatus(id, 'active')
+    return this.getTeamTemplate(id)
+  }
+
+  private setTemplateStatus(id: string, status: 'active' | 'archived') {
+    if (!/^team-[a-f0-9-]{36}$/.test(id)) throw new AgentCatalogError('invalid_input', '只支持归档或恢复团队自定义模板')
+    const result = this.db.prepare('UPDATE agent_templates SET status = ? WHERE id = ?').run(status, id)
+    if (!Number(result.changes)) throw new AgentCatalogError('not_found', `团队模板 ${id} 不存在`)
+  }
+
+  private getTeamTemplate(id: string): AgentTemplate {
+    const row = this.db.prepare('SELECT * FROM agent_templates WHERE id = ? ORDER BY version DESC LIMIT 1').get(id) as Row | undefined
+    if (!row) throw new AgentCatalogError('not_found', `团队模板 ${id} 不存在`)
+    return toTemplate(row)
   }
 }

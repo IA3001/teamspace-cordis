@@ -48,6 +48,7 @@ export interface AgentTemplate {
   summary: string
   input: AgentDefinitionInput
   teamOwned?: boolean
+  status?: AgentDefinitionStatus
 }
 
 /** Generic role presets. Increment version when the default input changes; existing Agent copies stay unchanged. */
@@ -122,6 +123,8 @@ export abstract class AgentCatalogService extends Service {
   abstract list(includeArchived?: boolean): AgentDefinition[]
   abstract archive(id: string): AgentDefinition
   abstract saveTemplate(input: Omit<AgentTemplate, 'id' | 'version' | 'teamOwned'>, id?: string): AgentTemplate
-  abstract listTemplates(): AgentTemplate[]
+  abstract listTemplates(includeArchived?: boolean): AgentTemplate[]
   abstract hasTemplateVersion(id: string, version: number): boolean
+  abstract archiveTemplate(id: string): AgentTemplate
+  abstract restoreTemplate(id: string): AgentTemplate
 }

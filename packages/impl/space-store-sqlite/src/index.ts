@@ -154,6 +154,7 @@ declare module '@cordisjs/plugin-database' {
       summary: string
       input: string
       created_at: string
+      status: string
     }
     admin_accounts: {
       id: string
@@ -376,6 +377,7 @@ export function apply(ctx: Context, config: Config = {}) {
     summary: { type: 'string', nullable: false },
     input: { type: 'string', nullable: false },
     created_at: { type: 'string', nullable: false },
+    status: { type: 'string', nullable: false },
   }, { primary: ['id', 'version'] })
 
   // 后台身份与 Team users 完全分离；凭据与会话单独持久化。

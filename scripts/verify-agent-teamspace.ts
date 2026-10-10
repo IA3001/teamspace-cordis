@@ -26,7 +26,7 @@ import {
 import { apply as applySessions, createGroupSession, removeSessionMember } from '../packages/client-ui/space-client-ui-sessions/src/index.ts'
 
 const definitions = new Map<string, AgentDefinition>()
-const teamTemplates = new Map<string, Array<{ id: string; version: number; title: string; summary: string; input: AgentDefinitionInput; teamOwned: true }>>()
+const teamTemplates = new Map<string, Array<{ id: string; version: number; title: string; summary: string; input: AgentDefinitionInput; teamOwned: true; status: 'active' | 'archived' }>>()
 const promptTemplates = new Map<string, { ref: string; title: string; body: string; updatedAt: string }>()
 const memberships: Array<{ sessionId: string; principalId: string; role: string; duty?: string }> = []
 const events: Array<Record<string, unknown>> = Array.from({ length: 30 }, (_, i) => ({
@@ -68,8 +68,21 @@ const catalog = {
     definitions.set(id, value)
     return value
   },
-  listTemplates() {
+  listTemplates(includeArchived = false) {
     return [...AGENT_TEMPLATES, ...[...teamTemplates.values()].map((versions) => versions.at(-1)!) ]
+      .filter((template) => includeArchived || template.status !== 'archived')
+  },
+  archiveTemplate(id: string) {
+    const versions = teamTemplates.get(id)
+    if (!versions) throw new Error('not found')
+    for (const version of versions) version.status = 'archived'
+    return versions.at(-1)!
+  },
+  restoreTemplate(id: string) {
+    const versions = teamTemplates.get(id)
+    if (!versions) throw new Error('not found')
+    for (const version of versions) version.status = 'active'
+    return versions.at(-1)!
   },
   hasTemplateVersion(id: string, version: number) {
     return AGENT_TEMPLATES.some((template) => template.id === id && template.version === version) ||
@@ -78,7 +91,8 @@ const catalog = {
   saveTemplate(input: { title: string; summary: string; input: AgentDefinitionInput }, id?: string) {
     const templateId = id ?? `team-${randomUUID()}`
     const versions = teamTemplates.get(templateId) ?? []
-    const template = { ...input, id: templateId, version: versions.length + 1, teamOwned: true as const }
+    if (versions.at(-1)?.status === 'archived') throw new Error('已归档模板不能追加版本')
+    const template = { ...input, id: templateId, version: versions.length + 1, teamOwned: true as const, status: 'active' as const }
     versions.push(template)
     teamTemplates.set(templateId, versions)
     return template
@@ -201,6 +215,15 @@ async function main() {
   assert.equal(revisedAgentTemplate.version, 2, 'any Team member can append a shared template revision')
   assert.equal((await rpc.agentTemplates('team-a')).find((template: { id: string }) => template.id === savedAgentTemplate.id)?.version, 2,
     'Team template updates are visible to every Team member')
+  assert.equal((await rpc.archiveAgentTemplate('team-a', savedAgentTemplate.id)).status, 'archived')
+  assert.equal((await rpc.agentTemplates('team-b')).some((template: { id: string }) => template.id === savedAgentTemplate.id), false,
+    'archived templates are hidden from the default Team picker')
+  assert.equal((await rpc.agentTemplates('team-b', true)).find((template: { id: string }) => template.id === savedAgentTemplate.id)?.status, 'archived',
+    'Team members can reveal archived templates to restore them')
+  assert.equal(await rpc.archiveAgentTemplate('agent-token', savedAgentTemplate.id), null,
+    'Agent identities cannot archive shared templates')
+  assert.equal((await rpc.restoreAgentTemplate('team-b', savedAgentTemplate.id)).status, 'active',
+    'any Team human can restore a shared template')
   assert.equal(await rpc.saveAgentTemplate('agent-token', { title: 'Denied', summary: 'Denied', input }), null,
     'Agent identities cannot create or update the shared template catalog')
   assert.equal(catalog.hasTemplateVersion(savedAgentTemplate.id, 1), true, 'old template revisions remain valid Agent provenance')

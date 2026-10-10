@@ -155,7 +155,7 @@ export function apply(ctx: Context) {
   ctx.ui.registerPanel({ key: 'space.members', slot: 'right', title: '成员 / @ 清单', order: 1 })
   ctx.ui.registerPanel({ key: 'space.composer', slot: 'composer', title: '输入区', order: 0 })
 
-  ctx.webui.addEntry(
+  ctx.webui.addEntry<Record<string, (...args: any[]) => unknown>>(
     {
       baseUrl: import.meta.url,
       source: '../client/index.ts', // 开发态用 —— 我们不启用（A2 构建口径）
@@ -181,15 +181,29 @@ export function apply(ctx: Context) {
         if (!(await authTeamHuman(ctx, token))) return null
         return ctx.agentCatalog.list()
       },
-      async agentTemplates(token: string) {
+      async agentTemplates(token: string, includeArchived = false) {
         if (!(await authTeamHuman(ctx, token))) return null
-        return ctx.agentCatalog.listTemplates()
+        return ctx.agentCatalog.listTemplates(includeArchived)
       },
       async saveAgentTemplate(token: string, input: { title: string; summary: string; input: AgentDefinitionInput }, id?: string) {
         if (!(await authTeamHuman(ctx, token))) return null
         try { return ctx.agentCatalog.saveTemplate(input, id) }
         catch (e) {
           return { error: e instanceof AgentCatalogError ? e.code : 'save_template_failed', detail: (e as Error).message }
+        }
+      },
+      async archiveAgentTemplate(token: string, id: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { return ctx.agentCatalog.archiveTemplate(String(id)) }
+        catch (e) {
+          return { error: e instanceof AgentCatalogError ? e.code : 'archive_template_failed', detail: (e as Error).message }
+        }
+      },
+      async restoreAgentTemplate(token: string, id: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { return ctx.agentCatalog.restoreTemplate(String(id)) }
+        catch (e) {
+          return { error: e instanceof AgentCatalogError ? e.code : 'restore_template_failed', detail: (e as Error).message }
         }
       },
       /** Only public model-profile metadata is visible to Team members; credentials stay Admin-only. */

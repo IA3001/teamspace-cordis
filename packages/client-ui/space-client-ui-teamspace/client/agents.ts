@@ -43,6 +43,7 @@ interface AgentTemplate {
   summary: string
   input: Omit<AgentInput, 'llmProfileRef'> & { llmProfileRef?: string }
   teamOwned?: boolean
+  status?: 'active' | 'archived'
 }
 type ApiError = { error: string; detail: string }
 const isError = (value: unknown): value is ApiError => Boolean(value && typeof value === 'object' && 'error' in value)
@@ -52,8 +53,10 @@ export const AgentManagementPage = defineComponent({
   setup() {
     const rpc = useRpc<{
       agentDefinitions(token: string): Promise<AgentDefinition[] | null>
-      agentTemplates(token: string): Promise<AgentTemplate[] | null>
+      agentTemplates(token: string, includeArchived?: boolean): Promise<AgentTemplate[] | null>
       saveAgentTemplate(token: string, input: { title: string; summary: string; input: AgentInput }, id?: string): Promise<AgentTemplate | ApiError | null>
+      archiveAgentTemplate(token: string, id: string): Promise<AgentTemplate | ApiError | null>
+      restoreAgentTemplate(token: string, id: string): Promise<AgentTemplate | ApiError | null>
       llmProfiles(token: string): Promise<LlmProfileOption[] | null>
       promptTemplates(token: string): Promise<PromptTemplate[] | null>
       toolCatalog(token: string): Promise<ToolOption[] | null>
@@ -74,6 +77,7 @@ export const AgentManagementPage = defineComponent({
     const selectedTemplate = ref('')
     const templateMeta = ref({ title: '', summary: '' })
     const templateSaving = ref(false)
+    const showArchivedTemplates = ref(false)
     const sessionId = ref('')
     const editingId = ref('')
     const loading = ref(false)
@@ -110,7 +114,7 @@ export const AgentManagementPage = defineComponent({
       try {
         const [defs, allSessions, promptRows, registeredTools, templateRows, modelRows] = await Promise.all([
           rpc.value.agentDefinitions(token()), rpc.value.sessions(token()), rpc.value.promptTemplates(token()),
-          rpc.value.toolCatalog(token()), rpc.value.agentTemplates(token()), rpc.value.llmProfiles(token()),
+          rpc.value.toolCatalog(token()), rpc.value.agentTemplates(token(), true), rpc.value.llmProfiles(token()),
         ])
         if (!defs || !promptRows || !registeredTools || !templateRows || !modelRows) { window.location.assign('/login'); return }
         definitions.value = defs
@@ -148,6 +152,11 @@ export const AgentManagementPage = defineComponent({
     }
     async function save() {
       if (saving.value) return
+      const selected = templates.value.find((template) => template.id === selectedTemplate.value)
+      if (!editingId.value && selected?.status === 'archived') {
+        flash('归档模板不能用于创建 Agent，请先恢复模板或选择其他模板', true)
+        return
+      }
       saving.value = true
       try {
         const payload: AgentInput = { ...form.value }
@@ -173,6 +182,7 @@ export const AgentManagementPage = defineComponent({
       try {
         const selected = templates.value.find((item) => item.id === selectedTemplate.value)
         const id = !asNew && selected?.teamOwned ? selected.id : undefined
+        if (selected?.status === 'archived' && id) { flash('归档模板不能追加版本，请先恢复', true); return }
         const result = await rpc.value.saveAgentTemplate(token(), {
           title: templateMeta.value.title,
           summary: templateMeta.value.summary,
@@ -185,6 +195,21 @@ export const AgentManagementPage = defineComponent({
         flash(`团队模板「${result.title}」已保存为 v${result.version}`)
         await refresh()
       } catch (e) { flash(`模板保存失败：${(e as Error).message}`, true) }
+      finally { templateSaving.value = false }
+    }
+    async function setTemplateArchived(restore: boolean) {
+      const selected = templates.value.find((item) => item.id === selectedTemplate.value)
+      if (!selected?.teamOwned || templateSaving.value) return
+      templateSaving.value = true
+      try {
+        const result = restore
+          ? await rpc.value.restoreAgentTemplate(token(), selected.id)
+          : await rpc.value.archiveAgentTemplate(token(), selected.id)
+        if (!result) { window.location.assign('/login'); return }
+        if (isError(result)) { flash(result.detail || result.error, true); return }
+        flash(restore ? `已恢复团队模板「${result.title}」` : `已归档团队模板「${result.title}」`)
+        await refresh()
+      } catch (e) { flash(`模板${restore ? '恢复' : '归档'}失败：${(e as Error).message}`, true) }
       finally { templateSaving.value = false }
     }
     async function archive(def: AgentDefinition) {
@@ -241,6 +266,7 @@ export const AgentManagementPage = defineComponent({
       const ElEmpty = resolveComponent('el-empty') as unknown as string
       const ElRow = resolveComponent('el-row') as unknown as string
       const ElCol = resolveComponent('el-col') as unknown as string
+      const ElPopconfirm = resolveComponent('el-popconfirm') as unknown as string
       const ElDivider = resolveComponent('el-divider') as unknown as string
       const ElMain = resolveComponent('el-main') as unknown as string
       const ElScrollbar = resolveComponent('el-scrollbar') as unknown as string
@@ -259,9 +285,21 @@ export const AgentManagementPage = defineComponent({
           default: () => [
             !editingId.value ? field('创建模板', h(ElSelect, { modelValue: selectedTemplate.value,
               'onUpdate:modelValue': (v: string) => applyTemplate(v), placeholder: '从通用模板开始，也可直接填写' }, {
-              default: () => templates.value.map((item) => h(ElOption, { key: item.id,
-                label: `${item.title} v${item.version}：${item.summary}`, value: item.id })),
+              default: () => templates.value.filter((item) => showArchivedTemplates.value || item.status !== 'archived').map((item) => h(ElOption, { key: item.id,
+                label: `${item.status === 'archived' ? '已归档 · ' : ''}${item.title} v${item.version}：${item.summary}`, value: item.id })),
             })) : null,
+            !editingId.value ? h(ElSpace, {}, { default: () => [
+              h(ElButton, { text: true, onClick: () => { showArchivedTemplates.value = !showArchivedTemplates.value } }, {
+                default: () => showArchivedTemplates.value ? '隐藏归档模板' : '显示归档模板',
+              }),
+              !selectedTemplate.value || !templates.value.find((item) => item.id === selectedTemplate.value)?.teamOwned ? null
+                : templates.value.find((item) => item.id === selectedTemplate.value)?.status === 'archived'
+                  ? h(ElButton, { text: true, type: 'primary', loading: templateSaving.value, onClick: () => void setTemplateArchived(true) }, { default: () => '恢复所选模板' })
+                  : h(ElPopconfirm, { title: '归档后会从 Agent 新建模板列表隐藏；现有 Agent 的来源记录和历史版本会保留。',
+                    confirmButtonText: '归档模板', cancelButtonText: '取消', onConfirm: () => void setTemplateArchived(false) }, {
+                    reference: () => h(ElButton, { text: true, type: 'danger', loading: templateSaving.value }, { default: () => '归档所选模板' }),
+                  }),
+            ] }) : null,
             !editingId.value ? field('模板名称（保存当前配置时使用）', h(ElInput, { modelValue: templateMeta.value.title,
               'onUpdate:modelValue': (v: string) => { templateMeta.value.title = v }, placeholder: '例如：发布验收助手' })) : null,
             !editingId.value ? field('模板说明', h(ElInput, { modelValue: templateMeta.value.summary, maxlength: 240,
@@ -305,7 +343,8 @@ export const AgentManagementPage = defineComponent({
             h(ElSpace, {}, { default: () => [
               h(ElButton, { type: 'primary', loading: saving.value, onClick: () => void save() }, { default: () => editingId.value ? '保存配置' : '创建 Agent' }),
               !editingId.value ? h(ElButton, { loading: templateSaving.value, onClick: () => void saveTemplate(true) }, { default: () => '另存为团队模板' }) : null,
-              !editingId.value && templates.value.find((item) => item.id === selectedTemplate.value)?.teamOwned
+              !editingId.value && templates.value.find((item) => item.id === selectedTemplate.value)?.teamOwned &&
+                templates.value.find((item) => item.id === selectedTemplate.value)?.status !== 'archived'
                 ? h(ElButton, { loading: templateSaving.value, onClick: () => void saveTemplate(false) }, { default: () => '保存为所选模板新版本' }) : null,
               h(ElButton, { onClick: reset }, { default: () => '重置' }),
             ] }),

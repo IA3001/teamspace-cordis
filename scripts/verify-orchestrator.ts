@@ -429,8 +429,21 @@ async function partA(): Promise<void> {
   check('A5c 委托账本记账（单槽位）', JSON.stringify(t5.delegatedTargets) === JSON.stringify(['需求分析师']))
   check('A5d 每回合恰好一次大脑调用', t5.decisionCalls === 1)
   check('A5e 保持 chain 等目标反馈（不自动停也不自动续）', t5.state === 'chain')
-  const fb = engine.reportFeedback('s_a', '需求分析师', '边界条件有三处，已列清单。')
-  check('A5f 反馈落为该 agent 的发言事件并关联因果来源', fb.authorKind === 'agent' && fb.authorId === 'a_analyst' && fb.text.includes('边界条件') && fb.sourceEventId === trigger5.event.id && fb.replyTo == null)
+  const foreignSource = ctx.eventLog.append({
+    id: randomUUID(), sessionId: 's_b', authorId: 'u_dri', phaseId: null,
+    authorKind: 'human', kind: 'message', text: '另一会话的长期记忆来源', mentions: [], toolCalls: [], replyMode: '',
+  })
+  const voidedSource = ctx.eventLog.append({
+    id: randomUUID(), sessionId: 's_a', authorId: 'u_dri', phaseId: null,
+    authorKind: 'human', kind: 'message', text: '当前会话中已撤回的记忆来源', mentions: [], toolCalls: [], replyMode: '',
+  })
+  ctx.eventLog.void(voidedSource.id, 'u_dri', 'verify invalid source')
+  const fb = engine.reportFeedback('s_a', '需求分析师', '边界条件有三处，已列清单。', [foreignSource.id, voidedSource.id])
+  check('A5f 反馈保留有效委托来源，不把跨会话或已撤回来源写入因果链',
+    fb.authorKind === 'agent' && fb.authorId === 'a_analyst' && fb.text.includes('边界条件') &&
+      fb.sourceEventId === trigger5.event.id && fb.sourceEventIds.includes(trigger5.event.id) &&
+      !fb.sourceEventIds.includes(foreignSource.id) && !fb.sourceEventIds.includes(voidedSource.id) &&
+      fb.replyTo == null, JSON.stringify(fb.sourceEventIds))
   const t5b = engine.turn('s_a')
   check('A5g 收到目标反馈后协调者自动续步，不强制等待人工', t5b.state === 'chain' || t5b.state === 'static' && t5b.stopReason !== 'await_human')
   check('A5h 自动续步留有第二次决策记录', t5b.decisionCalls >= 1)

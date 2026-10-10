@@ -40,7 +40,7 @@
     "smoke": "./scripts/smoke.sh",
     "verify:ui": "node scripts/ui-verify.mjs && node scripts/record-action.mjs verify-ui",
     "gate:static": "npm run typecheck && npm run verify:workdir-quota && npm run lint:deps && npm run lint:patch && npm run lint:migrations && npm run lint:styles && npm run verify:admin-auth && npm run verify:admin-plugins && npm run verify:settings-encryption && npm run verify:session-members && npm run verify:session-access && npm run verify:upload-access && npm run verify:session-work && npm run verify:agent-speech && npm run verify:agent-catalog && npm run verify:agent-bootstrap && npm run verify:agent-teamspace && npm run verify:agent-inbox && npm run verify:flow-recovery && npm run verify:rag && npm run verify:rag-project && npm run verify:decision-commands && npm run verify:author-recall && npm run verify:empty-message && npm run verify:web-search && npm run verify:llm-stream && npm run verify:backup-restore && npm run lint:observe",
-    "gate:runtime": "npm run check:console && npm run check:web && npm run verify:ui && npm run smoke && npm run verify:orchestrator && npm run verify:workdir && npm run verify:p8 && npm run verify:sandbox",
+    "gate:runtime": "npm run check:console && npm run check:web && npm run verify:ui && npm run verify:orchestrator && npm run verify:workdir && npm run verify:p8 && npm run verify:sandbox && npm run smoke",
     "verify:agent-catalog": "tsx scripts/verify-agent-catalog.ts && node scripts/record-action.mjs verify-agent-catalog",
     "verify:admin-auth": "tsx scripts/verify-admin-auth.ts",
     "verify:llm-stream": "tsx scripts/verify-llm-stream.ts && node scripts/record-action.mjs verify-llm-stream",

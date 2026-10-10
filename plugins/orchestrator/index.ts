@@ -751,6 +751,19 @@ export class OrchestratorEngine extends OrchestratorService {
     sourceEventId: string | null; sourceEventIds: string[];
   }): SessionEvent {
     const history = this.ctx.eventLog.listBySession(input.sessionId)
+    // Long-term Agent memory may cite events from other sessions. Those sources
+    // can inform the answer, but event-log causality is intentionally scoped to
+    // one session so recall/redo cannot cross session boundaries.
+    const activeSessionSources = new Set(history.filter((event) => !event.voided).map((event) => event.id))
+    const requestedSources = [...new Set(input.sourceEventIds)]
+    const sourceEventIds = requestedSources.filter((id) => activeSessionSources.has(id))
+    const omittedSources = requestedSources.length - sourceEventIds.length
+    if (omittedSources > 0) {
+      this.ctx.logger.warn(
+        '[orchestrator] 忽略不属于当前会话或已撤回的上下文来源（session=%s, agent=%s, count=%d）',
+        input.sessionId, input.agentId, omittedSources,
+      )
+    }
     let speechPolicy: string | undefined
     try { speechPolicy = this.ctx.agents.get(input.agentId).descriptor.speechPolicy }
     catch { /* unregistered system identities stay passive-only */ }
@@ -776,7 +789,7 @@ export class OrchestratorEngine extends OrchestratorService {
       toolCalls: [],
       replyMode: '',
       sourceEventId: input.sourceEventId,
-      sourceEventIds: input.sourceEventIds,
+      sourceEventIds,
     })
   }
 

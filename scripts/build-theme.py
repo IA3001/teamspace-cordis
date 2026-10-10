@@ -35,7 +35,7 @@ tokens = """:root {
   --el-fill-color-blank: light-dark(#ffffff, #22262e);
   --el-text-color-primary: light-dark(#1f2329, #e8eaee);
   --el-text-color-regular: light-dark(#363b45, #c6cad2);
-  --el-text-color-secondary: light-dark(#8a90a0, #8a90a0);
+  --el-text-color-secondary: light-dark(#626b7a, #a3aab6);
   --el-box-shadow-light: 0 1px 2px rgba(0, 0, 0, .08), 0 4px 14px rgba(0, 0, 0, .10);
   --el-box-shadow: 0 2px 6px rgba(0, 0, 0, .12), 0 10px 24px rgba(0, 0, 0, .16);
   --el-font-family: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei",

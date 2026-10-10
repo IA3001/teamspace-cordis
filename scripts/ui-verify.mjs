@@ -229,7 +229,20 @@ console.log('== 断言区 ==')
       ok &&= nextBatch - firstBatch === 100 && nextBatch <= 210
     }
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
-  judge('AS4 活动日志按需分批渲染', ok, detail.join(' | '))
+  const summaries = page.locator('.right-sidebar .sp-activity-card .el-text.is-truncated')
+  const summaryMetrics = await summaries.evaluateAll((nodes) => nodes.map((node) => ({
+    height: node.getBoundingClientRect().height,
+    width: node.getBoundingClientRect().width,
+    cardWidth: node.closest('.el-card__body')?.getBoundingClientRect().width ?? 0,
+    whiteSpace: getComputedStyle(node).whiteSpace,
+    title: node.getAttribute('title') ?? '',
+  })))
+  const compact = summaryMetrics.length > 0 && summaryMetrics.every((item) =>
+    item.height <= 24 && item.width > 0 && item.width <= item.cardWidth + 1 &&
+    item.whiteSpace === 'nowrap' && item.title.length > 0)
+  detail.push(`单行摘要=${compact ? '是' : '否'}（${summaryMetrics.length}项）`)
+  ok &&= compact
+  judge('AS4 活动日志按需分批渲染且摘要单行可追溯', ok, detail.join(' | '))
 }
 
 // AS5 窄屏：会话标题不换行，搜索控件始终处于视口内且输入框保留可用宽度。

@@ -360,6 +360,7 @@ body:has(.sp-plain) .layout-activity { display: none; }
 
 /* 活动侧栏较窄，事件定位按钮与长消息需要在卡片内换行，不能横向裁掉。 */
 .sp-activity-card .el-card__body { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; }
-.sp-activity-card .el-text { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.sp-activity-card .el-text.is-truncated { width: 100%; }
+.sp-activity-card .el-text:not(.is-truncated) { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .sp-activity-meta { height: auto; max-width: 100%; justify-content: flex-start; text-align: left; white-space: normal; line-height: 1.4; }
 .sp-activity-meta > span { white-space: normal; overflow-wrap: anywhere; }

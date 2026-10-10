@@ -1690,7 +1690,7 @@ const TeamspacePage = defineComponent({
                     h(ElButton, { text: true, type: 'primary', size: 'small', class: 'sp-activity-meta', onClick: jumpToEvent }, {
                       default: () => `#${ev.seq} ${authorLabel(ev.authorId, members.value)} · ${formatTime(ev.ts)}`,
                     }),
-                    h(ElText, { size: 'small', title: summary }, {
+                    h(ElText, { size: 'small', truncated: true, title: summary }, {
                       default: () => `${ev.kind === 'message' ? '发言' : ev.kind}：${preview}`,
                     }),
                     ...calls.map((call, i) => {
@@ -1700,7 +1700,7 @@ const TeamspacePage = defineComponent({
                         h(ElTag, { size: 'small', type: call.err ? 'danger' : 'info' }, {
                           default: () => `调用工具：${call.name}`,
                         }),
-                        h(ElText, { size: 'small', title: outcome }, { default: () => shortOutcome }),
+                        h(ElText, { size: 'small', truncated: true, title: outcome }, { default: () => shortOutcome }),
                       ])
                     }),
                   ],

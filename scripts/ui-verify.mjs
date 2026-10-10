@@ -139,8 +139,17 @@ const judge = (name, ok, detail) => { console.log(`[AS] ${name}: ${ok ? 'GREEN' 
     detail.push(`同一消息=${anchor.id}，缩放前后偏移差=${Math.round(drift)}px`)
     ok &&= drift <= 12
     await page.setViewportSize({ width: 1440, height: 900 })
+    await page.waitForTimeout(300)
+    await wrap.evaluate((element) => { element.scrollTop = element.scrollHeight })
+    await page.waitForTimeout(200)
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.waitForTimeout(500)
+    const bottomGap = await wrap.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)
+    detail.push(`贴底缩放后距最新=${Math.round(bottomGap)}px`)
+    ok &&= bottomGap <= 80
+    await page.setViewportSize({ width: 1440, height: 900 })
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
-  judge('AS9 窗口缩放保留时间线阅读位置', ok, detail.join(' | '))
+  judge('AS9 窗口缩放保留阅读锚点与贴底状态', ok, detail.join(' | '))
 }
 
 console.log('== 常规回归（草稿 / 菜单 / 抽屉 / 消息卡）==')

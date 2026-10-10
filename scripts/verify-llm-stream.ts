@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { Context } from 'cordis'
 import { OpenAiChatLlm } from '../packages/impl/space-llm-openai/src/index.ts'
 import { runAgentExecutionGraph } from '../packages/impl/space-agent-runtime/src/execution-graph.ts'
+import { appendProgressDelta, MAX_PROGRESS_PREVIEW_CHARACTERS, progressPreviewLabel } from '../packages/client-ui/space-client-ui-teamspace/client/progress.ts'
 
 const originalFetch = globalThis.fetch
 let sentBody: Record<string, unknown> | undefined
@@ -86,6 +87,19 @@ try {
   })
   assert.equal(result.answer, '最终回复')
   assert.deepEqual(progress, ['最终', '回复'])
+
+  let preview = { text: '', totalCharacters: 0, truncated: false }
+  preview = appendProgressDelta(preview, '长回复：')
+  preview = appendProgressDelta(preview, '甲'.repeat(MAX_PROGRESS_PREVIEW_CHARACTERS + 5))
+  assert.equal(Array.from(preview.text).length, MAX_PROGRESS_PREVIEW_CHARACTERS)
+  assert.equal(preview.text, `甲`.repeat(MAX_PROGRESS_PREVIEW_CHARACTERS), 'long preview retains the most recent content')
+  assert.equal(preview.totalCharacters, MAX_PROGRESS_PREVIEW_CHARACTERS + 9)
+  assert.equal(preview.truncated, true)
+  assert.match(progressPreviewLabel('text-delta', preview), /仅显示末尾 16000\/16009 字符/u)
+  assert.match(progressPreviewLabel('failed', preview), /^任务失败（未提交回复草稿）/u)
+  assert.match(progressPreviewLabel('cancelled', preview), /^任务已撤回（未提交回复草稿）/u)
+  assert.equal(progressPreviewLabel('completed', { text: '完整答复', totalCharacters: 4, truncated: false }), '回复流已完成（预览）')
+  console.log('✓ long progress previews report retained length and terminal task states')
 
   const privateChunks: string[] = []
   const privateCtx = Object.assign(new Context(), {

@@ -38,6 +38,7 @@ import IconBtn from 'space-client-ui-shared/client/IconBtn.ts'
 import { authorLabel, formatTime, memberLabel } from 'space-client-ui-shared/client/labels.ts'
 import type { EventLite, MemberLite } from 'space-client-ui-shared/client/labels.ts'
 import { AgentManagementPage, AGENT_PAGE_ICON } from './agents.ts'
+import { appendProgressDelta, progressPreviewLabel } from './progress.ts'
 
 interface SessionLite { id: string; title: string; status: string; updatedAt?: string }
 interface SessionWorkLite {
@@ -81,6 +82,8 @@ type AgentProgressLite = {
   at: string
   steps: Array<{ label: string; at: string }>
   streamText?: string
+  streamCharacterCount?: number
+  streamTruncated?: boolean
 }
 
 function downstreamAgentCounts(events: readonly TEvent[]): Map<string, number> {
@@ -684,11 +687,26 @@ const TeamspacePage = defineComponent({
           const previous = progressRuns.value.find((run) => run.runId === update.runId)
           const steps = previous?.steps ?? []
           const delta = update.phase === 'text-delta' && typeof update.delta === 'string' ? update.delta : ''
-          const streamText = `${previous?.streamText ?? ''}${delta}`.slice(-16_000)
+          const preview = delta
+            ? appendProgressDelta({
+              text: previous?.streamText ?? '',
+              totalCharacters: previous?.streamCharacterCount ?? 0,
+              truncated: previous?.streamTruncated ?? false,
+            }, delta)
+            : {
+              text: previous?.streamText ?? '',
+              totalCharacters: previous?.streamCharacterCount ?? 0,
+              truncated: previous?.streamTruncated ?? false,
+            }
           if (steps.at(-1)?.label !== label) steps.push({ label, at: update.at })
           progressRuns.value = [
             ...progressRuns.value.filter((run) => run.runId !== update.runId),
-            { ...previous, ...update, steps: steps.slice(-30), streamText },
+            {
+              ...previous, ...update, steps: steps.slice(-30),
+              streamText: preview.text,
+              streamCharacterCount: preview.totalCharacters,
+              streamTruncated: preview.truncated,
+            },
           ].slice(-40)
           return
         }
@@ -1079,6 +1097,15 @@ const TeamspacePage = defineComponent({
       const ElTimelineItem = resolveComponent('el-timeline-item') as unknown as string
       const ElDescriptions = resolveComponent('el-descriptions') as unknown as string
       const ElDescriptionsItem = resolveComponent('el-descriptions-item') as unknown as string
+      const progressPreview = (run: AgentProgressLite, key: string) => run.streamText
+        ? h(ElText, { key }, {
+          default: () => `${progressPreviewLabel(run.phase, {
+            text: run.streamText!,
+            totalCharacters: run.streamCharacterCount ?? Array.from(run.streamText!).length,
+            truncated: run.streamTruncated ?? false,
+          })}\n${run.streamText}`,
+        })
+        : null
       const KLayout = resolveComponent('k-layout') as unknown as string
       const KIcon = resolveComponent('k-icon') as unknown as string
       const KSlot = resolveComponent('k-slot') as unknown as string
@@ -1351,7 +1378,7 @@ const TeamspacePage = defineComponent({
                 ...run.steps.map((step, index) => h(ElText, {
                   key: `${run.runId}-${index}`, size: 'small', type: 'info',
                 }, { default: () => `${formatTime(step.at)} · ${step.label}` })),
-                run.streamText ? h(ElText, { key: `${run.runId}-stream` }, { default: () => `回复草稿（生成中）\n${run.streamText}` }) : null,
+                progressPreview(run, `${run.runId}-stream`),
               ],
             }),
           }),
@@ -1482,7 +1509,7 @@ const TeamspacePage = defineComponent({
                     ...run.steps.map((step, index) => h(ElText, {
                       key: `${run.runId}-live-${index}`, size: 'small', type: 'info',
                     }, { default: () => `${formatTime(step.at)} · ${step.label}` })),
-                    run.streamText ? h(ElText, { key: `${run.runId}-live-stream` }, { default: () => `回复草稿（生成中）\n${run.streamText}` }) : null,
+                    progressPreview(run, `${run.runId}-live-stream`),
                   ],
                 }),
               }),

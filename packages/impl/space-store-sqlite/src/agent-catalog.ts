@@ -2,10 +2,12 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import {
+  AGENT_TEMPLATES,
   AgentCatalogError,
   AgentCatalogService,
 } from 'space-agent-catalog'
 import type {
+  AgentTemplate,
   AgentDefinition,
   AgentDefinitionInput,
   AgentDefinitionPatch,
@@ -71,6 +73,31 @@ function cleanInput(input: AgentDefinitionInput): AgentDefinitionInput {
     memoryPolicy: String(input.memoryPolicy ?? 'agent').trim() || 'agent',
     speechPolicy: String(input.speechPolicy ?? 'passive').trim() || 'passive',
     templateOrigin,
+  }
+}
+
+function cleanTemplate(input: Omit<AgentTemplate, 'id' | 'version' | 'teamOwned'>): Omit<AgentTemplate, 'id' | 'version' | 'teamOwned'> {
+  if (!input || typeof input !== 'object' || !input.input || typeof input.input !== 'object') {
+    throw new AgentCatalogError('invalid_input', '模板必须包含有效的 Agent 配置')
+  }
+  const title = String(input.title ?? '').trim()
+  const summary = String(input.summary ?? '').trim()
+  if (!title || title.length > 80 || !summary || summary.length > 240) {
+    throw new AgentCatalogError('invalid_input', '模板名称和说明不能为空（最多 80 / 240 个字符）')
+  }
+  const { templateOrigin: _origin, ...rawInput } = input.input
+  return { title, summary, input: cleanInput({ ...rawInput, templateOrigin: null }) }
+}
+
+function toTemplate(row: Row): AgentTemplate {
+  const input = JSON.parse(String(row.input)) as AgentDefinitionInput
+  return {
+    id: row.id as string,
+    version: Number(row.version),
+    title: row.title as string,
+    summary: row.summary as string,
+    input,
+    teamOwned: true,
   }
 }
 
@@ -153,5 +180,38 @@ export class SqliteAgentCatalog extends AgentCatalogService {
       this.db.prepare(`UPDATE agent_definitions SET status = 'archived', updated_at = ? WHERE id = ?`).run(now(), id)
     }
     return this.get(id)
+  }
+
+  saveTemplate(input: Omit<AgentTemplate, 'id' | 'version' | 'teamOwned'>, id?: string): AgentTemplate {
+    const value = cleanTemplate(input)
+    const templateId = id || `team-${randomUUID()}`
+    if (!/^team-[a-f0-9-]{36}$/.test(templateId)) {
+      throw new AgentCatalogError('invalid_input', '只允许创建或更新团队自定义模板')
+    }
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const previous = this.db.prepare('SELECT MAX(version) AS version FROM agent_templates WHERE id = ?').get(templateId) as Row
+      const version = Number(previous.version ?? 0) + 1
+      this.db.prepare(`INSERT INTO agent_templates(id, version, title, summary, input, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(templateId, version, value.title, value.summary, JSON.stringify(value.input), now())
+      this.db.exec('COMMIT')
+      return { ...value, id: templateId, version, teamOwned: true }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listTemplates(): AgentTemplate[] {
+    const custom = this.db.prepare(`SELECT t.* FROM agent_templates t
+      JOIN (SELECT id, MAX(version) AS version FROM agent_templates GROUP BY id) latest
+      ON latest.id = t.id AND latest.version = t.version ORDER BY t.title COLLATE NOCASE, t.id`).all() as Row[]
+    return [...AGENT_TEMPLATES, ...custom.map(toTemplate)]
+  }
+
+  hasTemplateVersion(id: string, version: number): boolean {
+    if (!Number.isSafeInteger(version) || version < 1) return false
+    if (AGENT_TEMPLATES.some((template) => template.id === id && template.version === version)) return true
+    return Boolean(this.db.prepare('SELECT 1 FROM agent_templates WHERE id = ? AND version = ?').get(id, version))
   }
 }

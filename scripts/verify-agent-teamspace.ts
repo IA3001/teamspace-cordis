@@ -2,12 +2,14 @@
 // creation does not join sessions, explicit invite is idempotent, and history
 // access includes the session's complete ordered event stream.
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from 'cordis'
 import type { Context as CordisContext } from 'cordis'
 import type { AgentDefinition, AgentDefinitionInput } from 'space-agent-catalog'
+import { AGENT_TEMPLATES } from 'space-agent-catalog'
 import { AgentError } from 'space-agent'
 import { AgentRegistry, apply as applyAgentRegistry } from '../plugins/agent-registry/index.ts'
 import { AgentRuntime } from '../packages/impl/space-agent-runtime/src/index.ts'
@@ -24,6 +26,7 @@ import {
 import { apply as applySessions, createGroupSession, removeSessionMember } from '../packages/client-ui/space-client-ui-sessions/src/index.ts'
 
 const definitions = new Map<string, AgentDefinition>()
+const teamTemplates = new Map<string, Array<{ id: string; version: number; title: string; summary: string; input: AgentDefinitionInput; teamOwned: true }>>()
 const promptTemplates = new Map<string, { ref: string; title: string; body: string; updatedAt: string }>()
 const memberships: Array<{ sessionId: string; principalId: string; role: string; duty?: string }> = []
 const events: Array<Record<string, unknown>> = Array.from({ length: 30 }, (_, i) => ({
@@ -64,6 +67,21 @@ const catalog = {
     const value = { ...this.get(id), status: 'archived' as const }
     definitions.set(id, value)
     return value
+  },
+  listTemplates() {
+    return [...AGENT_TEMPLATES, ...[...teamTemplates.values()].map((versions) => versions.at(-1)!) ]
+  },
+  hasTemplateVersion(id: string, version: number) {
+    return AGENT_TEMPLATES.some((template) => template.id === id && template.version === version) ||
+      Boolean(teamTemplates.get(id)?.some((template) => template.version === version))
+  },
+  saveTemplate(input: { title: string; summary: string; input: AgentDefinitionInput }, id?: string) {
+    const templateId = id ?? `team-${randomUUID()}`
+    const versions = teamTemplates.get(templateId) ?? []
+    const template = { ...input, id: templateId, version: versions.length + 1, teamOwned: true as const }
+    versions.push(template)
+    teamTemplates.set(templateId, versions)
+    return template
   },
 }
 const ctx = Object.assign(new Context(), {
@@ -172,6 +190,20 @@ async function main() {
   assert.equal(agentTemplates.find((template: { id: string }) => template.id === 'research')?.version, 1,
     'starter templates expose an explicit version')
   assert.equal(await rpc.agentTemplates('agent-token'), null, 'Agent identities cannot manage shared Agent templates')
+  const savedAgentTemplate = await rpc.saveAgentTemplate('team-a', {
+    title: '发布验收助手', summary: '负责发布前检查', input,
+  })
+  assert.equal(savedAgentTemplate.teamOwned, true)
+  assert.equal(savedAgentTemplate.version, 1)
+  const revisedAgentTemplate = await rpc.saveAgentTemplate('team-b', {
+    title: '发布验收助手', summary: '负责发布前检查和回滚验证', input: { ...input, toolIds: ['kb.search'] },
+  }, savedAgentTemplate.id)
+  assert.equal(revisedAgentTemplate.version, 2, 'any Team member can append a shared template revision')
+  assert.equal((await rpc.agentTemplates('team-a')).find((template: { id: string }) => template.id === savedAgentTemplate.id)?.version, 2,
+    'Team template updates are visible to every Team member')
+  assert.equal(await rpc.saveAgentTemplate('agent-token', { title: 'Denied', summary: 'Denied', input }), null,
+    'Agent identities cannot create or update the shared template catalog')
+  assert.equal(catalog.hasTemplateVersion(savedAgentTemplate.id, 1), true, 'old template revisions remain valid Agent provenance')
   assert.match((await rpc.createAgent('team-a', { ...input, title: 'Invalid template origin', templateOrigin: { id: 'research', version: 999 } })).detail,
     /模板版本不存在/, 'creation rejects a template version that is not in the shared template catalog')
   settings.set('llm.profiles', [{ id: 'ark-coding', name: 'Ark Coding' }])
@@ -194,6 +226,11 @@ async function main() {
   assert.equal(refreshCount, 2, 'updating a definition immediately refreshes the live registry')
   assert.equal(liveRegistry.get(created.id).descriptor.description, '检索、比较并汇总资料')
   assert.equal((await rpc.agentDefinitions('team-b')).length, 1, 'another Team human sees the shared definition')
+  const fromTeamTemplate = await rpc.createAgent('team-b', {
+    ...input, title: '模板创建 Agent', templateOrigin: { id: savedAgentTemplate.id, version: 1 },
+  })
+  assert.deepEqual(fromTeamTemplate.templateOrigin, { id: savedAgentTemplate.id, version: 1 },
+    'new Agents retain the exact custom template revision they copied')
   assert.equal(await rpc.createAgent('agent-token', { ...input, title: 'Agent token must fail' }), null, 'Agent tokens cannot manage catalog')
   assert.deepEqual(await rpc.apiConfig('team-a'), { publicBaseUrl: null, port: Number(process.env.APP_PORT ?? 8080) },
     'authenticated Team users receive the deployment API mapping')
@@ -395,7 +432,7 @@ async function main() {
   }
 
   await rpc.archiveAgent('team-a', created.id)
-  assert.equal(refreshCount, 4, 'archiving immediately refreshes the live registry')
+  assert.equal(refreshCount, 5, 'creating from a shared template and archiving refresh the live registry')
   assert.throws(() => registry.get(created.id), (error) => error instanceof AgentError && error.code === 'not_found', 'reconciliation removes archived catalog entries')
   console.log(`✓ Teamspace Agent API, explicit invite, full history, and legacy migration passed (${appCount} panels registered)`)
 }

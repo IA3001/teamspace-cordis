@@ -18,6 +18,8 @@ const profileMigration = migrations.find((m) => m.version === 27)
 assert.ok(profileMigration, 'per-Agent text model profile migration must be present')
 const templateMigration = migrations.find((m) => m.version === 28)
 assert.ok(templateMigration, 'Agent template provenance migration must be present')
+const teamTemplateMigration = migrations.find((m) => m.version === 29)
+assert.ok(teamTemplateMigration, 'team-authored Agent template migration must be present')
 const dir = mkdtempSync(join(tmpdir(), 'agent-catalog-verify-'))
 const path = join(dir, 'catalog.db')
 
@@ -26,6 +28,7 @@ try {
   db.exec(migration)
   db.exec(profileMigration.up)
   db.exec(templateMigration.up)
+  db.exec(teamTemplateMigration.up)
   let catalog = new SqliteAgentCatalog(new Context(), db)
   const created = catalog.create({
     title: '研究助手',
@@ -44,6 +47,22 @@ try {
   assert.equal(created.llmProfileRef, 'ark-coding')
   assert.deepEqual(created.templateOrigin, { id: 'research', version: 1 })
   assert.deepEqual(created.toolIds, ['web.search', 'kb.search'])
+  const teamTemplate = catalog.saveTemplate({
+    title: '发布验收助手', summary: '检查发布前后状态', input: {
+      title: '发布验收助手', description: '验证发布前后状态并列出结果。', promptRef: '', modelRef: '', llmProfileRef: 'ark-coding',
+      toolIds: ['web.search'], contextSources: ['session', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive',
+    },
+  })
+  assert.equal(teamTemplate.teamOwned, true)
+  assert.equal(teamTemplate.version, 1)
+  const teamTemplateV2 = catalog.saveTemplate({
+    title: '发布验收助手', summary: '检查发布和回滚状态', input: { ...teamTemplate.input, description: '验证发布与回滚状态。' },
+  }, teamTemplate.id)
+  assert.equal(teamTemplateV2.version, 2, 'saving a shared template appends an immutable revision')
+  assert.equal(catalog.hasTemplateVersion(teamTemplate.id, 1), true, 'prior versions remain addressable for Agent provenance')
+  assert.equal(catalog.listTemplates().find((template) => template.id === teamTemplate.id)?.version, 2,
+    'the template picker exposes the newest shared version')
+  assert.throws(() => catalog.saveTemplate({ title: '', summary: '无效', input: teamTemplate.input }), /模板名称/u)
   assert.deepEqual(catalog.list().map((a) => a.id), [created.id])
   assert.throws(() => catalog.create({
     title: '研究助手', description: 'duplicate', promptRef: '', modelRef: '',
@@ -64,8 +83,12 @@ try {
   rollbackDb.exec(migration)
   rollbackDb.exec(profileMigration.up)
   rollbackDb.exec(templateMigration.up)
+  rollbackDb.exec(teamTemplateMigration.up)
+  rollbackDb.exec(teamTemplateMigration.down)
   rollbackDb.exec(templateMigration.down)
   rollbackDb.exec(profileMigration.down)
+  assert.equal(rollbackDb.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_templates'`).get(), undefined,
+    'team template rollback removes the added table')
   const rolledBackColumns = rollbackDb.prepare(`PRAGMA table_info(agent_definitions)`).all() as Array<{ name: string }>
   assert.equal(rolledBackColumns.some((column) => column.name === 'llm_profile_ref'), false, 'profile migration down removes the additive column')
   assert.equal(rolledBackColumns.some((column) => column.name === 'template_id' || column.name === 'template_version'), false,
@@ -77,6 +100,8 @@ try {
   catalog = new SqliteAgentCatalog(new Context(), db)
   assert.equal(catalog.get(created.id).title, '研究助手')
   assert.equal(catalog.list().length, 1)
+  assert.equal(catalog.listTemplates().find((template) => template.id === teamTemplate.id)?.version, 2,
+    'team-authored templates survive closing and reopening the database')
   assert.equal(catalog.archive(created.id).status, 'archived')
   assert.equal(catalog.list().length, 0)
   assert.equal(catalog.list(true).length, 1)

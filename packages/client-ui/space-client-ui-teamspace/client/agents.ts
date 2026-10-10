@@ -36,7 +36,14 @@ interface SessionOption { id: string; title: string; status: string }
 interface PromptTemplate { ref: string; title: string; body: string; updatedAt: string }
 interface ToolOption { id: string; title: string; capabilities: string[] }
 interface LlmProfileOption { id: string; name: string; model: string }
-interface AgentTemplate { id: string; version: number; title: string; summary: string; input: Omit<AgentInput, 'llmProfileRef'> & { llmProfileRef?: string } }
+interface AgentTemplate {
+  id: string
+  version: number
+  title: string
+  summary: string
+  input: Omit<AgentInput, 'llmProfileRef'> & { llmProfileRef?: string }
+  teamOwned?: boolean
+}
 type ApiError = { error: string; detail: string }
 const isError = (value: unknown): value is ApiError => Boolean(value && typeof value === 'object' && 'error' in value)
 
@@ -46,6 +53,7 @@ export const AgentManagementPage = defineComponent({
     const rpc = useRpc<{
       agentDefinitions(token: string): Promise<AgentDefinition[] | null>
       agentTemplates(token: string): Promise<AgentTemplate[] | null>
+      saveAgentTemplate(token: string, input: { title: string; summary: string; input: AgentInput }, id?: string): Promise<AgentTemplate | ApiError | null>
       llmProfiles(token: string): Promise<LlmProfileOption[] | null>
       promptTemplates(token: string): Promise<PromptTemplate[] | null>
       toolCatalog(token: string): Promise<ToolOption[] | null>
@@ -64,6 +72,8 @@ export const AgentManagementPage = defineComponent({
     const llmProfiles = ref<LlmProfileOption[]>([])
     const templates = ref<AgentTemplate[]>([])
     const selectedTemplate = ref('')
+    const templateMeta = ref({ title: '', summary: '' })
+    const templateSaving = ref(false)
     const sessionId = ref('')
     const editingId = ref('')
     const loading = ref(false)
@@ -88,6 +98,7 @@ export const AgentManagementPage = defineComponent({
     const reset = () => {
       editingId.value = ''
       selectedTemplate.value = ''
+      templateMeta.value = { title: '', summary: '' }
       form.value = {
         title: '', description: '', promptRef: '', modelRef: '', llmProfileRef: '', toolIds: [],
         contextSources: ['session', 'agent-memory', 'team-kb'],
@@ -127,6 +138,7 @@ export const AgentManagementPage = defineComponent({
       selectedTemplate.value = id
       const template = templates.value.find((item) => item.id === id)
       if (!template || editingId.value) return
+      templateMeta.value = { title: template.title, summary: template.summary }
       form.value = {
         ...template.input,
         llmProfileRef: template.input.llmProfileRef ?? '',
@@ -154,6 +166,26 @@ export const AgentManagementPage = defineComponent({
         await refresh()
       } catch (e) { flash(`保存失败：${(e as Error).message}`, true) }
       finally { saving.value = false }
+    }
+    async function saveTemplate(asNew: boolean) {
+      if (templateSaving.value) return
+      templateSaving.value = true
+      try {
+        const selected = templates.value.find((item) => item.id === selectedTemplate.value)
+        const id = !asNew && selected?.teamOwned ? selected.id : undefined
+        const result = await rpc.value.saveAgentTemplate(token(), {
+          title: templateMeta.value.title,
+          summary: templateMeta.value.summary,
+          input: { ...form.value },
+        }, id)
+        if (!result) { window.location.assign('/login'); return }
+        if (isError(result)) { flash(result.detail || result.error, true); return }
+        selectedTemplate.value = result.id
+        templateMeta.value = { title: result.title, summary: result.summary }
+        flash(`团队模板「${result.title}」已保存为 v${result.version}`)
+        await refresh()
+      } catch (e) { flash(`模板保存失败：${(e as Error).message}`, true) }
+      finally { templateSaving.value = false }
     }
     async function archive(def: AgentDefinition) {
       const result = await rpc.value.archiveAgent(token(), def.id)
@@ -227,6 +259,10 @@ export const AgentManagementPage = defineComponent({
               default: () => templates.value.map((item) => h(ElOption, { key: item.id,
                 label: `${item.title} v${item.version}：${item.summary}`, value: item.id })),
             })) : null,
+            !editingId.value ? field('模板名称（保存当前配置时使用）', h(ElInput, { modelValue: templateMeta.value.title,
+              'onUpdate:modelValue': (v: string) => { templateMeta.value.title = v }, placeholder: '例如：发布验收助手' })) : null,
+            !editingId.value ? field('模板说明', h(ElInput, { modelValue: templateMeta.value.summary, maxlength: 240,
+              'onUpdate:modelValue': (v: string) => { templateMeta.value.summary = v }, placeholder: '简要说明这个模板适合什么工作' })) : null,
             field('名称', h(ElInput, { modelValue: form.value.title, maxlength: 80, showWordLimit: true,
               'onUpdate:modelValue': (v: string) => { form.value.title = v }, placeholder: '例如：需求分析助手' })),
             field('职责说明', h(ElInput, { modelValue: form.value.description, type: 'textarea', rows: 3,
@@ -265,6 +301,9 @@ export const AgentManagementPage = defineComponent({
             })),
             h(ElSpace, {}, { default: () => [
               h(ElButton, { type: 'primary', loading: saving.value, onClick: () => void save() }, { default: () => editingId.value ? '保存配置' : '创建 Agent' }),
+              !editingId.value ? h(ElButton, { loading: templateSaving.value, onClick: () => void saveTemplate(true) }, { default: () => '另存为团队模板' }) : null,
+              !editingId.value && templates.value.find((item) => item.id === selectedTemplate.value)?.teamOwned
+                ? h(ElButton, { loading: templateSaving.value, onClick: () => void saveTemplate(false) }, { default: () => '保存为所选模板新版本' }) : null,
               h(ElButton, { onClick: reset }, { default: () => '重置' }),
             ] }),
           ],
@@ -324,7 +363,7 @@ export const AgentManagementPage = defineComponent({
         }),
       })
 
-      return h(KLayout, { main: 'page-teamspace-agents' }, {
+      return h(KLayout, { main: 'page-teamspace-agents', class: 'sp-team-layout' }, {
         header: () => h(ElRow, { justify: 'space-between', align: 'middle' }, [
           h(ElText, { tag: 'strong' }, { default: () => '团队共享 Agent' }),
           h(ElButton, { text: true, onClick: () => window.location.assign('/teamspace') }, { default: () => '返回会话' }),

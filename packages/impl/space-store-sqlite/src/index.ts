@@ -147,6 +147,14 @@ declare module '@cordisjs/plugin-database' {
       created_at: string
       updated_at: string
     }
+    agent_templates: {
+      id: string
+      version: number
+      title: string
+      summary: string
+      input: string
+      created_at: string
+    }
     admin_accounts: {
       id: string
       username: string
@@ -361,6 +369,14 @@ export function apply(ctx: Context, config: Config = {}) {
     created_at: { type: 'string', nullable: false },
     updated_at: { type: 'string', nullable: false },
   }, { primary: 'id' })
+  ctx.database.extend('agent_templates', {
+    id: { type: 'string', nullable: false },
+    version: { type: 'integer', nullable: false },
+    title: { type: 'string', nullable: false },
+    summary: { type: 'string', nullable: false },
+    input: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: ['id', 'version'] })
 
   // 后台身份与 Team users 完全分离；凭据与会话单独持久化。
   ctx.database.extend('admin_accounts', {

@@ -14,7 +14,7 @@ import type {} from '@cordisjs/plugin-webui'
 import type { PublicUser } from 'space-identity'
 import type { ReactSummary, SessionEvent } from 'space-event'
 import { isAgentVisibleEvent } from 'space-event'
-import { AgentCatalogError, AGENT_TEMPLATES } from 'space-agent-catalog'
+import { AgentCatalogError } from 'space-agent-catalog'
 import type { AgentDefinition, AgentDefinitionInput, AgentDefinitionPatch } from 'space-agent-catalog'
 import type { PromptTemplate } from 'space-prompt'
 import { randomUUID } from 'node:crypto'
@@ -183,7 +183,14 @@ export function apply(ctx: Context) {
       },
       async agentTemplates(token: string) {
         if (!(await authTeamHuman(ctx, token))) return null
-        return AGENT_TEMPLATES
+        return ctx.agentCatalog.listTemplates()
+      },
+      async saveAgentTemplate(token: string, input: { title: string; summary: string; input: AgentDefinitionInput }, id?: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { return ctx.agentCatalog.saveTemplate(input, id) }
+        catch (e) {
+          return { error: e instanceof AgentCatalogError ? e.code : 'save_template_failed', detail: (e as Error).message }
+        }
       },
       /** Only public model-profile metadata is visible to Team members; credentials stay Admin-only. */
       async llmProfiles(token: string) {
@@ -216,8 +223,7 @@ export function apply(ctx: Context) {
         const user = await authTeamHuman(ctx, token)
         if (!user) return null
         try {
-          if (input.templateOrigin && !AGENT_TEMPLATES.some((template) =>
-            template.id === input.templateOrigin?.id && template.version === input.templateOrigin.version)) {
+          if (input.templateOrigin && !ctx.agentCatalog.hasTemplateVersion(input.templateOrigin.id, input.templateOrigin.version)) {
             throw new AgentCatalogError('invalid_input', '所选 Agent 起始模板版本不存在')
           }
           const def = ctx.agentCatalog.create(input, `a_${randomUUID()}`)

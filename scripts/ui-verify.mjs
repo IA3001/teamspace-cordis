@@ -295,6 +295,7 @@ console.log('== 断言区 ==')
 {
   let ok = true; const detail = []
   let agentContext
+  let templateTestTitle = ''
   try {
     const token = await page.evaluate(() => localStorage.getItem('space_token'))
     agentContext = await browser.newContext({ viewport: { width: 1440, height: 900 } })
@@ -303,16 +304,55 @@ console.log('== 断言区 ==')
     const agentErrors = []
     agentPage.on('pageerror', (e) => agentErrors.push(String(e).slice(0, 120)))
     await agentPage.goto(`${teamspaceBase}/teamspace/agents`, { waitUntil: 'networkidle', timeout: 20000 })
+    const fontFamily = await agentPage.locator('.k-layout').evaluate((element) => getComputedStyle(element).fontFamily)
+    const genericFamily = fontFamily.split(',').at(-1)?.trim().replace(/^['"]|['"]$/g, '')
+    detail.push(`共享无衬线字体=${fontFamily}`)
+    ok &&= genericFamily === 'sans-serif'
     await agentPage.getByText('创建模板', { exact: true }).locator('xpath=..').locator('.el-select').click()
     const versionOptions = agentPage.locator('.el-popper:visible .el-select-dropdown__item')
     await versionOptions.first().waitFor({ timeout: 5000 })
     const options = await versionOptions.allTextContents()
     const versioned = options.filter((text) => /\sv\d+：/.test(text))
     detail.push(`有版本标识的模板=${versioned.length}（${versioned.join(' / ')}）`)
-    ok &&= versioned.length === 6 && agentErrors.length === 0
+    const starterIds = ['研究与分析', '方案挑战', '代码实现', '代码审查', '测试设计', '通用协作']
+    const hasStarters = starterIds.every((name) => options.some((text) => text.includes(name)))
+    detail.push(`六个内置起始模板=${hasStarters}`)
+    ok &&= versioned.length >= 6 && hasStarters && agentErrors.length === 0
+    templateTestTitle = `UI验收模板-${Date.now()}`
+    await versionOptions.first().click()
+    await agentPage.locator('input[placeholder="例如：发布验收助手"]').fill(templateTestTitle)
+    await agentPage.locator('input[placeholder="简要说明这个模板适合什么工作"]').fill('验证团队模板共享和版本递增')
+    await agentPage.getByRole('button', { name: '另存为团队模板' }).click()
+    await agentPage.getByText(new RegExp(`团队模板「${templateTestTitle}」已保存为 v1`)).waitFor({ timeout: 8000 })
+    const db = new DatabaseSync('data/database.db')
+    try {
+      let rows = db.prepare('SELECT id, version, summary FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
+      const versionOne = rows.length === 1 && rows[0].version === 1
+      detail.push(`团队模板 v1 持久化=${versionOne}`)
+      ok &&= versionOne
+      await agentPage.getByText('创建模板', { exact: true }).locator('xpath=..').locator('.el-select').click()
+      await agentPage.locator('.el-popper:visible .el-select-dropdown__item').filter({ hasText: templateTestTitle }).click()
+      await agentPage.locator('input[placeholder="简要说明这个模板适合什么工作"]').fill('二版说明')
+      await agentPage.getByRole('button', { name: '保存为所选模板新版本' }).click()
+      await agentPage.getByText(new RegExp(`团队模板「${templateTestTitle}」已保存为 v2`)).waitFor({ timeout: 8000 })
+      rows = db.prepare('SELECT id, version, summary FROM agent_templates WHERE title = ? ORDER BY version').all(templateTestTitle)
+      const revisioned = rows.length === 2 && rows[0].version === 1 && rows[1].version === 2 && rows[1].summary === '二版说明'
+      detail.push(`v2 追加且保留 v1=${revisioned}`)
+      ok &&= revisioned
+    } finally {
+      db.prepare('DELETE FROM agent_templates WHERE title = ?').run(templateTestTitle)
+      db.close()
+    }
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
-  finally { await agentContext?.close() }
-  judge('AS7 团队 Agent 创建器展示模板版本', ok, detail.join(' | '))
+  finally {
+    if (templateTestTitle) {
+      const db = new DatabaseSync('data/database.db')
+      try { db.prepare('DELETE FROM agent_templates WHERE title = ?').run(templateTestTitle) }
+      finally { db.close() }
+    }
+    await agentContext?.close()
+  }
+  judge('AS7 团队 Agent 创建器展示版本并保存共享模板', ok, detail.join(' | '))
 }
 
 console.log('页面错误:', errs.length ? errs : '（无）')

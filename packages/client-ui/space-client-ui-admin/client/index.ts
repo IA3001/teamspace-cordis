@@ -419,6 +419,7 @@ const AdminPage = defineComponent({
               { text: `人类 ${users.value.filter((u) => u.kind === 'human').length}`, level: 'ok' },
               { text: `AI 成员 ${users.value.filter((u) => u.kind === 'agent').length}`, level: 'idle' },
             ],
+            actions: [{ label: '登出', onClick: () => void doLogout(), danger: true }],
           }),
         error.value
           ? h('div', { class: 'sp-note sp-note--err' }, error.value)
@@ -445,10 +446,6 @@ const AdminPage = defineComponent({
                 style: 'width:220px',
               }),
               h(ElButton, { type: 'primary', onClick: () => { createOpen.value = true } }, { default: () => '创建 Team 账号' }),
-              h(ElButton, {
-                text: true, size: 'small', type: 'danger', style: 'margin-left:auto',
-                onClick: () => void doLogout(),
-              }, { default: () => '登出' }),
             ]),
             h(ElTable, { data: pagedUsers.value, loading: busy.value }, {
               default: () => [

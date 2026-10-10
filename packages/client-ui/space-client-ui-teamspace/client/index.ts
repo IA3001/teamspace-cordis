@@ -970,11 +970,19 @@ const TeamspacePage = defineComponent({
         e.kind === 'message' && e.authorId !== me.value?.id && !e.voided &&
         (Date.parse(e.ts) || 0) > seen)
       if (idx < 0) { scrollToBottom(); return }
-      // 近似定位：el-scrollbar 的 wrap 上按 index/total * scrollHeight 估算目标位置
-      //（各行高度不一，只能近似滚到那条消息附近，不做逐行精确测量）。
       const wrap = document.querySelector('.content-body .el-scrollbar__wrap') as HTMLElement | null
       if (!wrap) { scrollToBottom(); return }
-      const target = Math.max(0, (idx / events.value.length) * wrap.scrollHeight - wrap.clientHeight / 3)
+      const targetEvent = events.value[idx]!
+      const targetRow = [...wrap.querySelectorAll<HTMLElement>('[data-ev-id]')]
+        .find((row) => row.dataset.evId === targetEvent.id)
+      if (!targetRow) { scrollToBottom(); return }
+      // Use the rendered row's real position. Message heights vary with text,
+      // citations and attachments, so index/total can land in the wrong place.
+      const wrapTop = wrap.getBoundingClientRect().top
+      const rowTop = targetRow.getBoundingClientRect().top
+      const maxScroll = Math.max(0, wrap.scrollHeight - wrap.clientHeight)
+      const target = Math.min(maxScroll, Math.max(0,
+        wrap.scrollTop + rowTop - wrapTop - wrap.clientHeight / 3))
       void scrollbar.value?.setScrollTop(target)
       const gap = wrap.scrollHeight - target - wrap.clientHeight
       nearBottom.value = gap < 80

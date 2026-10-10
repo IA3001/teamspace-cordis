@@ -1,5 +1,5 @@
-// ui-verify.mjs —— 团队空间页回归自测 + 会红断言（自用，不进 gate）。
-// 断言区（AS1~AS4）任何一条不满足 → 输出 RED，进程退出码 1。
+// ui-verify.mjs —— 团队空间页回归自测 + 会红断言（gate:runtime 最后一项）。
+// 断言区（AS1~AS6）任何一条不满足 → 输出 RED，进程退出码 1。
 // Playwright 使用标准浏览器缓存；自定义浏览器路径通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定。
 import { chromium } from 'playwright-core'
 import { DatabaseSync } from 'node:sqlite'
@@ -65,6 +65,44 @@ await page.waitForTimeout(2500)
 const ta = page.locator('textarea')
 const reds = []
 const judge = (name, ok, detail) => { console.log(`[AS] ${name}: ${ok ? 'GREEN' : 'RED'} —— ${detail}`); if (!ok) reds.push(name) }
+
+// An unread jump must align the actual rendered event row despite variable
+// bubble heights. Exercise an event around the middle of the seeded transcript.
+{
+  let ok = true; const detail = []
+  try {
+    const token = await page.evaluate(() => localStorage.getItem('space_token'))
+    const db = new DatabaseSync('data/database.db')
+    let target
+    let seenAt = 0
+    try {
+      const user = db.prepare('SELECT user_id FROM login_tokens WHERE token = ?').get(token)
+      const rows = db.prepare(`SELECT id, ts, author_id, kind, voided FROM events
+        WHERE session_id = 's_seed_demo' ORDER BY seq`).all()
+      const start = Math.floor(rows.length / 2)
+      seenAt = Date.parse(rows[start - 1]?.ts ?? '') || 0
+      target = rows.find((event) => event.kind === 'message' && event.author_id !== user?.user_id &&
+        !event.voided && (Date.parse(event.ts) || 0) > seenAt)
+      if (!target) throw new Error('no middle unread event in seeded transcript')
+    } finally { db.close() }
+    await page.evaluate((value) => localStorage.setItem('space_seen_s_seed_demo', String(value)), seenAt)
+    await page.reload({ waitUntil: 'networkidle' })
+    const row = page.locator(`.sp-msg[data-ev-id="${target.id}"]`)
+    await row.waitFor({ timeout: 10000 })
+    await page.waitForTimeout(200)
+    const placement = await row.evaluate((element) => {
+      const wrap = document.querySelector('.content-body .el-scrollbar__wrap')
+      const rowRect = element.getBoundingClientRect()
+      const wrapRect = wrap.getBoundingClientRect()
+      return { rowTop: rowRect.top, expectedTop: wrapRect.top + wrap.clientHeight / 3,
+        gap: wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight }
+    })
+    const offset = Math.abs(placement.rowTop - placement.expectedTop)
+    detail.push(`目标行与视口 1/3 位置相差=${Math.round(offset)}px`)
+    ok &&= offset <= 12 && placement.gap > 80
+  } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 100)) }
+  judge('AS6 未读定位按真实消息行高度精确滚动', ok, detail.join(' | '))
+}
 
 console.log('== 常规回归（草稿 / 菜单 / 抽屉 / 消息卡）==')
 await ta.fill('回归草稿，不发送')

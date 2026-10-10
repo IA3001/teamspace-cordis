@@ -10,7 +10,7 @@ import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog
 import { SqliteMemoryStore } from '../packages/impl/space-store-sqlite/src/memory.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
-import { DECISION_REVIEW_REQUEST_MARKER } from '../packages/seam/space-event/src/index.ts'
+import { AGENT_HISTORY_BOOTSTRAP_MARKER, DECISION_REVIEW_REQUEST_MARKER } from '../packages/seam/space-event/src/index.ts'
 
 const db = new DatabaseSync(':memory:')
 db.exec('PRAGMA foreign_keys = ON')
@@ -132,6 +132,56 @@ async function main(): Promise<void> {
   assert.equal(await memory.forgetBySource(first.id), 2, 'source withdrawal invalidates derived memories for both Agents')
   assert.equal((await memory.recall('agent:a_alpha', { kind: 'conversation_fact:0' })).length, 1)
   assert.equal(ctx.eventLog.listBySession('s_alpha').length, 1, 'private processing does not create chat or trace events')
+
+  // A newly invited Agent receives one dedicated, ordered history analysis before
+  // its inbox cursor reaches the invitation event or a later @ reply can proceed.
+  const onboardingSession = 's_onboarding'
+  ctx.session.createSession({ id: onboardingSession, title: '新 Agent 历史引导' })
+  ctx.session.join({ sessionId: onboardingSession, principalId: 'u_member', role: 'DRI' })
+  const onboardingHistory = Array.from({ length: 22 }, (_, index) =>
+    index === 0 ? '已确认下周五发布。 api_key=onboarding-secret-value' :
+      index === 21 ? '更正：发布窗口改为周六，DRI 负责验收。' : `历史讨论消息 ${index + 1}`,
+  ).map((text, index) =>
+    ctx.eventLog.append({
+      id: `onboarding_history_${index}`, sessionId: onboardingSession, authorId: 'u_member', phaseId: null,
+      authorKind: 'human', kind: 'message', text, mentions: [], toolCalls: [], replyMode: '',
+    }))
+  ctx.session.join({ sessionId: onboardingSession, principalId: 'a_alpha', role: '成员' })
+  let onboardingSystem = ''
+  const onboardingPayloads: Array<Record<string, any>> = []
+  ctx.llm.chat = async (messages: Array<{ role: string; content: string }>) => {
+    onboardingSystem = messages[0]!.content
+    const payload = JSON.parse(messages[1]!.content) as Record<string, any>
+    onboardingPayloads.push(payload)
+    return JSON.stringify({ memories: [{
+      text: payload.batch === 1 ? '历史批次一已整理' : '发布窗口为周六，DRI 负责验收', weight: 0.95,
+    }] })
+  }
+  const invitation = ctx.eventLog.append({
+    id: 'onboarding_invitation', sessionId: onboardingSession, authorId: null, phaseId: null,
+    authorKind: 'system', kind: 'system', text: `${AGENT_HISTORY_BOOTSTRAP_MARKER} 邀请研究员加入。`,
+    mentions: ['a_alpha'], toolCalls: [], replyMode: '',
+  })
+  await inbox.waitThrough('a_alpha', onboardingSession, invitation.seq)
+  assert.match(onboardingSystem, /刚加入会话.*完整会话/u, 'invited Agents receive a dedicated whole-history onboarding prompt')
+  assert.equal(onboardingPayloads.length, 2, 'long histories are split into bounded sequential batches')
+  assert.deepEqual(onboardingPayloads.flatMap((payload) => payload.history.map((event: { id: string }) => event.id)),
+    onboardingHistory.map((event) => event.id), 'onboarding analyzes the complete prior message history in sequence')
+  assert.equal(onboardingPayloads[0]!.history[0].text.includes('onboarding-secret-value'), false,
+    'onboarding redacts credentials before model input')
+  assert.equal(onboardingPayloads[0]!.history[0].text.includes('[REDACTED]'), true)
+  assert.deepEqual(onboardingPayloads[1]!.priorMemory, ['历史批次一已整理'],
+    'later batches receive earlier synthesized memory for cross-batch context')
+  assert.equal(await inbox.cursor('a_alpha', onboardingSession), invitation.seq,
+    'the invitation cursor advances only after the onboarding analysis is persisted')
+  const onboardingMemories = (await memory.recall('agent:a_alpha', { limit: 100 }))
+    .filter((item) => item.kind.startsWith(`history_bootstrap:${onboardingSession}:`))
+  assert.equal(onboardingMemories.length, 2, 'each history batch persists a private synthesized memory')
+  assert.equal(onboardingMemories.some((item) => item.text.includes('发布窗口为周六')), true)
+  assert.deepEqual(new Set(onboardingMemories.flatMap((item) => item.sourceEventIds)),
+    new Set(onboardingHistory.map((event) => event.id)), 'onboarding memories remain traceable to all historical messages')
+  assert.equal(ctx.eventLog.listBySession(onboardingSession).length, 23,
+    'private onboarding does not emit additional chat or process events')
 
   const mixed = await memory.remember('agent:a_alpha', 'mixed_decision', '综合两个来源的记忆', {
     authorId: 'a_alpha', sourceEventIds: [first.id, second.id],

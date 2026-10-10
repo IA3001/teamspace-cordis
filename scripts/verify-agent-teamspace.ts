@@ -282,6 +282,9 @@ async function main() {
   assert.equal(invited.ok, true)
   assert.equal(memberships.length, initialMembershipCount + 1)
   assert.equal((events.at(-1)?.text as string).includes('完整历史'), true)
+  assert.equal((events.at(-1)?.text as string).startsWith('【Agent 历史同步】'), true,
+    'Agent invitations carry a private inbox bootstrap marker')
+  assert.deepEqual(events.at(-1)?.mentions, [created.id], 'the onboarding trigger targets only the invited Agent')
   const history = await rpc.agentHistory('team-b', 's_open', created.id)
   assert.equal(history.length, 31, 'invited Agent receives all 30 earlier events plus invitation event')
   assert.equal(history[0]?.text, 'history-1', 'history is not truncated to recent messages')

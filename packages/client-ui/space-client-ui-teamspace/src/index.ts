@@ -13,7 +13,7 @@ import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
 import type { PublicUser } from 'space-identity'
 import type { ReactSummary, SessionEvent } from 'space-event'
-import { isAgentVisibleEvent } from 'space-event'
+import { AGENT_HISTORY_BOOTSTRAP_MARKER, isAgentVisibleEvent } from 'space-event'
 import { AgentCatalogError } from 'space-agent-catalog'
 import type { AgentDefinition, AgentDefinitionInput, AgentDefinitionPatch } from 'space-agent-catalog'
 import type { PromptTemplate } from 'space-prompt'
@@ -129,8 +129,8 @@ export function inviteAgentToSession(ctx: Context, sessionId: string, agentId: s
   ctx.eventLog.append({
     id: randomUUID(), sessionId, authorId: null, phaseId: null,
     authorKind: 'system', kind: 'system',
-    text: `已邀请 Agent「${title}」加入会话（邀请者 ${inviterId}；可访问完整历史）`,
-    mentions: [], toolCalls: [], replyMode: '',
+    text: `${AGENT_HISTORY_BOOTSTRAP_MARKER} 已邀请 Agent「${title}」加入会话（邀请者 ${inviterId}；可访问完整历史，并会先建立历史记忆）`,
+    mentions: [agentId], toolCalls: [], replyMode: '',
   })
   return { joined: true, title }
 }

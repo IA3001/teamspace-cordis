@@ -36,6 +36,8 @@ export const EVENT_KINDS: readonly EventKind[] = [
 /** Timeline protocol markers shared by the DRI review flow and Agent Inbox. */
 export const DECISION_REVIEW_REQUEST_MARKER = '【撤回复核请求】'
 export const AGENT_REVIEW_QUESTION_MARKER = '【复核疑问】'
+/** Private inbox trigger for a newly invited Agent to analyze the existing session history. */
+export const AGENT_HISTORY_BOOTSTRAP_MARKER = '【Agent 历史同步】'
 
 export function isEventKind(v: string): v is EventKind {
   return (EVENT_KINDS as readonly string[]).includes(v)

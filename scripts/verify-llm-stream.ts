@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { Context } from 'cordis'
 import { OpenAiChatLlm } from '../packages/impl/space-llm-openai/src/index.ts'
+import { LlmError } from '../packages/seam/space-llm/src/index.ts'
 import { runAgentExecutionGraph } from '../packages/impl/space-agent-runtime/src/execution-graph.ts'
 import { appendProgressDelta, MAX_PROGRESS_PREVIEW_CHARACTERS, progressPreviewLabel } from '../packages/client-ui/space-client-ui-teamspace/client/progress.ts'
 
@@ -9,6 +10,7 @@ let sentBody: Record<string, unknown> | undefined
 let sentUrl = ''
 let sentAuthorization = ''
 let jsonResponse = false
+let disconnectStream = false
 const deltas: string[] = []
 globalThis.fetch = (async (url, init) => {
   sentUrl = String(url)
@@ -17,14 +19,17 @@ globalThis.fetch = (async (url, init) => {
   if (jsonResponse) return Response.json({ choices: [{ message: { content: 'profile reply' } }] })
   const encoder = new TextEncoder()
   const chunks = [
-    'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n',
+    `data: {"choices":[{"delta":{"content":"${disconnectStream ? '已收到' : '你好'}"}}]}\n\n`,
+    ...(disconnectStream ? [] : [
     'data: {"choices":[{"delta":{"content":"，团队"}}]}\n\n',
     'data: [DONE]\n\n',
+    ]),
   ]
   return new Response(new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
-      controller.close()
+      if (disconnectStream) setTimeout(() => controller.error(new Error('network socket dropped')), 0)
+      else controller.close()
     },
   }), { headers: { 'content-type': 'text/event-stream' } })
 }) as typeof fetch
@@ -38,6 +43,16 @@ try {
   assert.equal(answer, '你好，团队')
   assert.deepEqual(deltas, ['你好', '，团队'])
   assert.doesNotMatch(JSON.stringify({ answer, deltas }), /stream-test-key/)
+
+  disconnectStream = true
+  const interruptedDeltas: string[] = []
+  await assert.rejects(
+    llm.chat([{ role: 'user', content: 'interrupted stream' }], { onToken: (delta) => interruptedDeltas.push(delta) }),
+    (error: unknown) => error instanceof LlmError && error.code === 'http_error' && !error.message.includes('stream-test-key'),
+  )
+  assert.deepEqual(interruptedDeltas, ['已收到'], 'tokens received before a disconnect remain available as an uncommitted preview')
+  disconnectStream = false
+  console.log('✓ an interrupted SSE stream keeps received deltas and rejects with a credential-safe error')
 
   const profileSettings = {
     get(key: string, fallback: unknown) {

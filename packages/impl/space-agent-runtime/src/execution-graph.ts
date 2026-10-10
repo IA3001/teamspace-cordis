@@ -69,12 +69,9 @@ export async function runAgentExecutionGraph(input: {
     input.onProgress?.('processing')
     let buffered = ''
     let streamFinalText = false
-    let shownCharacters = 0
     const streamToHuman = (text: string) => {
-      const delta = text.slice(0, Math.max(0, 16_000 - shownCharacters))
-      if (!delta) return
-      shownCharacters += delta.length
-      input.onProgress?.('text-delta', undefined, undefined, delta)
+      if (!text) return
+      input.onProgress?.('text-delta', undefined, undefined, text)
     }
     const raw = await input.ctx.llm.chat(state.messages, {
       model: input.model,

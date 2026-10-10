@@ -392,7 +392,7 @@ async function partE(): Promise<void> {
 
   // mock /chat/completions：node:http 进程内起（端口 0 = 随机分配，无子进程
   // —— 承 verify-workdir 的 Windows shim 教训）；behavior 可切换。
-  const mock: { mode: 'ok-json' | 'ok-artifact' | 'ok-tool' | 'ok-text' | 'http500' | 'hold'; requests: number } = {
+  const mock: { mode: 'ok-json' | 'ok-artifact' | 'ok-tool' | 'ok-text' | 'long-stream' | 'stream-drop' | 'http500' | 'hold'; requests: number } = {
     mode: 'ok-json', requests: 0,
   }
   const server = createServer((req, res) => {
@@ -407,6 +407,20 @@ async function partE(): Promise<void> {
       if (mock.mode === 'http500') {
         res.writeHead(500, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: { message: 'mock boom' } }))
+        return
+      }
+      if (mock.mode === 'stream-drop') {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '已生成但未提交' } }] })}\n\n`)
+        setTimeout(() => res.destroy(), 25)
+        return
+      }
+      if (mock.mode === 'long-stream') {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        for (let i = 0; i < 3; i++) {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '长'.repeat(6000) } }] })}\n\n`)
+        }
+        res.end('data: [DONE]\n\n')
         return
       }
       const afterTool = requestBody.messages?.some((message) => message.content?.includes('工具结果 web.search')) ?? false
@@ -636,6 +650,41 @@ async function partE(): Promise<void> {
       check('E4g 内置会议 Agent 也注册在同一取消屏障，取消后不回报旧结果',
         cancelledAnalysts === 1 && analystLedgerCleared && !staleAnalystReported,
         `count=${cancelledAnalysts}, cleared=${analystLedgerCleared}, reported=${staleAnalystReported}`)
+
+      mock.mode = 'long-stream'
+      const longSource = 'evt_long_stream'
+      const longReceipt = await ctx.agentRuntime.perform('agent.coder', 'MOCK-长回复流', {
+        sessionId: 's_progress', sourceEventId: longSource,
+      })
+      const longProgress = progressEvents.filter((event) => event.sourceEventId === longSource && event.phase === 'text-delta')
+      const longDeltas = longProgress.map((event) => event.delta ?? '').join('')
+      check('E4h 18,000 字符流式答复完整抵达运行时进度和最终回执',
+        longDeltas.length === 18_000 && longReceipt.receipt.includes(longDeltas) && longProgress.length === 3,
+        `delta=${longDeltas.length}，frames=${longProgress.length}，receipt=${longReceipt.receipt.length}`)
+      check('E4i 超长答复完整写入工作区产物',
+        readFileSync(join(longReceipt.root, longReceipt.files.at(-1)!), 'utf8').includes(longDeltas))
+
+      mock.mode = 'stream-drop'
+      const droppedSource = 'evt_stream_drop'
+      const eventsBeforeDrop = ctx.eventLog.listBySession('s_progress').length
+      let droppedError: unknown
+      try {
+        await ctx.agentRuntime.perform('agent.coder', 'MOCK-流中断', {
+          sessionId: 's_progress', sourceEventId: droppedSource,
+        })
+      } catch (error) { droppedError = error }
+      const droppedProgress = progressEvents.filter((event) => event.sourceEventId === droppedSource)
+      const dropChecks = {
+        errorCode: (droppedError as { code?: string } | undefined)?.code,
+        partialDelta: droppedProgress.find((event) => event.phase === 'text-delta')?.delta,
+        finalPhase: droppedProgress.at(-1)?.phase,
+        agentStatus: ctx.agents.get('agent.coder').status,
+        newTimelineEvents: ctx.eventLog.listBySession('s_progress').length - eventsBeforeDrop,
+      }
+      check('E4j SSE 断流保留部分预览、发出失败终态且不提交回执',
+        dropChecks.errorCode === 'http_error' && dropChecks.partialDelta === '已生成但未提交' &&
+          dropChecks.finalPhase === 'failed' && dropChecks.agentStatus === 'idle' && dropChecks.newTimelineEvents === 0,
+        JSON.stringify(dropChecks))
       rmSync(tmp, { recursive: true, force: true })
       db.close()
     }

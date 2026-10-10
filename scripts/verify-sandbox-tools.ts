@@ -19,6 +19,18 @@ const sharedFile = `sandbox-verify-${randomUUID()}.txt`
 const sharedPath = resolve(process.cwd(), 'data/shared-workspace', sharedFile)
 const approvalDb = new DatabaseSync(':memory:')
 approvalDb.exec(readFileSync(resolve(process.cwd(), 'packages/impl/space-store-sqlite/migrations/0023_sandbox_approval_requests.up.sql'), 'utf8'))
+approvalDb.exec(readFileSync(resolve(process.cwd(), 'packages/impl/space-store-sqlite/migrations/0031_sandbox_approval_claim.up.sql'), 'utf8'))
+const upgradeDb = new DatabaseSync(':memory:')
+upgradeDb.exec(readFileSync(resolve(process.cwd(), 'packages/impl/space-store-sqlite/migrations/0023_sandbox_approval_requests.up.sql'), 'utf8'))
+upgradeDb.prepare(`INSERT INTO sandbox_approval_requests
+  (id, agent_id, session_id, source_path, source_size, source_mtime_ms, source_ctime_ms, source_inode,
+   reason, status, created_at, decision_note)
+  VALUES ('sar_legacy', 'agent-legacy', 'session-legacy', '/tmp/legacy.txt', 7, 1, 2, 3,
+   'legacy request', 'pending', '2026-10-01T00:00:00.000Z', 'legacy note')`).run()
+upgradeDb.exec(readFileSync(resolve(process.cwd(), 'packages/impl/space-store-sqlite/migrations/0031_sandbox_approval_claim.up.sql'), 'utf8'))
+assert.equal(JSON.stringify(upgradeDb.prepare('SELECT id, status, decision_note FROM sandbox_approval_requests').get()),
+  JSON.stringify({ id: 'sar_legacy', status: 'pending', decision_note: 'legacy note' }), 'schema upgrade preserves existing approval rows')
+upgradeDb.close()
 let approvalDir: string | undefined
 
 class VerifyEventLog extends EventLogService {
@@ -95,10 +107,14 @@ async function main(): Promise<void> {
     sourceCtimeMs: pending.sourceCtimeMs, sourceInode: pending.sourceInode,
   })
   assert.equal(repeatedPending.id, pending.id, 'repeated tool calls reuse one pending review request')
+  const claimed = ctx.sandboxApproval.beginApproval(pending.id, 'admin-test', '已检查并复制')
+  assert.equal(claimed.status, 'approving', 'approval claims the request before any file delivery begins')
+  assert.throws(() => ctx.sandboxApproval.decide(pending.id, 'rejected', 'admin-race', '并发拒绝'), /已处理或不存在/u,
+    'a rejection cannot race past an approval already delivering')
   const delivered = await ctx.sandboxApprovalDelivery.deliver(pending)
   assert.equal(readdirSync(approvalDir).some((name) => name.startsWith('.delivery-')), false,
     'retry removes an old interrupted temp copy')
-  assert.equal(ctx.sandboxApproval.get(pending.id).status, 'pending', 'copying alone does not commit the decision')
+  assert.equal(ctx.sandboxApproval.get(pending.id).status, 'approving', 'an interrupted delivery remains resumable')
   const approvedFile = resolve(process.cwd(), 'data/shared-workspace', delivered.relativePath)
   assert.equal(statSync(approvedFile).mode & 0o777, 0o400, 'published file is read-only')
   assert.deepEqual(await ctx.sandboxApprovalDelivery.deliver(pending), delivered,

@@ -25,7 +25,7 @@ export class SqliteSandboxApproval extends SandboxApprovalService {
     const agentId = String(input.agentId).trim()
     const sourcePath = String(input.sourcePath).trim()
     if (!agentId || !sourcePath || sourcePath.length > 2048) throw new Error('审批请求缺少 Agent 或有效路径')
-    const existing = this.db.prepare(`SELECT id FROM sandbox_approval_requests WHERE agent_id = ? AND ifnull(session_id, '') = ? AND source_path = ? AND status = 'pending'`).get(agentId, input.sessionId ?? '', sourcePath) as Row | undefined
+    const existing = this.db.prepare(`SELECT id FROM sandbox_approval_requests WHERE agent_id = ? AND ifnull(session_id, '') = ? AND source_path = ? AND status IN ('pending', 'approving')`).get(agentId, input.sessionId ?? '', sourcePath) as Row | undefined
     if (existing) return this.get(String(existing.id))
     const id = `sar_${randomUUID()}`
     this.db.prepare(`INSERT INTO sandbox_approval_requests(id, agent_id, session_id, source_path, source_size, source_mtime_ms, source_ctime_ms, source_inode, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
@@ -46,10 +46,20 @@ export class SqliteSandboxApproval extends SandboxApprovalService {
     return rows.map(fromRow)
   }
 
+  beginApproval(id: string, adminId: string, note: string): SandboxApprovalRequest {
+    const result = this.db.prepare(`UPDATE sandbox_approval_requests SET status = 'approving', decided_by = ?, decision_note = ? WHERE id = ? AND status = 'pending'`)
+      .run(adminId, String(note ?? '').slice(0, 1000), id)
+    if (Number(result.changes) !== 1 && this.get(id).status !== 'approving') {
+      throw new Error('请求已处理或不存在，请刷新后重试')
+    }
+    return this.get(id)
+  }
+
   decide(id: string, decision: 'approved' | 'rejected', adminId: string, note: string, deliveryPath?: string): SandboxApprovalRequest {
     const timestamp = now()
-    const result = this.db.prepare(`UPDATE sandbox_approval_requests SET status = ?, decided_at = ?, decided_by = ?, decision_note = ?, delivery_path = ? WHERE id = ? AND status = 'pending'`)
-      .run(decision, timestamp, adminId, String(note ?? '').slice(0, 1000), deliveryPath ?? null, id)
+    const expected = decision === 'approved' ? 'approving' : 'pending'
+    const result = this.db.prepare(`UPDATE sandbox_approval_requests SET status = ?, decided_at = ?, decided_by = ?, decision_note = ?, delivery_path = ? WHERE id = ? AND status = ?`)
+      .run(decision, timestamp, adminId, String(note ?? '').slice(0, 1000), deliveryPath ?? null, id, expected)
     if (Number(result.changes) !== 1) throw new Error('请求已处理或不存在，请刷新后重试')
     return this.get(id)
   }

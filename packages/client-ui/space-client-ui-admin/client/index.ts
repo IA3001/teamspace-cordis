@@ -43,7 +43,7 @@ interface PluginRow {
 }
 interface SandboxApprovalRow {
   id: string; agentId: string; sessionId: string | null; sourcePath: string; reason: string
-  status: 'pending' | 'approved' | 'rejected'; createdAt: string; decidedAt: string | null
+  status: 'pending' | 'approving' | 'approved' | 'rejected'; createdAt: string; decidedAt: string | null
   decidedBy: string | null; decisionNote: string; deliveryPath: string | null
 }
 
@@ -522,11 +522,11 @@ const AdminPage = defineComponent({
               h(ElTableColumn, { prop: 'sessionId', label: '会话', width: 130 }),
               h(ElTableColumn, { prop: 'sourcePath', label: '申请路径', minWidth: 240 }),
               h(ElTableColumn, { prop: 'reason', label: '理由', minWidth: 180 }),
-              h(ElTableColumn, { prop: 'status', label: '状态', width: 100 }, { default: (s: { row: SandboxApprovalRow }) => s.row.status === 'pending' ? '待处理' : s.row.status === 'approved' ? '已批准' : '已拒绝' }),
+              h(ElTableColumn, { prop: 'status', label: '状态', width: 100 }, { default: (s: { row: SandboxApprovalRow }) => s.row.status === 'pending' ? '待处理' : s.row.status === 'approving' ? '交付中，可重试' : s.row.status === 'approved' ? '已批准' : '已拒绝' }),
               h(ElTableColumn, { label: '决定 / 交付路径', minWidth: 230 }, { default: (s: { row: SandboxApprovalRow }) => [s.row.decisionNote, s.row.deliveryPath].filter(Boolean).join(' · ') || '—' }),
-              h(ElTableColumn, { label: '操作', width: 170, fixed: 'right' }, { default: (s: { row: SandboxApprovalRow }) => s.row.status !== 'pending' ? '—' : h(ElSpace, null, { default: () => [
-                h(ElButton, { size: 'small', type: 'success', onClick: () => void decideApproval(s.row, 'approved') }, { default: () => '批准并复制' }),
-                h(ElButton, { size: 'small', type: 'danger', onClick: () => void decideApproval(s.row, 'rejected') }, { default: () => '拒绝' }),
+              h(ElTableColumn, { label: '操作', width: 190, fixed: 'right' }, { default: (s: { row: SandboxApprovalRow }) => !['pending', 'approving'].includes(s.row.status) ? '—' : h(ElSpace, null, { default: () => [
+                h(ElButton, { size: 'small', type: 'success', onClick: () => void decideApproval(s.row, 'approved') }, { default: () => s.row.status === 'approving' ? '重试交付' : '批准并复制' }),
+                s.row.status === 'pending' ? h(ElButton, { size: 'small', type: 'danger', onClick: () => void decideApproval(s.row, 'rejected') }, { default: () => '拒绝' }) : null,
               ] }) }),
             ],
           }),

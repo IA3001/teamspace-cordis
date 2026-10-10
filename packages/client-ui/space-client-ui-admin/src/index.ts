@@ -289,10 +289,14 @@ export function apply(ctx: Context) {
       const admin = await auth(ctx, token)
       if (!admin) return null
       try {
-        const request = ctx.sandboxApproval.get(String(id))
-        let deliveryPath: string | undefined
-        if (decision === 'approved') deliveryPath = (await ctx.sandboxApprovalDelivery.deliver(request)).relativePath
-        const resolved = ctx.sandboxApproval.decide(String(id), decision, admin.id, String(note), deliveryPath)
+        let resolved
+        if (decision === 'approved') {
+          const request = ctx.sandboxApproval.beginApproval(String(id), admin.id, String(note))
+          const deliveryPath = (await ctx.sandboxApprovalDelivery.deliver(request)).relativePath
+          resolved = ctx.sandboxApproval.decide(String(id), decision, admin.id, String(note), deliveryPath)
+        } else {
+          resolved = ctx.sandboxApproval.decide(String(id), decision, admin.id, String(note))
+        }
         audit(ctx, admin.id, `sandbox_request_${decision}`, `${resolved.id}:${resolved.agentId}`)
         return { ok: true, request: resolved }
       } catch (e) { return fail(e) }

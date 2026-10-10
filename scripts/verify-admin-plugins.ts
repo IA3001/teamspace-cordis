@@ -27,6 +27,7 @@ const ctx = {
   loader: { *entries() { yield* entries } },
   sandboxApproval: {
     list: () => [approval], get: () => approval,
+    beginApproval: (_id: string, adminId: string, note: string) => ({ ...approval, status: 'approving', decidedBy: adminId, decisionNote: note }),
     decide: (_id: string, value: string, adminId: string, note: string, path?: string) => {
       decision = `${value}:${adminId}:${note}:${path ?? ''}`
       return { ...approval, status: value, decidedBy: adminId, decisionNote: note, deliveryPath: path ?? null }

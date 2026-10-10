@@ -5,7 +5,7 @@ declare module 'cordis' {
   interface Context { sandboxApproval: SandboxApprovalService }
 }
 
-export type SandboxApprovalStatus = 'pending' | 'approved' | 'rejected'
+export type SandboxApprovalStatus = 'pending' | 'approving' | 'approved' | 'rejected'
 export interface SandboxApprovalRequest {
   id: string
   agentId: string
@@ -31,6 +31,8 @@ export abstract class SandboxApprovalService extends Service {
   abstract request(input: { agentId: string; sessionId?: string; sourcePath: string; sourceSize: number; sourceMtimeMs: number; sourceCtimeMs: number; sourceInode: number; reason?: string }): SandboxApprovalRequest
   abstract get(id: string): SandboxApprovalRequest
   abstract list(status?: SandboxApprovalStatus): SandboxApprovalRequest[]
+  /** Atomically reserve a pending request for delivery; repeated calls may resume an interrupted delivery. */
+  abstract beginApproval(id: string, adminId: string, note: string): SandboxApprovalRequest
   abstract decide(id: string, decision: 'approved' | 'rejected', adminId: string, note: string, deliveryPath?: string): SandboxApprovalRequest
 }
 

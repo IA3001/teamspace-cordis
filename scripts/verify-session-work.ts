@@ -50,7 +50,13 @@ try {
   // A process crash leaves a lease, not a permanent lock. After expiry another process recovers.
   assert.equal(services[0]!.tryEnter('s-fourth', 'worker-e'), false)
   services[2]!.dispose()
-  await new Promise((resolve) => setTimeout(resolve, 280))
+  // Expire the crashed process and its stale wait intent directly instead of
+  // racing a 250ms wall-clock sleep under a busy runtime gate.
+  const expiredAt = Date.now() - 1
+  connections[0]!.prepare('UPDATE session_work_owners SET expires_at = ? WHERE session_id = ?')
+    .run(expiredAt, 's-third')
+  connections[0]!.prepare('UPDATE session_work_queue SET expires_at = ? WHERE session_id = ?')
+    .run(expiredAt, 's-third')
   assert.equal(services[0]!.tryEnter('s-fourth', 'worker-e'), true)
   assert.equal(services[1]!.state().activeSessionId, 's-fourth')
 

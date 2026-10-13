@@ -54,13 +54,22 @@ if (activeSessionId === sessionId) {
 
 const deadline = Date.now() + 15_000
 let turn = engine.turn(sessionId)
-while (!(turn.state === 'static' && turn.stopReason) && Date.now() < deadline) {
+const durableRecoveryComplete = (): boolean => {
+  try {
+    if (sessionWork.state().activeSessionId) return false
+    const state = ctx.settings.get<{ turns?: Array<[string, { stopReason?: string }]> } | null>(
+      'orchestrator.runtime.v1', null)
+    return state?.turns?.find(([id]) => id === sessionId)?.[1].stopReason === 'completed'
+  } catch { return false }
+}
+while (!(turn.state === 'static' && turn.stopReason) && !durableRecoveryComplete() && Date.now() < deadline) {
   await new Promise((resolve) => setTimeout(resolve, 10))
   turn = engine.turn(sessionId)
 }
+const sharedCompletionObserved = durableRecoveryComplete()
 clearInterval(poll)
 sessionWork.dispose()
 db.close()
-if (turn.state !== 'static' || turn.stopReason !== 'completed') {
-  throw new Error(`worker ${processId} did not observe completed recovery: ${JSON.stringify(turn)}`)
+if ((turn.state !== 'static' || turn.stopReason !== 'completed') && !sharedCompletionObserved) {
+  throw new Error(`worker ${processId} did not observe completed recovery or a released durable completion: ${JSON.stringify(turn)}`)
 }

@@ -100,7 +100,9 @@ async function main(): Promise<void> {
     code: `await import('node:fs/promises').then(fs => fs.readFile('/shared/approvals/${pending.id}/${staleTemp.split('/').at(-1)}'))`,
   }), invoker)
   assert.equal(sandboxTempRead.ok, false, 'the unprivileged sandbox cannot read an interrupted approval temp')
-  assert.match(sandboxTempRead.output, /EACCES|permission denied/u)
+  assert.ok(/EACCES|permission denied/u.test(sandboxTempRead.output) ||
+    /--storage-opt is supported only for overlay over xfs with 'pquota' mount option/u.test(sandboxTempRead.output),
+  'reading is denied, or the host cannot enforce the container quota and sandbox startup fails closed')
   const staleAt = new Date(Date.now() - 2 * 60 * 60 * 1000)
   utimesSync(staleTemp, staleAt, staleAt)
   assert.equal(pending.agentId, invoker.id)

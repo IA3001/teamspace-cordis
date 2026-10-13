@@ -444,9 +444,20 @@ async function verifyConcurrentEngineRecovery(): Promise<void> {
     const loser = roles.find((role) => role !== winner)!
     await waitUntil(() => existsSync(join(dir, `${loser}.saw-peer-active`)), '落败进程观察到胜者持有会话槽位')
     writeFileSync(join(dir, `${winner}.release`), 'release')
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    const outcomeDb = new DatabaseSync(dbPath, { readOnly: true })
+    outcomeDb.exec('PRAGMA busy_timeout = 5000')
+    try {
+      await waitUntil(() => {
+        const saved = outcomeDb.prepare("SELECT value FROM settings WHERE key = 'orchestrator.runtime.v1'")
+          .get() as { value: string } | undefined
+        const state = saved ? JSON.parse(saved.value) as { turns: Array<[string, { stopReason: string }]> } : null
+        return state?.turns.find(([sid]) => sid === 's_engine_race')?.[1].stopReason === 'completed'
+      }, '胜者将完成结果持久化')
+    } finally { outcomeDb.close() }
     // Release a second brain too if a regression started it, so the verifier
-    // can report duplicate calls instead of hanging on the test barrier.
+    // can report duplicate calls instead of hanging on the test barrier. Wait
+    // for the durable winner result first so the losing process tests recovery
+    // from committed state rather than racing the winner's final SQLite write.
     for (const role of roles) writeFileSync(join(dir, `${role}.release`), 'release')
 
     const exitResults = await Promise.race([

@@ -1,6 +1,6 @@
 {
-  "maxFiles": 180,
-  "maxChangedLines": 22000,
+  "maxFiles": 40,
+  "maxChangedLines": 2000,
   "maxDocumentBytes": 20480,
-  "maxComplexity": 80
+  "maxComplexity": 25
 }

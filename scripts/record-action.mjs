@@ -16,6 +16,10 @@ if (!existsSync(path)) {
   process.exit(0)
 }
 const db = new DatabaseSync(path)
+// Several independent checks may finish together and append their receipts
+// to the same SQLite action log. Wait for a peer's short write transaction
+// rather than turning harmless parallel verification into a flaky failure.
+db.exec('PRAGMA busy_timeout=5000')
 const has = db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='action_log'`).get()
 if (!has.n) {
   console.log('· 留痕跳过：action_log 表不在（迁移链未含 0003）')

@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { DatabaseSync } from 'node:sqlite'
+import { chromium } from 'playwright-core'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const checkout = mkdtempSync(join(tmpdir(), 'teamspace-production-start-'))
@@ -100,7 +102,6 @@ try {
   for (const [name, value] of [
     ['APP_HOST', '127.0.0.1'], ['APP_PORT', ports[0]], ['DEBUG_PORT', ports[1]],
     ['TEAMSPACE_PORT', ports[2]], ['NODE_ENV', 'production'],
-    ['ADMIN_USERNAME', 'release_probe'], ['ADMIN_PASSWORD', 'release-probe-pass-9'],
     ['SETTINGS_ENCRYPTION_KEY', randomBytes(32).toString('base64')],
   ]) env = setEnv(env, name, value)
   writeFileSync(join(checkout, '.env'), env, { mode: 0o600 })
@@ -108,6 +109,27 @@ try {
   run('npm', ['run', 'migrate'], { cwd: checkout, maxBuffer: 8 * 1024 * 1024 })
   run('npm', ['run', 'prepare:release'], { cwd: checkout, maxBuffer: 16 * 1024 * 1024 })
   assert(existsSync(join(checkout, 'composed.cordis.yml')), 'release composition must exist')
+
+  const quotaProbe = `quota-ui-${randomBytes(6).toString('hex')}`
+  const logsDb = new DatabaseSync(join(checkout, 'data', 'logs.db'))
+  try {
+    logsDb.exec(`CREATE TABLE IF NOT EXISTS logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sn INTEGER NOT NULL,
+      ts INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      level INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      entry_id TEXT
+    )`)
+    logsDb.prepare(`INSERT INTO logs (sn, ts, type, level, name, body, entry_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      1, Date.now(), 'error', 3, 'sandbox-tools', `[workdir-quota] ${quotaProbe} synthetic isolated UI acceptance`, null,
+    )
+  } finally {
+    logsDb.close()
+  }
 
   setTreeMode(checkout, (mode) => mode & ~0o222)
   makeWritable(join(checkout, 'data'))
@@ -139,6 +161,29 @@ try {
       await delay(100)
     }
     assert.equal(response?.status, 200, `${label} did not return HTTP 200; output:\n${output}`)
+  }
+
+  const browser = await chromium.launch(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+    ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }
+    : {})
+  try {
+    const page = await browser.newPage()
+    const pageErrors = []
+    page.on('pageerror', (error) => pageErrors.push(String(error)))
+    await page.goto(`http://127.0.0.1:${ports[1]}/logs`, { waitUntil: 'networkidle', timeout: 20000 })
+    const search = page.locator('input.search-input')
+    await search.waitFor({ timeout: 10000 })
+    await search.fill('[workdir-quota]')
+    await page.waitForFunction((marker) =>
+      [...document.querySelectorAll('.log-list code')].some((row) => row.innerText.includes(marker)), quotaProbe,
+    { timeout: 10000 })
+    const visibleLogs = await page.locator('.log-list code').allTextContents()
+    assert.ok(visibleLogs.some((line) => line.includes(quotaProbe)),
+      'the isolated logger UI must find the synthetic [workdir-quota] record')
+    assert.deepEqual(pageErrors, [], 'the isolated logger page must not emit browser errors')
+    console.log('✓ Isolated Cordis logger UI searches and displays a synthetic [workdir-quota] record')
+  } finally {
+    await browser.close()
   }
   assert.equal(treeDigest(checkout), before, 'production startup must not modify checkout source or build artifacts')
   await stopChild()

@@ -5,6 +5,7 @@ import type { AgentDescriptor } from 'space-agent'
 import type { MemoryItem } from 'space-memory'
 import { AGENT_REVIEW_QUESTION_MARKER, AGENT_HISTORY_BOOTSTRAP_MARKER, collectAgentDescendants, DECISION_REVIEW_REQUEST_MARKER } from 'space-event'
 import type { SessionEvent } from 'space-event'
+import type { AgentInboxProcessing } from 'space-agent-inbox'
 import { isAgentVisibleEvent } from 'space-event'
 
 export const name = 'agent-inbox'
@@ -88,6 +89,24 @@ export class AgentInbox extends AgentInboxService {
   private activeSession: string | null = null
   private draining = false
   private drainScheduled = false
+  private readonly activeProcessing = new Map<string, AgentInboxProcessing>()
+
+  processing(): AgentInboxProcessing[] {
+    return [...this.activeProcessing.values()].map((item) => ({ ...item }))
+  }
+
+  private markProcessing(
+    agentId: string, sessionId: string, event: SessionEvent,
+    phase: AgentInboxProcessing['phase'], detail: string,
+  ): void {
+    const key = `${agentId}:${sessionId}`
+    const previous = this.activeProcessing.get(key)
+    this.activeProcessing.set(key, {
+      agentId, sessionId, seq: event.seq, eventId: event.id, phase, detail,
+      startedAt: previous?.seq === event.seq ? previous.startedAt : new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+  }
 
   constructor(ctx: Context) {
     super(ctx)
@@ -274,6 +293,7 @@ export class AgentInbox extends AgentInboxService {
   }
 
   private async consumeThrough(agentId: string, sessionId: string, targetSeq: number): Promise<void> {
+    const processingKey = `${agentId}:${sessionId}`
     const snapshot = this.ctx.agents.get(agentId)
     const descriptor = snapshot.descriptor as AgentDescriptor
     let current = await this.cursor(agentId, sessionId)
@@ -293,7 +313,12 @@ export class AgentInbox extends AgentInboxService {
     if (onboarding && descriptor.memoryPolicy !== 'none' && this.ctx.llm.configuredFor(descriptor.llmProfileRef)) {
       const history = events.filter((event) => event.seq < onboarding.seq && event.kind === 'message' &&
         !event.voided && !event.text.startsWith(AGENT_REVIEW_QUESTION_MARKER))
-      await this.bootstrapHistory(agentId, descriptor, sessionId, onboarding, history)
+      this.markProcessing(agentId, sessionId, onboarding, 'onboarding-history', `正在分析加入前的 ${history.length} 条历史消息`)
+      try { await this.bootstrapHistory(agentId, descriptor, sessionId, onboarding, history) }
+      catch (error) {
+        this.activeProcessing.set(processingKey, { ...this.activeProcessing.get(processingKey)!, phase: 'failed', detail: `历史分析失败：${(error as Error).message}` })
+        throw error
+      }
       onboardedThrough = onboarding.seq
       current = onboarding.seq
       await this.storeCursor(agentId, sessionId, current)
@@ -301,18 +326,33 @@ export class AgentInbox extends AgentInboxService {
 
     for (const event of events) {
       if (event.seq <= current) continue
+      try {
       if (event.kind === 'decision' && !event.voided &&
         event.text.startsWith(DECISION_REVIEW_REQUEST_MARKER) && event.mentions.includes(agentId)) {
+        this.markProcessing(agentId, sessionId, event, 'reviewing-decision', '正在复核团队决策的影响')
         await this.reviewDecision(agentId, descriptor, event)
       }
       // Event history is shared, but intermediate runtime traces are never written here.
       // Only final message events can produce durable Agent memory.
       if (event.kind === 'message' && !event.voided && !event.text.startsWith(AGENT_REVIEW_QUESTION_MARKER)) {
-        if (event.seq > onboardedThrough) await this.extractMemories(agentId, descriptor, event)
+        if (event.seq > onboardedThrough) {
+          const detail = descriptor.memoryPolicy === 'none' ? '正在标记已读（记忆沉淀已关闭）'
+            : !this.ctx.llm.configuredFor(descriptor.llmProfileRef) ? '正在标记已读（模型暂不可用）'
+              : '正在分析消息并提取长期记忆'
+          this.markProcessing(agentId, sessionId, event, 'extracting-memory', detail)
+          await this.extractMemories(agentId, descriptor, event)
+        }
       }
+      this.markProcessing(agentId, sessionId, event, 'advancing-cursor', '正在保存处理进度')
       current = event.seq
       await this.storeCursor(agentId, sessionId, current)
+      } catch (error) {
+        const previous = this.activeProcessing.get(processingKey)
+        if (previous) this.activeProcessing.set(processingKey, { ...previous, phase: 'failed', detail: `处理失败，等待重试：${(error as Error).message}`, updatedAt: new Date().toISOString() })
+        throw error
+      }
     }
+    this.activeProcessing.delete(processingKey)
   }
 
   private async bootstrapHistory(

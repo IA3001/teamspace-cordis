@@ -16,6 +16,10 @@ declare module 'cordis' {
   interface Context {
     session: SessionService
   }
+  interface Events {
+    /** Broadcast a changed session title only to its current members. */
+    'space/session-renamed'(this: Context, payload: { sessionId: string; title: string; updatedAt: string }): void
+  }
 }
 
 // ── 角色词汇 ──────────────────────────────────────────────────────────────
@@ -173,6 +177,9 @@ export abstract class SessionService extends Service {
 
   /** 关闭会议。幂等：已关闭原样返回；不存在抛 not_found。 */
   abstract closeSession(id: string): Session
+
+  /** 重命名会议；标题会 trim，空标题、超长标题或不存在的会话抛错。 */
+  abstract renameSession(id: string, title: string): Session
 
   /** 加入会议（含重新激活）。语义见类注释。 */
   abstract join(input: JoinInput): Membership

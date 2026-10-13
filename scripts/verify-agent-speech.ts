@@ -75,8 +75,12 @@ async function main() {
   const mention = eventLog.append({ id: 'trigger-1', sessionId: session.id, authorId: 'u_human', phaseId: null,
     authorKind: 'human', kind: 'message', text: '@Speaker 请发言', mentions: ['a_speaker'], toolCalls: [], replyMode: '' })
   engine.beginExternalDelegate(session.id, mention.id, 'Speaker', '回复被 @ 的任务')
-  const passive = engine.reportAgentResult(session.id, 'Speaker', '被动回复')
+  const privateWorklog = [{ label: '处理任务与上下文', at: '2026-10-11T00:00:00.000Z' }]
+  const passive = engine.reportAgentResult(session.id, 'Speaker', '被动回复', [], privateWorklog)
   assert.equal(passive.authorKind, 'agent', 'an explicit @ reply is allowed')
+  assert.equal(passive.text, '被动回复', 'human-only progress metadata never enters Agent-visible message text')
+  assert.deepEqual(JSON.parse(passive.toolCalls.find((call) => call.name === 'agent.worklog')?.args ?? '[]'), privateWorklog,
+    'the persisted human UI worklog is stored as separate event metadata')
 
   for (const id of ['trigger-2', 'trigger-3']) {
     const trigger = eventLog.append({ id, sessionId: session.id, authorId: 'u_human', phaseId: null,

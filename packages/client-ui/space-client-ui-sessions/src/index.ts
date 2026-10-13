@@ -330,6 +330,34 @@ export function apply(ctx: Context) {
         if (denied) return denied
         return ctx.session.closeSession(sessionId)
       },
+      /** Rename a session; group owners/admins only, and record the change in its timeline. */
+      async rename(token: string, sessionId: string, title: string) {
+        const user = await auth(ctx, token)
+        if (!user) return null
+        const current = ctx.session.getSession(sessionId)
+        if (!current) return null
+        const denied = notGroupAdmin(ctx, sessionId, user.id)
+        if (denied) return denied
+        let updated
+        try { updated = ctx.session.renameSession(sessionId, String(title ?? '')) }
+        catch (error) {
+          if (error instanceof Error && 'code' in error) {
+            return { error: String((error as { code: unknown }).code), detail: error.message }
+          }
+          throw error
+        }
+        if (updated.title !== current.title) {
+          ctx.eventLog.append({
+            id: randomUUID(), sessionId, authorId: null, authorKind: 'system', kind: 'system', phaseId: null,
+            text: `${user.displayName} 将会话标题从「${current.title}」改为「${updated.title}」。`,
+            mentions: [], toolCalls: [], replyMode: '',
+          })
+          ctx.emit('space/session-renamed', {
+            sessionId, title: updated.title, updatedAt: updated.updatedAt,
+          })
+        }
+        return updated
+      },
     },
   )
 }

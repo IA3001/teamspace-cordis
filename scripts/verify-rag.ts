@@ -54,6 +54,20 @@ const structuredDocument = await ctx.kb.addDocument('运维手册结构验收', 
   '## Restore',
   `Restore drills must verify the persistent SQLite volume and document the recovery duration. ${'Record the observed result after each restore drill. '.repeat(18)}`,
 ].join('\n\n'))
+const guideFolder = await ctx.kb.createFolder('团队资料')
+const nestedFolder = await ctx.kb.createFolder('发布', guideFolder.path)
+const editableDoc = await ctx.kb.addDocument('可编辑资料', '旧版专属口令蓝鲸七三一。', 'manual', nestedFolder.path)
+assert.equal(editableDoc.folderPath, '团队资料/发布', 'new documents retain their selected folder path')
+assert.equal((await ctx.kb.listFolders()).find((folder) => folder.path === nestedFolder.path)?.parentPath, guideFolder.path,
+  'knowledge folders preserve their parent hierarchy')
+assert.equal((await ctx.kb.getDocument(editableDoc.id)).content, '旧版专属口令蓝鲸七三一。', 'document detail returns the complete source content')
+const editedDoc = await ctx.kb.updateDocument(editableDoc.id, '更新后的资料', '# 发布流程\n\n新版维护说明。', nestedFolder.path)
+assert.equal(editedDoc.content, '# 发布流程\n\n新版维护说明。', 'document edits persist the exact Markdown source')
+assert.equal(editedDoc.title, '更新后的资料', 'document edits update the title')
+assert((await ctx.kb.search('新版维护说明')).some((hit) => hit.docId === editableDoc.id),
+  'edited content is searchable after chunk and FTS index rebuild')
+assert.equal((await ctx.kb.search('蓝鲸七三一')).some((hit) => hit.docId === editableDoc.id), false,
+  'search no longer returns chunks from the previous document version')
 const structuredChunks = (await ctx.kb.allChunks()).filter((chunk) => chunk.docId === structuredDocument.id)
 assert(structuredChunks.length >= 4, 'long structured guidance is split into multiple chunks')
 assert(structuredChunks.every((chunk) => chunk.text.length <= 500), 'heading context remains inside the chunk size budget')
@@ -145,9 +159,10 @@ const hybrid = await vectorRerank('semantic query', [
   { docId: 'd1', docTitle: 'Keyword doc', chunkId: 'c_keyword', text: 'lexical match', score: 1 },
 ], {
   chunks: [
-    { docId: 'd1', chunkId: 'c_keyword', text: 'lexical match', embedding: [0, 1] },
-    { docId: 'd2', chunkId: 'c_semantic', text: 'semantic match', embedding: [1, 0] },
+    { docId: 'd1', chunkId: 'c_keyword', text: 'lexical match', embedding: [0, 1], embeddingModel: 'test-model' },
+    { docId: 'd2', chunkId: 'c_semantic', text: 'semantic match', embedding: [1, 0], embeddingModel: 'test-model' },
   ],
+  modelIdentity: 'test-model',
   embed: async () => [[1, 0]],
   topK: 2,
   titles: new Map([['d1', 'Keyword doc'], ['d2', 'Semantic doc']]),

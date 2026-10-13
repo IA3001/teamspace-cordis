@@ -73,6 +73,21 @@ async function main() {
   assert.equal((await rpc.removeMember('owner-session', session.id, 'u_owner')).error, 'forbidden',
     'the session creator cannot be removed')
 
+  assert.equal((await rpc.rename('member-session', session.id, '成员不能改名')).error, 'forbidden',
+    'only group owners/admins may rename a session')
+  assert.equal((await rpc.rename('owner-session', session.id, '   ')).error, 'invalid_input',
+    'a blank title is rejected')
+  assert.equal((await rpc.rename('owner-session', session.id, '标题'.repeat(61))).error, 'invalid_input',
+    'titles are capped at 120 Unicode characters')
+  const renamed = await rpc.rename('owner-session', session.id, '  需求评审  ')
+  assert.equal(renamed.title, '需求评审', 'titles are trimmed and persisted')
+  assert.equal(ctx.session.getSession(session.id).title, '需求评审')
+  assert.match(eventLog.listBySession(session.id).at(-1)!.text, /Owner 将会话标题从「成员角色验收」改为「需求评审」/)
+  const renameEventCount = eventLog.listBySession(session.id).length
+  await rpc.rename('owner-session', session.id, '需求评审')
+  assert.equal(eventLog.listBySession(session.id).length, renameEventCount,
+    'renaming to the existing normalized title does not create duplicate timeline events')
+
   await rpc.invite('owner-session', session.id, ['u_second_dri'])
   const inviteCount = eventLog.listBySession(session.id).length
   await rpc.invite('owner-session', session.id, ['u_second_dri'])

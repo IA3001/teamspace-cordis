@@ -22,22 +22,23 @@ if (page.url().includes('/login')) {
 await page.waitForTimeout(2000)
 const ta = page.locator('textarea')
 
-// 1. 输入 "/" → 指令联想浮出
+// 1. 输入 "/" 作为普通文本，不展示命令菜单
 await ta.fill('')
 await ta.pressSequentially('/', { delay: 50 })
 await page.waitForTimeout(400)
-console.log('slash 菜单条数:', await page.locator('.el-card__body div:has(> .el-tag)').count())
-console.log('含 /commit:', await page.getByText('/commit').count() > 0, '| 含 usage:', await page.getByText('/add <文本>').count() > 0)
+console.log('命令菜单关闭:', await page.locator('.el-popover:visible').count() === 0)
+console.log('斜杠保留为草稿:', JSON.stringify(await ta.inputValue()) === '/')
 
-// 2. 继续输 c 过滤
+// 2. 继续输入仍作为普通草稿
 await ta.pressSequentially('c', { delay: 50 })
 await page.waitForTimeout(300)
-console.log('过滤后含 /cur:', await page.getByText('/cur').count() > 0, '| 含 /add:', await page.getByText('/add <文本>').count() > 0)
+console.log('普通草稿:', JSON.stringify(await ta.inputValue()))
 
-// 3. 点选 /cur → 补全
-await page.getByText('/cur').first().click()
+// 3. 清空后继续验证 @成员联想
+await ta.fill('')
+await ta.pressSequentially('@a', { delay: 50 })
 await page.waitForTimeout(300)
-console.log('补全后草稿:', JSON.stringify(await ta.inputValue()))
+console.log('@ 联想菜单条数:', await page.locator('.el-popover:visible .el-button').count())
 
 // 4. @ 联想过滤 + 点选
 await ta.fill('')

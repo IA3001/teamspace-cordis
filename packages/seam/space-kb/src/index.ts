@@ -14,6 +14,7 @@ import type { Context } from 'cordis'
 declare module 'cordis' {
   interface Context {
     kb: KnowledgeService
+    kbIndex: KnowledgeIndexService
   }
 }
 
@@ -30,6 +31,20 @@ export interface KbDocument {
   createdAt: string
   /** 分块数（实现负责维护）。 */
   chunkCount: number
+  /** 知识库中的逻辑目录路径；根目录为空字符串。 */
+  folderPath: string
+}
+
+/** 文档原文，仅详情读取时返回，避免列表携带全部正文。 */
+export interface KbDocumentDetail extends KbDocument {
+  content: string
+}
+
+export interface KbFolder {
+  path: string
+  name: string
+  parentPath: string
+  documentCount: number
 }
 
 /** 一次知识检索命中（粒度 = 块）。 */
@@ -50,7 +65,7 @@ export interface KbSearchOptions {
 }
 
 // ── 错误分类法（实现与策略不得自造错误串）────────────────────────────────
-export type KnowledgeErrorCode = 'empty_title' | 'empty_text' | 'not_found' | 'empty_query'
+export type KnowledgeErrorCode = 'empty_title' | 'empty_text' | 'not_found' | 'empty_query' | 'invalid_folder'
 
 export class KnowledgeError extends Error {
   constructor(
@@ -75,10 +90,22 @@ export abstract class KnowledgeService extends Service {
   }
 
   /** 灌入一份文档（实现内自动分块），返回落定后的文档元信息。 */
-  abstract addDocument(title: string, text: string, source?: string): Promise<KbDocument>
+  abstract addDocument(title: string, text: string, source?: string, folderPath?: string): Promise<KbDocument>
 
   /** 列出全部文档（按创建时间升序）。 */
   abstract listDocuments(): Promise<KbDocument[]>
+
+  /** 读取完整原文；旧资料由迁移从检索块尽量恢复。 */
+  abstract getDocument(id: string): Promise<KbDocumentDetail>
+
+  /** 更新原文并重建检索块；向量由 kb-embedder 重新回填。 */
+  abstract updateDocument(id: string, title: string, text: string, folderPath?: string): Promise<KbDocumentDetail>
+
+  /** 列出逻辑目录。 */
+  abstract listFolders(): Promise<KbFolder[]>
+
+  /** 新建目录，parentPath 为空表示根目录。 */
+  abstract createFolder(name: string, parentPath?: string): Promise<KbFolder>
 
   /** 删除一份文档（级联删块）。不存在 → not_found。 */
   abstract removeDocument(id: string): Promise<void>
@@ -87,10 +114,34 @@ export abstract class KnowledgeService extends Service {
   abstract search(query: string, opts?: KbSearchOptions): Promise<KbHit[]>
 
   /** 取全部块（含 embedding 原始 JSON），供向量相似度扫描（A2）。 */
-  abstract allChunks(): Promise<{ chunkId: string; docId: string; text: string; embedding: number[] }[]>
+  abstract allChunks(): Promise<{ chunkId: string; docId: string; text: string; embedding: number[]; embeddingModel: string }[]>
 
   /** 把某块的向量写进 embedding 列（JSON number[]）。向量模型与量纲由调用方定。 */
-  abstract updateEmbedding(chunkId: string, vector: number[]): Promise<void>
+  abstract updateEmbedding(chunkId: string, vector: number[], modelIdentity?: string): Promise<void>
+  /** Aggregate progress without loading the corpus and vectors on every UI poll. */
+  abstract embeddingStats(modelIdentity: string): Promise<{ total: number; completed: number }>
+}
+
+export interface KnowledgeIndexStatus {
+  state: 'disabled' | 'pending' | 'running' | 'ready' | 'failed'
+  modelIdentity: string
+  model: string
+  total: number
+  completed: number
+  failed: number
+  error: string
+  updatedAt: string
+}
+
+/** Background index maintenance. Restart resumes from each chunk's persisted identity. */
+export abstract class KnowledgeIndexService extends Service {
+  constructor(ctx: Context) { super(ctx, 'kbIndex') }
+  abstract status(): Promise<KnowledgeIndexStatus>
+  abstract retry(): void
+}
+
+export function validEmbedding(vector: unknown): vector is number[] {
+  return Array.isArray(vector) && vector.length > 0 && vector.every((value) => typeof value === 'number' && Number.isFinite(value)) && vector.some((value) => value !== 0)
 }
 
 
@@ -104,20 +155,25 @@ export async function vectorRerank(
   query: string,
   keywordHits: KbHit[],
   opts: {
-    chunks: { chunkId: string; docId: string; text: string; embedding: number[] }[]
+    chunks: { chunkId: string; docId: string; text: string; embedding: number[]; embeddingModel?: string }[]
+    modelIdentity: string
+    currentModelIdentity?(): string
     embed(texts: string[]): Promise<number[][]>
     topK: number
     titles: Map<string, string>
   },
 ): Promise<KbHit[]> {
   try {
-    const withVec = opts.chunks.filter((c) => Array.isArray(c.embedding) && c.embedding.length > 0)
+    // A partial, legacy or mixed-model index must never be compared to a new query vector.
+    if (!opts.modelIdentity || opts.chunks.some((c) => c.embeddingModel !== opts.modelIdentity || !validEmbedding(c.embedding))) return keywordHits
+    const withVec = opts.chunks
     if (withVec.length === 0) return keywordHits
     const [qvec] = await opts.embed([query.trim()])
-    if (!Array.isArray(qvec) || qvec.length === 0) return keywordHits
+    if (!validEmbedding(qvec) || withVec.some((c) => c.embedding.length !== qvec.length) ||
+      (opts.currentModelIdentity && opts.currentModelIdentity() !== opts.modelIdentity)) return keywordHits
     const cosine = (a: number[], b: number[]) => {
       let dot = 0, na = 0, nb = 0
-      const n = Math.min(a.length, b.length)
+      const n = a.length
       for (let i = 0; i < n; i++) { dot += a[i]! * b[i]!; na += a[i]! * a[i]!; nb += b[i]! * b[i]! }
       return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0
     }

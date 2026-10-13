@@ -15,7 +15,7 @@
 #     不许建表），已在 MODULE-PLAN 修订记录记账
 #   · scripts/store.ts 里的 CREATE TABLE schema_version 是**记账设施**（迁移链的
 #     版本表），不在业务 schema 范围内，且 scripts/ 本就不在扫描范围
-#   · node_modules / dist 天然不在 packages、plugins 扫描范围内
+#   · packages 内可能有构建输出；扫描跳过 dist、node_modules、coverage 等生成目录
 #
 # 用法：npm run lint:migrations   （退出码 0 = 通过，1 = 判红）
 set -uo pipefail
@@ -45,6 +45,7 @@ function walk(dir, inMigrations) {
     const fp = join(dir, name)
     const st = statSync(fp)
     if (st.isDirectory()) {
+      if (['dist', 'node_modules', 'coverage'].includes(name)) continue
       walk(fp, inMigrations || name === 'migrations')
       continue
     }

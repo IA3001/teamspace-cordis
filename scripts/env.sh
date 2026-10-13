@@ -46,6 +46,25 @@ resolve_node_bin
 
 say() { printf '  %s\n' "$*"; }
 
+# start/dev 共用 APP_PORT 锁，在端口检查与 bind 之间防止并发竞态。
+# exec 后文件描述符仍由 Node 进程持有，进程退出时自动释放 flock。
+acquire_app_lock() {
+  if ! command -v flock >/dev/null 2>&1; then
+    printf '⚠ 未找到 flock，无法防止并发应用启动；请避免同时运行 npm start 和 npm run dev。\n' >&2
+    return 0
+  fi
+  # Store the lock under data/, which remains shared when systemd uses PrivateTmp=true.
+  # Keep the UID in the name so separate service accounts do not collide on file permissions.
+  mkdir -p "$REPO_ROOT/data"
+  APP_LOCK_FILE="$REPO_ROOT/data/.teamspace-cordis-app-${UID}-${APP_PORT}.lock"
+  exec 9>"$APP_LOCK_FILE"
+  if ! flock -n 9; then
+    printf '✗ APP_PORT=%s 已有 Teamspace 实例或监视进程持有启动锁。\n  请先执行 ./scripts/stop.sh --check 检查，再停止旧的 npm start 或 npm run dev 进程。\n' "$APP_PORT" >&2
+    return 1
+  fi
+  return 0
+}
+
 # 打印运行时端口一览（各脚本复用，保证输出口径一致）
 # 2026-09-30 修正：5174 团队空间页面已启用（IM 式聊天，需登录）——
 # 旧文案「暂未启用」与 check-web.sh 断言 5174 必须 200 矛盾。

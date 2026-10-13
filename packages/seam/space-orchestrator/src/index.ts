@@ -108,7 +108,7 @@ export type TurnState = 'chain' | 'static'
 export type StopReason =
   /** 已暂停，等待人类下一步指示（保留；IM 化后仅在预算耗尽与错误停机时出现，不再是默认路径）。 */
   | 'await_human'
-  /** Agent 明确标记需要 DRI 决定；依赖工作暂停，等待固定决策命令。 */
+  /** Agent 明确标记需要 DRI 决定；依赖工作暂停，等待回复卡片上的决策操作。 */
   | 'await_human_decision'
   /** 回合自然完成：无未完成委托且协调者不再继续（IM 化后的默认收敛路径，2026-09-30）。 */
   | 'completed'
@@ -244,7 +244,10 @@ export abstract class OrchestratorService extends Service {
   abstract reportFeedback(sessionId: string, target: string, text: string, sourceEventIds?: string[]): SessionEvent
 
   /** Store a result from any invited, data-defined or built-in Agent. */
-  abstract reportAgentResult(sessionId: string, target: string, text: string, sourceEventIds?: string[]): SessionEvent
+  abstract reportAgentResult(
+    sessionId: string, target: string, text: string, sourceEventIds?: string[],
+    worklog?: import('space-agent-runtime').AgentWorklogStep[],
+  ): SessionEvent
 
   /** Forget an in-flight delegate after its source is invalidated. */
   abstract cancelDelegatedTask(sessionId: string, target: string, sourceEventId: string): boolean

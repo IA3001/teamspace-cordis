@@ -31,5 +31,5 @@ const deferReviewDone = { ...reviewDone, id: 'defer-review-done', replyTo: defer
 assert.equal(decisionPresentation(target, [target, defer, review, reviewDone, deferReview, deferReviewDone])?.title,
   '复核完成，待 DRI 再次决策')
 assert.equal(decisionPresentation({ ...target, text: '建议。\n【需要DRI决策】' }, [target])?.question,
-  '请审阅建议并使用固定决策命令。')
+  '请审阅建议，并使用下方操作按钮处理。')
 console.log('✓ Decision presentation separates Agent recommendations, pending questions, and latest DRI status')

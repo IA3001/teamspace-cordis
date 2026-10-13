@@ -1,6 +1,7 @@
-// space-auth —— 身份域 HTTP 门面（IM 化改造 2026-09-30）。
+// space-auth —— Team 身份 HTTP 门面与免登录后台管理 API。
 //
-// 职责只有一件：把 seam/space-identity 的 UserService 包成 HTTP。
+// Team 身份路由把 seam/space-identity 的 UserService 包成 HTTP；后台管理
+// 路由独立开放，不读取或签发 Team 身份 token。
 //   POST /api/auth/register  注册（201 PublicUser；username_taken → 409）
 //   POST /api/auth/login     登录 → 签发 HttpOnly cookie（space_token）
 //   POST /api/auth/logout    注销当前 token + 清 cookie
@@ -11,19 +12,16 @@
 // requireUser 自取身份，不重复解析 cookie。
 import type { Context } from 'cordis'
 import { IdentityError } from 'space-identity'
-import { AdminAuthError } from 'space-admin-auth'
-import type { AdminPrincipal } from 'space-admin-auth'
 import type { PublicUser } from 'space-identity'
 
 export const name = 'space-auth'
 // settings：注册开关 auth.registerEnabled（管理页 /admin 可改）优先于
-// 启动 Config；Team 注册只创建 Team 身份，不会创建或提升 Admin 身份。
-export const inject = ['server', 'users', 'settings', 'adminAuth', 'llm', 'embeddings']
+// 启动 Config；后台管理不使用独立管理员账号或 Team 身份。
+export const inject = ['server', 'users', 'settings', 'llm', 'embeddings']
 
 // 与 Set-Cookie 的 Max-Age 严格一致（秒）：7 天。
 export const TOKEN_MAX_AGE = 604800
 const COOKIE_NAME = 'space_token'
-const ADMIN_COOKIE_NAME = 'admin_token'
 type HeaderRequest = { headers: Headers }
 
 /** 手工解析 Cookie 头，取 space_token 的值；没有就空串（本项目不引 cookie 库）。 */
@@ -52,70 +50,32 @@ export async function requireUser(ctx: Context, req: HeaderRequest): Promise<Pub
   return ctx.users.verifyToken(readToken(req))
 }
 
-function readAdminToken(req: HeaderRequest): string {
-  const bearer = req.headers.get('authorization')
-  if (bearer?.startsWith('Bearer ')) return bearer.slice(7).trim()
-  const header = req.headers.get('cookie')
-  if (!header) return ''
-  for (const part of header.split(';')) {
-    const eq = part.indexOf('=')
-    if (eq >= 0 && part.slice(0, eq).trim() === ADMIN_COOKIE_NAME) {
-      return decodeURIComponent(part.slice(eq + 1).trim())
-    }
-  }
-  return ''
-}
-
 /** IdentityError.code → HTTP 状态码。只分两档：输入错 400，冲突 409。 */
 function statusFor(e: IdentityError): number {
   return e.code === 'username_taken' ? 409 : 400
 }
 
-/** 后台守门只验证独立 admin session；不解析 Team 用户身份。 */
-export async function requireAdmin(ctx: Context, tokenOrRequest: string | HeaderRequest): Promise<AdminPrincipal> {
-  return ctx.adminAuth.verifyToken(typeof tokenOrRequest === 'string' ? tokenOrRequest : readAdminToken(tokenOrRequest))
-}
-
-/** 非管理员——用独立错误类区分 403 与 401，不污染 IdentityError 分类法。 */
-export class AdminForbidden extends Error {}
-
-/** 管理路由的统一错误出口：IdentityError 走 statusFor，AdminForbidden → 403。 */
+/** 管理 API 的输入错误统一映射；此入口按用户要求免登录开放。 */
 function adminError(e: unknown): Response | null {
-  if (e instanceof AdminForbidden) {
-    return Response.json({ error: 'forbidden', detail: e.message }, { status: 403 })
-  }
   if (e instanceof IdentityError) {
     return Response.json({ error: e.code, detail: e.message }, { status: statusFor(e) })
-  }
-  if (e instanceof AdminAuthError) {
-    return Response.json({ error: e.code, detail: e.message }, { status: 401 })
   }
   return null
 }
 
 import z from 'schemastery'
 
-/** 面板可配（5172 → 插件 → space-auth）：注册开关。 */
-export interface Config { registerEnabled?: boolean; adminUsername?: string; adminPassword?: string }
+/** 面板可配（5172 → 插件 → space-auth）：Team 注册开关。 */
+export interface Config { registerEnabled?: boolean }
 
 export const Config = z.object({
   registerEnabled: z.boolean()
-    .description('开放注册（关闭后仅管理员通过既有账号管理，页面注册将提示关闭）')
+    .description('开放注册（关闭后后台仍可管理既有 Team 账号，页面注册将提示关闭）')
     .default(true),
-  adminUsername: z.string().description('后台管理员用户名；生产环境必须显式配置').default(''),
-  adminPassword: z.string().role('secret').description('后台管理员密码；生产环境必须显式配置').default(''),
 })
 
 export function apply(ctx: Context, config: Config = {}) {
   const registerEnabled = config.registerEnabled ?? true
-  const env = process.env.NODE_ENV ?? 'development'
-  const devDefaults = env === 'development' || env === 'test'
-  const adminUsername = config.adminUsername?.trim() || process.env.ADMIN_USERNAME?.trim() || (devDefaults ? 'admin' : '')
-  const adminPassword = config.adminPassword || process.env.ADMIN_PASSWORD || (devDefaults ? '123456' : '')
-  if (!adminUsername || !adminPassword) {
-    throw new Error('[space-auth] 生产环境必须配置 ADMIN_USERNAME 和 ADMIN_PASSWORD')
-  }
-  ctx.adminAuth.configureBootstrap(adminUsername, adminPassword)
   // ── 注册 ─────────────────────────────────────────────────────────────
   ctx.server.post('/api/auth/register', async (req) => {
     // Team 注册开关：空库同样遵守设置，不存在首注册升级 Admin 的路径。
@@ -218,68 +178,18 @@ export function apply(ctx: Context, config: Config = {}) {
     }
   })
 
-  // ── 独立后台认证；不读取/签发 Team token ──────────────────────────────
-  const adminLoginFails = new Map<string, { count: number; resetAt: number }>()
-  const adminFailKey = (req: HeaderRequest, username: string) => {
-    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local'
-    return `${ip}|${username.toLowerCase()}`
-  }
-  ctx.server.post('/api/admin-auth/login', async (req) => {
-    const body = await req.json().catch(() => null as Record<string, unknown> | null)
-    const username = typeof body?.username === 'string' ? body.username : ''
-    const password = typeof body?.password === 'string' ? body.password : ''
-    const key = adminFailKey(req, username)
-    const prior = adminLoginFails.get(key)
-    if (prior && Date.now() <= prior.resetAt && prior.count >= MAX_FAILS) {
-      return Response.json({ error: 'too_many_attempts', detail: '登录失败次数过多，请 10 分钟后再试' }, { status: 429 })
-    }
-    try {
-      const grant = await ctx.adminAuth.login(username, password)
-      adminLoginFails.delete(key)
-      return Response.json({ id: grant.adminId, token: grant.token, expiresAt: grant.expiresAt }, {
-        headers: { 'Set-Cookie': `${ADMIN_COOKIE_NAME}=${encodeURIComponent(grant.token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TOKEN_MAX_AGE}` },
-      })
-    } catch (e) {
-      if (e instanceof AdminAuthError && e.code === 'bad_credentials') {
-        const rec = adminLoginFails.get(key)
-        if (!rec || Date.now() > rec.resetAt) adminLoginFails.set(key, { count: 1, resetAt: Date.now() + WINDOW_MS })
-        else rec.count++
-      }
-      return adminError(e) ?? Promise.reject(e)
-    }
-  })
-  ctx.server.post('/api/admin-auth/logout', async (req) => {
-    const token = readAdminToken(req)
-    if (token) await ctx.adminAuth.logout(token)
-    return Response.json({ ok: true }, {
-      headers: { 'Set-Cookie': `${ADMIN_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` },
-    })
-  })
-  ctx.server.get('/api/admin-auth/me', async (req) => {
-    try { return Response.json(await requireAdmin(ctx, req)) }
-    catch { return Response.json({ error: 'unauthorized' }, { status: 401 }) }
-  })
-
-  // ── 管理面：只接受 admin_token / Admin RPC token ───────────────────────
+  // ── 开放管理面：不读取 Team token，也不要求后台登录 ────────────────────
 
   // 用户列表（含 agent 身份，管理面展示用）。
-  ctx.server.get('/api/admin/users', async (req) => {
-    try {
-      await requireAdmin(ctx, req)
-      return Response.json(await ctx.users.listAll())
-    } catch (e) {
-      return adminError(e) ?? Promise.reject(e)
-    }
-  })
+  ctx.server.get('/api/admin/users', async () => Response.json(await ctx.users.listAll()))
 
   // 重置密码（agent 身份 impl 层抛 forbidden_kind → 400；这里顺带拦 body）。
   ctx.server.post('/api/admin/users/:id/reset-password', async (req) => {
     try {
-      const admin = await requireAdmin(ctx, req)
       const body = await req.json().catch(() => null as Record<string, unknown> | null)
       const password = typeof body?.password === 'string' ? body.password : ''
       await ctx.users.resetPassword(req.params.id, password)
-      ctx.logger.info('[admin-audit] admin=%s action=reset_team_password target=%s', admin.id, req.params.id)
+      ctx.logger.info('[admin-audit] admin=%s action=reset_team_password target=%s', 'admin-open', req.params.id)
       return Response.json({ ok: true })
     } catch (e) {
       return adminError(e) ?? Promise.reject(e)
@@ -289,9 +199,8 @@ export function apply(ctx: Context, config: Config = {}) {
   // 删除用户。同样禁止删自己；被会话引用 → in_use（impl 层抛，409）。
   ctx.server.delete('/api/admin/users/:id', async (req) => {
     try {
-      const admin = await requireAdmin(ctx, req)
       await ctx.users.removeUser(req.params.id)
-      ctx.logger.info('[admin-audit] admin=%s action=remove_team_user target=%s', admin.id, req.params.id)
+      ctx.logger.info('[admin-audit] admin=%s action=remove_team_user target=%s', 'admin-open', req.params.id)
       return Response.json({ ok: true })
     } catch (e) {
       return adminError(e) ?? Promise.reject(e)

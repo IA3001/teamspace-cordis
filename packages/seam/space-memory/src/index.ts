@@ -28,6 +28,8 @@ export interface MemoryItem {
   scope: string
   /** 开放词表：'note' | 'fact' | 'summary' | 'artifact' | 'preference'。 */
   kind: string
+  /** Agent-private explorer path, e.g. "会话事实/项目". */
+  folderPath: string
   text: string
   /** 重要性 0~1（写入方自评；缺省 0.5）。 */
   weight: number
@@ -49,10 +51,32 @@ export interface RecallOptions {
   kind?: string
   /** 召回 floor：weight 低于此值的丢弃（缺省 0）。 */
   minWeight?: number
+  /** Restrict retrieval to one folder and its descendants. */
+  folderPath?: string
+}
+
+export interface MemoryListOptions {
+  offset?: number
+  limit?: number
+  includeInvalidated?: boolean
+  folderPath?: string
+  excludeSystem?: boolean
+}
+
+export interface MemoryFolder {
+  path: string
+  name: string
+  parentPath: string
+  itemCount: number
+}
+
+export interface MemoryListResult {
+  items: MemoryItem[]
+  total: number
 }
 
 // ── 错误分类法（实现与策略不得自造错误串）────────────────────────────────
-export type MemoryErrorCode = 'empty_text' | 'bad_scope' | 'not_found' | 'invalid_weight'
+export type MemoryErrorCode = 'empty_text' | 'bad_scope' | 'not_found' | 'invalid_weight' | 'bad_folder'
 
 export class MemoryError extends Error {
   constructor(
@@ -82,13 +106,26 @@ export abstract class MemoryService extends Service {
     authorId?: string | null
     sourceEventId?: string | null
     sourceEventIds?: string[]
+    folderPath?: string
   }): Promise<MemoryItem>
 
   /** 按近因 + 重要性召回某 scope 的记忆（上下文注入层的主入口）。 */
   abstract recall(scope: string, opts?: RecallOptions): Promise<MemoryItem[]>
 
+  /** Paginated explorer view; optionally includes invalidated audit records. */
+  abstract list(scope: string, opts?: MemoryListOptions): Promise<MemoryListResult>
+
+  /** List an Agent scope's folders and active item counts. */
+  abstract listFolders(scope: string): Promise<MemoryFolder[]>
+
+  /** Create a folder inside one memory scope. */
+  abstract createFolder(scope: string, name: string, parentPath?: string): Promise<MemoryFolder>
+
+  /** Move one memory to a folder in its own scope. */
+  abstract move(scope: string, id: string, folderPath: string): Promise<MemoryItem>
+
   /** 全文检索某 scope（检索层的记忆侧数据源）。 */
-  abstract search(scope: string, query: string, limit?: number): Promise<MemoryItem[]>
+  abstract search(scope: string, query: string, limit?: number, folderPath?: string): Promise<MemoryItem[]>
 
   /** 遗忘一条记忆（幂等）。 */
   abstract forget(id: string): Promise<void>

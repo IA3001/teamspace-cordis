@@ -128,6 +128,8 @@ async function partA(): Promise<void> {
   check('A2a claim 幂等（同 agentId 同 handle）', h1 === h2 && h1.agentId === 'agent.coder')
   check('A2b root 形状 = <tmp>/workdirs/agent.coder', h1.root === join(tmp, 'workdirs', 'agent.coder'), h1.root)
   check('A2c 目录真的建出来了', existsSync(h1.root))
+  check('A2e claim 建立项目/任务/脚本/笔记分区',
+    ['projects', 'tasks', 'scripts', 'notes'].every((name) => existsSync(join(h1.root, name))))
   check('A2d list 按 agentId 排序', workdir.list().length === 1 && workdir.list()[0]!.agentId === 'agent.coder')
 
   // A3 resolve：路径边界判定（execdir 铁则）
@@ -267,9 +269,13 @@ async function partB(): Promise<void> {
   check('B3 回执含工作区绝对路径 + 产物清单', !!receipt && receipt.text.includes('【工作区】') && receipt.text.includes('【产物清单】'), receipt?.text)
   const rootOf = receipt?.text.match(/【工作区】(.+)/)?.[1] ?? ''
   check('B4 工作区目录真的存在（claim 建区）', !!rootOf && existsSync(rootOf), rootOf)
-  const files = rootOf ? readdirSync(rootOf) : []
-  check('B5 任务文件落盘（task-*.md，内容含指令）', files.length === 1 && files[0]!.startsWith('task-') &&
-    readFileSync(join(rootOf, files[0]!), 'utf8').includes('实现登录页'), JSON.stringify(files))
+  const taskFiles = rootOf && existsSync(join(rootOf, 'tasks'))
+    ? readdirSync(join(rootOf, 'tasks')).flatMap((directory) => {
+      const taskPath = join(rootOf, 'tasks', directory, 'task.md')
+      return existsSync(taskPath) ? [taskPath] : []
+    }) : []
+  check('B5 任务文件按轮次存入 tasks/<run>/task.md（内容含指令）', taskFiles.length === 1 &&
+    readFileSync(taskFiles[0]!, 'utf8').includes('实现登录页'), JSON.stringify(taskFiles))
   check('B6 状态机走满一圈（回 idle，可领下一个）', ctx.agents.get('agent.coder').status === 'idle')
   const turn = engine.turn('s_w')
   check('B7 收执后引擎允许按自治策略继续（不强制 await_human）', turn.stopReason !== 'await_human', JSON.stringify(turn))

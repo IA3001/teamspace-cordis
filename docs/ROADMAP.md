@@ -4,7 +4,9 @@
 > 铁律见 [`.rules/IRON-RULES.md`](../.rules/IRON-RULES.md)　·　怎么跑起来见 [`README.md`](../README.md)
 > 建档：2026-09-27
 
-> **状态说明（2026-10-09）**：下方按日期记录的是实现历史，不代表今天仍在使用旧页面或旧认证模型。当前 Admin 与 Team 使用独立身份、会话和 API；Admin 管理系统设置、账号与日志，Teamspace 管理共享 Agent 目录、邀请和会话。`npm run gate:static` / `npm run gate:runtime` 是当前门禁。旧记录中 `/commit`、`/tell`、`is_admin`、5174 Admin bridge 和 `/agents` 管理页均为历史实现。会议与 coding Agent 均已作为共享目录数据由通用运行时加载；LangGraph 工具循环、隔离工作区、按 Agent 并行的消息记忆、Inbox 启动回放、SQLite 跨进程活动会话租约、越界审批、DRI 决策与因果撤回/重做、主动发言节流和活动 Tab 已有实现。后续重点是 Orchestrator/确定性流程作业恢复、可达 Embedding 服务上的检索对比和 UI 体验收尾；详见根目录 [`TODO.md`](../../TODO.md) 与 [`Problem.md`](../../Problem.md)。
+> **当前下一轮（2026-10-13）：桌面 UI 统一与交互修复。** 按 [根目录 TODO 的新一轮清单](../../TODO.md#新一轮-todo桌面-ui-统一与交互修复2026-10-13) 执行，先处理阅读裁切、分页、导航、账号、审批与供应商编辑，再统一资源页面和状态设计；手机适配暂缓。问题证据与验收方向见 [UI 设计评审](reviews/UI-DESIGN-AUDIT-2026-10-13.md)。
+
+> **状态说明（2026-10-11）**：下方按日期记录的是实现历史，不代表今天仍在使用旧页面或旧认证模型。当前 Admin 与 Team 使用独立身份、会话和 API；Admin 管理系统设置、账号与日志，Teamspace 管理共享 Agent 目录、邀请和会话。`npm run gate:static` / `npm run gate:runtime` 是当前门禁。旧记录中 `/commit`、`/tell`、`is_admin`、5174 Admin bridge 和 `/agents` 管理页均为历史实现。会议与 coding Agent 均已作为共享目录数据由通用运行时加载；LangGraph 工具循环、隔离工作区、按 Agent 并行的消息记忆、Inbox 启动回放、SQLite 跨进程活动会话租约、越界审批、DRI 决策与因果撤回/重做、主动发言节流、RAG 检索评测和活动 Tab 已有实现；Orchestrator 与确定性流程恢复也已验收。当前仍待生产宿主机 XFS 配额现场验收（目前没有隔离验收环境）及持续的 UI 实际体验打磨；更细的后台权限分级按 TODO 暂缓。详见根目录 [`TODO.md`](../../TODO.md) 与 [`Problem.md`](../../Problem.md)。
 
 ---
 
@@ -49,13 +51,14 @@ AI 主动发言（`ctx.messages.send` 统一入口）、微信式聊天列表与
 5172 `/models` 页（LLM/Embedding 的 baseURL/model/apiKey 表单 + 连通测试；
 apiKey 只写不回显）。取值优先级：settings（面板）> Config > env。保存即生效，
 无需重启。路由避开面板内置的 /settings（通用设置），故用 /models。
+**当前状态（2026-10-11）：**独立 `/models` 页面已退役且不属于活动插件组合；系统级 API 管理由独立后台 `/admin` 承载，与 Team 账号管理位于同一后台。当前页提供文字模型、Embedding、网页搜索 API 配置、多组文字模型供应商、连通/流式测试和密钥脱敏。旧 `space-client-ui-settings` 包仅保留作迁移参考，不要把 `/models` 当作当前入口。
 **Agent 配置页**（2026-10-05）：5172 `/agents` 页（admin 同口径）—— 名册
 （注册表全量 + 生命周期状态）、提示词模板编辑（ctx.prompts upsert，下一回合
 生效）、per-agent promptRef 重定向（settings 键 agent.<id>.promptRef，
 agent-analyst-llm 现读）、自治预算（settings 键 agent.autonomyBudget，
 orchestrator 闸门现读）。
-**真实模型端到端打通**（2026-10-05）：阿里云 MaaS（qwen3-max + 
-qwen3.7-text-embedding 1024 维）经 /models 页配置后，@需求分析师 → 真大脑
+**真实模型端到端打通**（2026-10-05，历史验收）：阿里云 MaaS（qwen3-max +
+qwen3.7-text-embedding 1024 维）经当时的 /models 页配置后，@需求分析师 → 真大脑
 派单 → 【真模型】回复全链路验证通过。附带修复：@提及解析放宽（@角色/@分工
 显示名也认，服务端与客户端双端；末尾标点剥离）—— 此前手打 @标题 不会触发
 AI（mentions 只认内部 id）。
@@ -66,7 +69,7 @@ Agent 成果单次落库（analyst 此前 messages.send + reportFeedback 同文�
 chip 短名不再裁切、引用块旧格式裸 id 换显示名、@菜单 hint 显示角色、composer
 textarea 禁 resize、文件按钮加回形针图标。诊断：大脑原始输出落 logs.db
 （排「答非所问」必须看得到它）。
-**控制台专业版式**（2026-10-05 深夜）：/admin /models /agents 三页统一设计
+**控制台专业版式**（2026-10-05 深夜）：后台与团队管理页统一设计
 语言（shared/client/console.ts + im.css「控制台专业版式」段）—— 页头（标题+
 职责描述+状态胶囊+页级导航）、分区卡片（主色竖条标题+浅描边微阴影）、双列
 表单栅格、虚线分隔操作行+内联结果、灰/橙/绿/红语义状态点；保存/测试结果从

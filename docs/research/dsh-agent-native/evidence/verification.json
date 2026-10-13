@@ -1,0 +1,229 @@
+{
+  "upstream_commit": "d743267388641bc76f17c45ce8b4c231aed1d32c",
+  "node": "v22.19.0",
+  "method": "Run original DSH scripts using Node strip-types, isolated synthetic fixtures; auxiliary dependencies installed outside project, no upstream full build and no API keys.",
+  "auxiliary_dependencies": {
+    "typescript": "6.0.3",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm": "3.1.0",
+    "micromark-extension-gfm": "3.0.0"
+  },
+  "probes": [
+    {
+      "name": "budget-valid",
+      "script": "verify-doc-budgets.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 88,
+      "stdout": "verify-doc-budgets: 1 budgeted docs within ceiling.\n",
+      "stderr": ""
+    },
+    {
+      "name": "budget-overflow",
+      "script": "verify-doc-budgets.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 80,
+      "stdout": "",
+      "stderr": "verify-doc-budgets failed:\n\n  README.md: 9 words exceeds the 4-word ceiling — relocate or condense per docs/AGENTS.md (raising the ceiling requires justification in the PR)\n\nSee docs/AGENTS.md for the documentation standard and the relocation-first rule.\n"
+    },
+    {
+      "name": "links-valid",
+      "script": "verify-md-links.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 193,
+      "stdout": "verify-md-links: 3 file(s) checked, all relative cross-links and fragments resolve.\n",
+      "stderr": ""
+    },
+    {
+      "name": "links-broken-anchor",
+      "script": "verify-md-links.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 188,
+      "stdout": "",
+      "stderr": "verify-md-links: broken relative cross-links found:\n  docs/demo.md:3  target.md#missing  (no such anchor in target)\n"
+    },
+    {
+      "name": "type-equiv-valid",
+      "script": "verify-type-equiv.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 564,
+      "stdout": "verify-type-equiv: 1 type-equiv block(s) match source structure and JSDoc (1:1 with manifest); 0 paired derivative(s).\n",
+      "stderr": ""
+    },
+    {
+      "name": "type-equiv-stale-doc",
+      "script": "verify-type-equiv.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 546,
+      "stdout": "",
+      "stderr": "verify-type-equiv: type-equiv verification failed:\n  DRIFT: docs/demo.md:3 — type-equiv block for Sample does not match packages/demo/service/src/index.ts.\n    source structure: interface Sample { value: string }\n    doc structure:    interface Sample { value: number }\n    source JSDoc:     []\n    doc JSDoc:        []\n\n(checked 1 primary block(s) across 1 doc(s), 0 paired derivative(s); manifest at scripts/type-equiv.manifest.json)\n"
+    },
+    {
+      "name": "config-source-valid",
+      "script": "verify-config-source-ownership.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 107,
+      "stdout": "verify-config-source-ownership: no credential or endpoint uses the ordinary inline environment form in shipped configuration.\n",
+      "stderr": ""
+    },
+    {
+      "name": "config-source-forbidden-inline",
+      "script": "verify-config-source-ownership.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 105,
+      "stdout": "",
+      "stderr": "verify-config-source-ownership: configuration source ownership violated:\n  packages/bundle/probe/cordis.patch.yml:4: inlines a credential or endpoint from the environment. The adapter resolves apiKeyEnv through ctx.credentials and the endpoint through the environment snapshot; inlining here bypasses both ladders.\n"
+    }
+  ],
+  "approval_policy_tests": {
+    "command": "node --test .github/review-ownership/check-approval.test.mjs .github/review-ownership/blame-ownership.test.mjs .github/review-ownership/author-weight.test.mjs",
+    "pass": 80,
+    "fail": 0,
+    "duration_ms": 183.809717
+  },
+  "baseline_gates": [
+    {
+      "command": "node --experimental-strip-types scripts/verify-doc-budgets.ts",
+      "exit": 0,
+      "result": "8 budgeted docs within ceiling"
+    },
+    {
+      "command": "node --experimental-strip-types scripts/verify-archived-agent-notes.ts",
+      "exit": 0,
+      "result": "2772 frozen artifacts across 6 classes"
+    }
+  ],
+  "not_run": [
+    "full upstream CI",
+    "real model e2e",
+    "production session migrations",
+    "browser replay matrix"
+  ],
+  "harness_correction": "Initial research fixture used an array for type-equiv manifest; upstream requires {entries:[...]}. Corrected before recording the successful positive/negative probes; this was not a DSH failure.",
+  "archive_probes": [
+    {
+      "name": "archive-valid",
+      "script": "verify-archived-agent-notes.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 1017,
+      "stdout": "verify-archived-agent-notes: 2772 frozen artifact(s) checked across 6 kind(s).\n",
+      "stderr": ""
+    },
+    {
+      "name": "archive-mutated-note",
+      "script": "verify-archived-agent-notes.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 333,
+      "stdout": "",
+      "stderr": "verify-archived-agent-notes: archive rules violated:\n  process/2026-06-11-doc-sync-enforcement.i18n.yaml: consistency record must contain the current Git blob hashes of both archived sides\n  process/2026-06-11-doc-sync-enforcement.md: sealed content hash changed\n"
+    },
+    {
+      "name": "archive-mutated-note-and-resealed-manifest",
+      "script": "verify-archived-agent-notes.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 240,
+      "stdout": "",
+      "stderr": "verify-archived-agent-notes: archive rules violated:\n  process/2026-06-11-doc-sync-enforcement.i18n.yaml: consistency record must contain the current Git blob hashes of both archived sides\n  process/2026-06-11-doc-sync-enforcement.md: sealed manifest hash changed\n"
+    },
+    {
+      "name": "archive-restored",
+      "script": "verify-archived-agent-notes.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 284,
+      "stdout": "verify-archived-agent-notes: 2772 frozen artifact(s) checked across 6 kind(s).\n",
+      "stderr": ""
+    }
+  ],
+  "portable_harness_recheck": [
+    {
+      "name": "budget-valid",
+      "script": "verify-doc-budgets.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 134,
+      "stdout": "verify-doc-budgets: 1 budgeted docs within ceiling.\n",
+      "stderr": ""
+    },
+    {
+      "name": "budget-overflow",
+      "script": "verify-doc-budgets.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 90,
+      "stdout": "",
+      "stderr": "verify-doc-budgets failed:\n\n  README.md: 9 words exceeds the 4-word ceiling — relocate or condense per docs/AGENTS.md (raising the ceiling requires justification in the PR)\n\nSee docs/AGENTS.md for the documentation standard and the relocation-first rule.\n"
+    },
+    {
+      "name": "links-valid",
+      "script": "verify-md-links.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 254,
+      "stdout": "verify-md-links: 3 file(s) checked, all relative cross-links and fragments resolve.\n",
+      "stderr": ""
+    },
+    {
+      "name": "links-broken-anchor",
+      "script": "verify-md-links.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 120,
+      "stdout": "",
+      "stderr": "verify-md-links: broken relative cross-links found:\n  docs/demo.md:3  target.md#missing  (no such anchor in target)\n"
+    },
+    {
+      "name": "type-equiv-valid",
+      "script": "verify-type-equiv.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 553,
+      "stdout": "verify-type-equiv: 1 type-equiv block(s) match source structure and JSDoc (1:1 with manifest); 0 paired derivative(s).\n",
+      "stderr": ""
+    },
+    {
+      "name": "type-equiv-stale-doc",
+      "script": "verify-type-equiv.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 445,
+      "stdout": "",
+      "stderr": "verify-type-equiv: type-equiv verification failed:\n  DRIFT: docs/demo.md:3 — type-equiv block for Sample does not match packages/demo/service/src/index.ts.\n    source structure: interface Sample { value: string }\n    doc structure:    interface Sample { value: number }\n    source JSDoc:     []\n    doc JSDoc:        []\n\n(checked 1 primary block(s) across 1 doc(s), 0 paired derivative(s); manifest at scripts/type-equiv.manifest.json)\n"
+    },
+    {
+      "name": "config-source-valid",
+      "script": "verify-config-source-ownership.ts",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "duration_ms": 68,
+      "stdout": "verify-config-source-ownership: no credential or endpoint uses the ordinary inline environment form in shipped configuration.\n",
+      "stderr": ""
+    },
+    {
+      "name": "config-source-forbidden-inline",
+      "script": "verify-config-source-ownership.ts",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "duration_ms": 62,
+      "stdout": "",
+      "stderr": "verify-config-source-ownership: configuration source ownership violated:\n  packages/bundle/probe/cordis.patch.yml:4: inlines a credential or endpoint from the environment. The adapter resolves apiKeyEnv through ctx.credentials and the endpoint through the environment snapshot; inlining here bypasses both ladders.\n"
+    }
+  ],
+  "report_checks": {
+    "relative_markdown_links": "9 markdown files, 0 violations; original DSH parser",
+    "pinned_sources": "56 Git blob objects match source index",
+    "document_sizes": "all 9 markdown documents < 20000 bytes",
+    "diff_whitespace": "git diff --check passed; existing worktree changes preserved",
+    "full_project_gate": "not run: documentation and TODO only; no business, dependency or CI changes in this research"
+  }
+}

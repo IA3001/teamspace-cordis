@@ -1,25 +1,18 @@
-// staging-commands —— 暂存区指令族 + 入站消息路由（P2）。
+// staging-commands —— 入站聊天消息与遗留暂存 REST 路由。
+// 所有聊天文本（包括以 / 开头的文本）均作为普通消息处理；操作由专用 UI 控件发起。
 //
-// 指令族（2026-10-02 用户拍板注销暂存族 /add /stage /cur /del /change /clear
-//   /commit —— IM 直达时间线后失去主路径地位；seam/表/RPC 保留，恢复随时加回）：
-//   本插件现只注册 /help（动态列出其它插件注册的指令族）。
-//
-// 入站路由（承旧 POST /messages + GET /staging 契约；IM 化 2026-09-30）：
+// 入站路由（承旧 POST /messages + GET /staging 契约）：
 //   POST /api/sessions/:id/messages —— 入站唯一写入口：
 //     身份改由 space-auth 的 HttpOnly cookie（space_token）注入，忽略
 //     body.authorId（未登录 → 401）。
-//     行首 '/' → Parse/Dispatch（指令）；否则 → **直达时间线**：直接落
-//     人类发言事件（eventLog.append）并 emit 'space/plan' 触发 AI ——
-//     /stage /commit 降级为可选批量起草路径（@提及某成员会触发 AI，
+//     直接落人类发言事件（eventLog.append）并 emit 'space/plan' 触发 AI；
+//     @提及某成员会触发 AI，
 //     见 orchestrator 的 'space/plan' 订阅）。
-//   GET /api/sessions/:id/staging —— 只读清单；写操作一律走 / 指令。
+//   GET/DELETE /api/sessions/:id/staging —— 遗留暂存条目的读取与作者删除。
 import { randomUUID } from 'node:crypto'
 import type { Context } from 'cordis'
-import { CommandError, parse } from 'space-command'
-import type { CommandCtx, CommandService } from 'space-command'
 import { IdentityError } from 'space-identity'
 import { StagingError } from 'space-staging'
-import type { StagingService } from 'space-staging'
 import { collectAgentDescendants } from 'space-event'
 import type { SessionEvent } from 'space-event'
 
@@ -58,7 +51,7 @@ function isSessionMember(ctx: Context, sessionId: string, userId: string): boole
 }
 
 export const name = 'staging-commands'
-export const inject = ['server', 'commands', 'staging', 'session', 'eventLog', 'users', 'agents', 'agentInbox', 'agentRuntime', 'orchestrator', 'memory']
+export const inject = ['server', 'staging', 'session', 'eventLog', 'users', 'agents', 'agentInbox', 'agentRuntime', 'orchestrator', 'memory']
 
 export interface Config {}
 
@@ -113,44 +106,8 @@ export async function invalidateRecallConsequences(ctx: Context, sessionId: stri
 }
 
 /**
- * 注册指令族。从 apply 里拆出来：scripts/verify-staging.ts 的进程内
- * 断言（Part A）用实例直接调用，不必起 HTTP 服务。
- */
-export function registerCommands(commands: CommandService, staging: StagingService): void {
-  // 暂存指令族（/add /stage /cur /del /change /clear /commit）已于 2026-10-02
-  // 注销 —— IM 化后普通消息直达时间线，暂存工作流失去主路径地位（用户拍板）。
-  // seam / 数据表 / RPC 读取全部保留：想恢复 = 在这里加回注册行，零结构调整。
-  // staging 参数保留（签名兼容 verify-staging 与未来恢复）。
-
-  // /help：动态列出全部注册指令（当前 = 流程指令 + /todo /tell /summary）。
-  commands.register({
-    name: 'help',
-    usage: '/help —— 列出全部可用指令',
-    minArgs: 0,
-    maxArgs: 0,
-    run: () => {
-      const all = commands.list()
-      if (all.length === 0) return { text: '（当前没有任何指令）' }
-      const lines = all.map((c) => `  ${c.usage}`).join('\n')
-      return {
-        text: `可用指令（${all.length} 个）：\n${lines}\n` +
-          '提示：普通消息直接上时间线；@成员可召唤 AI；@所有人召唤全体。',
-      }
-    },
-  })
-}
-function toSeq(s: string): number {
-  const n = Number(s)
-  if (!Number.isInteger(n) || n <= 0) {
-    throw new CommandError('bad_args', `序号必须是正整数，实际 ${JSON.stringify(s)}`)
-  }
-  return n
-}
-
-/**
  * 入站消息的语义处理体（HTTP 路由与 P4 composer 页共用同一条路径 ——
- * 语义只有一份：行首 / 走指令（Consume），否则直达时间线（IM 化：
- * append 人类发言事件 + emit 'space/plan'）。
+ * 所有文本均按普通聊天消息处理；操作通过专用 UI 控件完成。
  * 返回结构化结果而不是 Response：调用方自己决定 HTTP 形状。
  */
 export async function handleInbound(
@@ -175,26 +132,10 @@ export async function handleInbound(
     return { error: 'missing_author', detail: '缺少 authorId（调试期由调用方提供，身份域落地后由登录身份注入）' }
   }
 
-  const base: CommandCtx = { sessionId, authorId, arg: '', args: [], raw: text }
-  const inv = parse(text)
-  if (inv) {
-    // 指令路径（Consume 语义）：执行并把回执回给人类。
-    try {
-      const reply = await ctx.commands.dispatch(base, inv)
-      return { reply: reply.text }
-    } catch (e) {
-      if (e instanceof CommandError || e instanceof StagingError) {
-        return { error: e.name, code: e.code, detail: e.message }
-      }
-      console.error('[staging-commands] 指令执行失败（500）：', e)
-      throw e
-    }
-  }
-
-  // 非 / 消息：直达时间线（IM 化语义）——
+  // 直达时间线 ——
   // 直接落一条人类发言事件（eventLog.append，用法对齐 staging.commit），
   // 并 emit 'space/plan' 让 AI 侧（orchestrator 订阅）开始处理。
-  // /stage /commit 保留为可选的批量起草路径；@提及某成员会触发 AI
+  // @提及某成员会触发 AI
   //（mentions 由服务端解析：@token 与在册成员 id 精确匹配，与调用方
   // 显式给的 mentions 取并集 —— UI 与 curl 都不需要自己懂成员表）。
   if (session.status === 'closed') {
@@ -252,16 +193,11 @@ export async function handleInbound(
     ctx.emit('space/plan', { sessionId, authorId, mentions: allMentions, event })
     return { reply: '' }
   } catch (e) {
-    if (e instanceof CommandError || e instanceof StagingError) {
-      return { error: e.name, code: e.code, detail: e.message }
-    }
     throw e
   }
 }
 
 export function apply(ctx: Context) {
-  registerCommands(ctx.commands, ctx.staging)
-
   // ── 入站唯一写入口 ────────────────────────────────────────────────────
   ctx.server.post('/api/sessions/:id/messages', async (req) => {
     const sessionId = req.params.id
@@ -335,7 +271,7 @@ export function apply(ctx: Context) {
     return Response.json({ ok: true })
   })
 
-  // ── 暂存区只读清单（写操作一律走 / 指令，承旧契约）──────────────────
+  // ── 暂存区遗留条目读取及作者删除 ────────────────────────────────────
   ctx.server.get('/api/sessions/:id/staging', async (req) => {
     let user: { id: string; kind?: string }
     try { user = await requireUser(ctx, req) }
@@ -347,5 +283,31 @@ export function apply(ctx: Context) {
       return Response.json({ error: 'not_found' }, { status: 404 })
     }
     return Response.json(ctx.staging.list(req.params.id))
+  })
+
+  ctx.server.delete('/api/sessions/:id/staging/:seq', async (req) => {
+    let user: { id: string; kind?: string }
+    try { user = await requireUser(ctx, req) }
+    catch (e) {
+      if (e instanceof IdentityError) return Response.json({ error: 'unauthorized' }, { status: 401 })
+      throw e
+    }
+    const sessionId = req.params.id
+    if (user.kind !== 'human') return Response.json({ error: 'unauthorized' }, { status: 401 })
+    if (!ctx.session.getSession(sessionId) || !isSessionMember(ctx, sessionId, user.id)) {
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }
+    const seq = Number(req.params.seq)
+    if (!Number.isSafeInteger(seq) || seq < 1) return Response.json({ error: 'invalid_seq' }, { status: 400 })
+    try {
+      ctx.staging.remove(sessionId, seq, user.id)
+      return Response.json({ ok: true })
+    } catch (e) {
+      if (e instanceof StagingError) {
+        const status = e.code === 'not_found' ? 404 : e.code === 'not_author' ? 403 : 400
+        return Response.json({ error: e.code, detail: e.message }, { status })
+      }
+      throw e
+    }
   })
 }

@@ -11,7 +11,7 @@ import { vectorRerank } from 'space-kb'
 
 export const name = 'space-client-ui-kb'
 // users 也在鉴权里摸到（cordis 严格注入，P4 教训：摸到的服务都要进 inject）。
-export const inject = ['webui', 'kb', 'embeddings', 'users']
+export const inject = ['webui', 'kb', 'embeddings', 'users', 'kbIndex']
 
 /** token → 用户；无效返回 null（不抛，RPC 层零异常面）。 */
 async function auth(ctx: Context, token: string) {
@@ -23,7 +23,7 @@ async function auth(ctx: Context, token: string) {
 }
 
 export function apply(ctx: Context) {
-  ctx.webui.addEntry(
+  ctx.webui.addEntry<Record<string, Function>>(
     {
       baseUrl: import.meta.url,
       source: '../client/index.ts', // 开发态用 —— 我们不启用（A2 构建口径）
@@ -37,15 +37,42 @@ export function apply(ctx: Context) {
         return ctx.kb.listDocuments()
       },
 
+      async folders(token: string) {
+        if (!(await auth(ctx, token))) return null
+        return ctx.kb.listFolders()
+      },
+
+      async getDoc(token: string, id: string) {
+        if (!(await auth(ctx, token))) return null
+        try { return await ctx.kb.getDocument(String(id ?? '')) }
+        catch { return { error: 'document-unavailable' } }
+      },
+
+      async createFolder(token: string, name: string, parentPath = '') {
+        if (!(await auth(ctx, token))) return null
+        try { return await ctx.kb.createFolder(String(name ?? ''), String(parentPath ?? '')) }
+        catch (e) { return { error: 'folder-create-failed', detail: (e as Error).message } }
+      },
+
       /** 新增文档（来源标记 'manual'）。拒空交给 seam 抛错，catch 后把
        *  detail 返回给前端显示（不往上炸）。 */
-      async addDoc(token: string, title: string, text: string) {
+      async addDoc(token: string, title: string, text: string, folderPath = '') {
         if (!(await auth(ctx, token))) return null
         try {
-          return await ctx.kb.addDocument(String(title ?? ''), String(text ?? ''), 'manual')
+          return await ctx.kb.addDocument(String(title ?? ''), String(text ?? ''), 'manual', String(folderPath ?? ''))
         } catch (e) {
           const obj = e as { detail?: string; message?: string }
           return { error: 'add-failed', detail: obj?.detail ?? obj?.message ?? String(e) }
+        }
+      },
+
+      async updateDoc(token: string, id: string, title: string, text: string, folderPath = '') {
+        if (!(await auth(ctx, token))) return null
+        try {
+          return await ctx.kb.updateDocument(String(id ?? ''), String(title ?? ''), String(text ?? ''), String(folderPath ?? ''))
+        } catch (e) {
+          const obj = e as { message?: string }
+          return { error: 'update-failed', detail: obj?.message ?? String(e) }
         }
       },
 
@@ -55,7 +82,7 @@ export function apply(ctx: Context) {
         try {
           return await ctx.kb.removeDocument(String(id ?? ''))
         } catch {
-          return null
+          return { error: 'remove-failed' }
         }
       },
 
@@ -69,14 +96,17 @@ export function apply(ctx: Context) {
           const titles = new Map<string, string>(
             (await ctx.kb.listDocuments()).map((d) => [d.id, d.title]),
           )
+          const identity = ctx.embeddings.identity
           return await vectorRerank(q, keyword, {
+            modelIdentity: identity,
+            currentModelIdentity: () => ctx.embeddings.identity,
             chunks: await ctx.kb.allChunks(),
-            embed: (texts) => ctx.embeddings.embed(texts),
+            embed: (texts) => ctx.embeddings.embed(texts, { expectedIdentity: identity }),
             topK: 8,
             titles,
           })
         } catch {
-          return []
+          return { error: 'search-failed' }
         }
       },
 
@@ -85,7 +115,7 @@ export function apply(ctx: Context) {
       async embeddingsStatus(token: string) {
         if (!(await auth(ctx, token))) return null
         try {
-          return ctx.embeddings.configured
+          return ctx.embeddings.configured && (await ctx.kbIndex.status()).state === 'ready'
         } catch {
           return false
         }

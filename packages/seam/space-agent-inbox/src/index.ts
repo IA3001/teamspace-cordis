@@ -21,9 +21,23 @@ export abstract class AgentInboxService extends Service {
   /** Return the durable per-Agent cursor for a session (0 means no history consumed). */
   abstract cursor(agentId: string, sessionId: string): Promise<number>
 
+  /** Live, human-readable background history ingestion status by Agent. */
+  abstract processing(): AgentInboxProcessing[]
+
   /** Current session whose invited Agents are consuming events. */
   abstract activeSessionId(): string | null
 
   /** Rebuild one invalidated mixed-source memory using only its surviving source events. */
   abstract rebuildInvalidatedMemory(item: MemoryItem, validSources: SessionEvent[]): Promise<number>
+}
+
+export interface AgentInboxProcessing {
+  agentId: string
+  sessionId: string
+  seq: number
+  eventId: string
+  phase: 'reviewing-decision' | 'extracting-memory' | 'onboarding-history' | 'advancing-cursor' | 'failed'
+  detail: string
+  startedAt: string
+  updatedAt: string
 }

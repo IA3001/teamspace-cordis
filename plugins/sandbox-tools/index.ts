@@ -94,6 +94,16 @@ function within(root: string, input: string): string {
   return target
 }
 
+function assertOrganizedWorkspacePath(root: string, target: string, allowedTopLevel: string[], rootFiles: string[] = []): string {
+  const localPath = relative(root, target)
+  const segments = localPath.split(/[\\/]/u).filter(Boolean)
+  if (segments.length === 1 && rootFiles.includes(segments[0]!)) return localPath
+  if (segments.length < 2 || !allowedTopLevel.includes(segments[0]!)) {
+    throw new Error(`请按工作区目录规范保存文件：项目放 projects/<名称>/，任务放 tasks/<任务>/，脚本放 scripts/，笔记放 notes/；根目录仅允许 ${rootFiles.join('、') || '不允许文件'}`)
+  }
+  return localPath
+}
+
 async function realPathWithin(root: string, target: string): Promise<string> {
   const realRoot = await realpath(root)
   const realTarget = await realpath(target)
@@ -145,7 +155,8 @@ async function claimWorkdir(ctx: Context, invoker: { id: string; sessionId?: str
 }
 
 export async function apply(ctx: Context) {
-  await mkdir(SHARED_ROOT, { recursive: true })
+  await Promise.all(['approvals', 'projects', 'docs', 'resources'].map((folder) =>
+    mkdir(resolve(SHARED_ROOT, folder), { recursive: true })))
   new SharedApprovalDelivery(ctx)
   ctx.tools.register({
     id: 'tool.workspace.read', title: '读取工作区文件', description: 'args: {"path":"相对路径","scope":"personal|shared"}；shared 只读。', capabilities: ['workspace.read'],
@@ -192,7 +203,7 @@ export async function apply(ctx: Context) {
   })
 
   ctx.tools.register({
-    id: 'tool.workspace.write', title: '写入个人工作区文件', description: 'args: {"path":"相对路径","content":"文本"}；只写个人工作区。', capabilities: ['workspace.write'],
+    id: 'tool.workspace.write', title: '写入个人工作区文件', description: 'args: {"path":"相对路径","content":"文本"}；只写个人工作区。根目录保持整洁：项目放 projects/<项目名>/{src,tests,docs}，任务材料放 tasks/<任务目录>，脚本放 scripts/，笔记放 notes/。', capabilities: ['workspace.write'],
     handler: async (raw, invoker) => {
       assertActive(invoker)
       const args = parseArgs<{ path?: string; content?: string }>(raw)
@@ -201,6 +212,7 @@ export async function apply(ctx: Context) {
       const root = (await claimWorkdir(ctx, invoker)).root
       assertActive(invoker)
       const path = within(root, String(args.path ?? ''))
+      assertOrganizedWorkspacePath(root, path, ['projects', 'tasks', 'scripts', 'notes'], ['README.md', 'AGENTS.md'])
       try {
         await mkdir(dirname(path), { recursive: true })
         await realPathWithin(root, dirname(path))
@@ -220,7 +232,7 @@ export async function apply(ctx: Context) {
   })
 
   ctx.tools.register({
-    id: 'tool.code.execute', title: '在隔离容器中执行 Node.js', description: 'args: {"code":"Node.js ES module 源码","filename":"可选 .mjs 名称"}；容器可联网，个人区可读写，共享区只读。', capabilities: ['code.execute', 'network'],
+    id: 'tool.code.execute', title: '在隔离容器中执行 Node.js', description: 'args: {"code":"Node.js ES module 源码","filename":"可选相对路径 .mjs"}；默认写入 scripts/，容器可联网，个人区可读写，共享区只读。', capabilities: ['code.execute', 'network'],
     handler: async (raw, invoker) => {
       assertActive(invoker)
       const args = parseArgs<{ code?: string; filename?: string }>(raw)
@@ -229,10 +241,18 @@ export async function apply(ctx: Context) {
       if (Buffer.byteLength(code) > MAX_CODE_BYTES) throw new Error(`代码超过 ${MAX_CODE_BYTES} 字节上限`)
       const root = (await claimWorkdir(ctx, invoker)).root
       assertActive(invoker)
-      const filename = String(args.filename ?? `sandbox-${randomUUID()}.mjs`)
-      if (basename(filename) !== filename || !filename.endsWith('.mjs')) throw new Error('filename 必须是工作区内的 .mjs 文件名')
+      const filename = String(args.filename ?? `scripts/sandbox-${randomUUID()}.mjs`)
+      if (isAbsolute(filename) || filename.includes('\\') || !filename.endsWith('.mjs') ||
+        filename.split('/').some((part) => !part || part === '.' || part === '..')) {
+        throw new Error('filename 必须是工作区内不含 . 或 .. 段的相对 .mjs 路径')
+      }
       const scriptPath = within(root, filename)
-      try { await writeFile(scriptPath, code, { encoding: 'utf8', flag: 'wx' }) }
+      const scriptRelativePath = assertOrganizedWorkspacePath(root, scriptPath, ['scripts', 'projects', 'tasks'])
+      try {
+        await mkdir(dirname(scriptPath), { recursive: true })
+        await realPathWithin(root, dirname(scriptPath))
+        await writeFile(scriptPath, code, { encoding: 'utf8', flag: 'wx' })
+      }
       catch (error) { reportQuotaFailure(ctx, invoker, error); throw error }
       assertActive(invoker)
       try {
@@ -244,7 +264,7 @@ export async function apply(ctx: Context) {
           '--read-only', '--tmpfs', '/tmp:rw,exec,size=64m',
           '--mount', `type=bind,src=${root},dst=/workspace`,
           '--mount', `type=bind,src=${SHARED_ROOT},dst=/shared,readonly`,
-          '--workdir', '/workspace', 'node:22-alpine', 'node', `/workspace/${filename}`,
+          '--workdir', '/workspace', 'node:22-alpine', 'node', `/workspace/${scriptRelativePath}`,
         ], { timeout: 45_000, maxBuffer: 1024 * 1024, windowsHide: true, signal: invoker.signal })
         const output = `${result.stdout}${result.stderr}`.slice(0, MAX_OUTPUT_CHARS)
         return output || '执行完成（无标准输出）'

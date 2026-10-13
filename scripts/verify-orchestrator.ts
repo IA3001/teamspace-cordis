@@ -30,7 +30,7 @@ import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { SqliteSettingsStore } from '../packages/impl/space-store-sqlite/src/settings.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
-import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
+import { InboxPauseNoticeGate, OrchestratorEngine } from '../plugins/orchestrator/index.ts'
 import { SessionWork } from '../plugins/session-work/index.ts'
 
 // ── 断言器（与 本地 verifier 同款）────────────────────────────────────────
@@ -48,6 +48,14 @@ function check(name: string, cond: boolean, detail = ''): void {
 function section(t: string): void {
   console.log(`\n── ${t} ──────────────────────────`)
 }
+
+section('消息顺序屏障提示去重')
+const inboxPauseGate = new InboxPauseNoticeGate()
+check('同一会话的一轮连续追赶失败只显示一次暂停提示',
+  inboxPauseGate.shouldAnnounce('s_inbox_pause') && !inboxPauseGate.shouldAnnounce('s_inbox_pause') &&
+    inboxPauseGate.shouldAnnounce('s_other_pause'))
+inboxPauseGate.recovered('s_inbox_pause')
+check('消息顺序追赶恢复后允许显示下一次暂停提示', inboxPauseGate.shouldAnnounce('s_inbox_pause'))
 
 // ── 端口：.env 唯一出处（与 .env 端口约定）──────────────────────────
 function readPort(): number {
@@ -791,7 +799,7 @@ async function partB(): Promise<void> {
     if (current.body.stopReason === 'completed' ||
       (current.body.state === 'static' && current.body.stopReason)) break
     const events = await getEvents()
-    if (events.some((event) => event.text.includes('Agent 尚未完成此前消息的顺序处理'))) {
+    if (events.some((event) => event.text.includes('Agent 正在顺序处理更早的会话消息'))) {
       inboxPaused = true
       break
     }

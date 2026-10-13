@@ -9,8 +9,10 @@
 // 铁律 1：只用外壳全局注册的 el-* / k-*（resolveComponent），零 import
 // element-plus、零手写样式、零内联 style。
 import { defineComponent, h, onMounted, ref, resolveComponent } from 'vue'
+import type { VNodeChild } from 'vue'
 import { useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
+import { userFacingFailure } from 'space-client-ui-shared/client/errors.ts'
 
 /** RPC 用户视图（PublicUser 的客户端子集）。 */
 interface PublicUserView {
@@ -40,7 +42,6 @@ const AuthPage = defineComponent({
 
     // me 探测：null = 还在探测；undefined = 未登录（出表单）；对象 = 已登录。
     const me = ref<PublicUserView | null | undefined>(null)
-    const probeError = ref('')
 
     // ── 登录表单状态 ────────────────────────────────────────────────────
     const loginName = ref(localStorage.getItem('space_last_username') ?? '')
@@ -77,6 +78,7 @@ const AuthPage = defineComponent({
     }
 
     async function doLogin() {
+      if (loginBusy.value) return
       loginBusy.value = true
       loginErr.value = ''
       try {
@@ -87,15 +89,16 @@ const AuthPage = defineComponent({
           return
         }
         accept(r.user, r.token)
-      } catch (e) {
+      } catch {
         loginFails.value += 1
-        loginErr.value = errText(e)
+        loginErr.value = userFacingFailure('登录')
       } finally {
         loginBusy.value = false
       }
     }
 
     async function doRegister() {
+      if (regBusy.value) return
       regBusy.value = true
       regErr.value = ''
       try {
@@ -107,8 +110,8 @@ const AuthPage = defineComponent({
         regOk.value = true
         await new Promise((resolve) => setTimeout(resolve, 800))
         accept(r.user, r.token)
-      } catch (e) {
-        regErr.value = errText(e)
+      } catch {
+        regErr.value = userFacingFailure('注册')
       } finally {
         regBusy.value = false
       }
@@ -121,43 +124,54 @@ const AuthPage = defineComponent({
       const ElAlert = resolveComponent('el-alert') as unknown as string
       const ElForm = resolveComponent('el-form') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
+      const ElSpace = resolveComponent('el-space') as unknown as string
       const ElTabs = resolveComponent('el-tabs') as unknown as string
       const ElTabPane = resolveComponent('el-tab-pane') as unknown as string
+      const ElFormItem = resolveComponent('el-form-item') as unknown as string
       const ElText = resolveComponent('el-text') as unknown as string
+      const formField = (label: string, id: string, control: VNodeChild) =>
+        h(ElFormItem, { label, for: id }, { default: () => control })
 
-      // 已登录态（2026-10-05 重设计）：不再用默认空盒插画 —— 一张与登录卡
-      // 同宽的分区卡，绿点 + 文案 + 主动作。
+      // 已登录态复用登录卡的容器和状态标识，保持窄屏尺寸与页面视觉一致。
       const loggedIn = () => {
-        const ElButton = resolveComponent('el-button') as unknown as string
-        return h('div', {
-          class: 'sp-section',
-          style: 'width:400px;box-sizing:border-box;margin:0 auto',
-        }, [
-          h('div', { class: 'sp-status sp-status--ok', style: 'margin-bottom:14px' }, [h('i'), '已登录']),
-          h('div', { class: 'sp-page-sub', style: 'margin-bottom:16px' },
-            '登录凭证有效。直接进入团队空间，或在上方切换账号。'),
-          h(ElButton, {
-            type: 'primary', style: 'width:100%',
-            onClick: () => { location.href = '/teamspace' },
-          }, { default: () => '进入团队空间' }),
-        ])
+        return h(ElCard, { class: 'sp-auth-card', shadow: 'hover' }, {
+          default: () => h(ElSpace, { direction: 'vertical', fill: true, size: 'large' }, {
+            default: () => [
+              h('div', { class: 'sp-status sp-status--ok' }, [h('i'), '已登录']),
+              h(ElText, { type: 'info' }, {
+                default: () => '登录凭证有效。进入团队空间，或在上方切换账号。',
+              }),
+              h(ElButton, {
+                type: 'primary', class: 'sp-login-btn',
+                onClick: () => { location.href = '/teamspace' },
+              }, { default: () => '进入团队空间' }),
+            ],
+          }),
+        })
       }
 
       const loginPane = () => h(ElForm, { labelPosition: 'top' }, {
         default: () => [
-          h(ElInput, {
+          formField('用户名', 'login-username', h(ElInput, {
+            id: 'login-username',
             modelValue: loginName.value,
             'onUpdate:modelValue': (v: string) => { loginName.value = v },
             placeholder: '用户名',
-          }),
-          h(ElInput, {
+            autocomplete: 'username',
+            autocapitalize: 'none',
+            autofocus: !loginName.value,
+          })),
+          formField('密码', 'login-password', h(ElInput, {
+            id: 'login-password',
             modelValue: loginPass.value,
             'onUpdate:modelValue': (v: string) => { loginPass.value = v },
             type: 'password',
             showPassword: true,
             placeholder: '密码',
+            autocomplete: 'current-password',
+            autofocus: Boolean(loginName.value),
             onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') void doLogin() },
-          }),
+          })),
           loginErr.value
             ? h(ElAlert, {
                 title: loginErr.value, type: 'error', closable: true,
@@ -171,6 +185,7 @@ const AuthPage = defineComponent({
             : null,
           h(ElButton, {
             type: 'primary', class: 'sp-login-btn', loading: loginBusy.value,
+            disabled: !loginName.value.trim() || !loginPass.value,
             onClick: () => void doLogin(),
           }, { default: () => '登录' }),
         ],
@@ -178,24 +193,31 @@ const AuthPage = defineComponent({
 
       const registerPane = () => h(ElForm, { labelPosition: 'top' }, {
         default: () => [
-          h(ElInput, {
+          formField('登录名', 'register-username', h(ElInput, {
+            id: 'register-username',
             modelValue: regName.value,
             'onUpdate:modelValue': (v: string) => { regName.value = v },
             placeholder: '用户名（登录用，全库唯一）',
-          }),
-          h(ElInput, {
+            autocomplete: 'username',
+            autocapitalize: 'none',
+          })),
+          formField('密码', 'register-password', h(ElInput, {
+            id: 'register-password',
             modelValue: regPass.value,
             'onUpdate:modelValue': (v: string) => { regPass.value = v },
             type: 'password',
             showPassword: true,
             placeholder: '密码',
-          }),
-          h(ElInput, {
+            autocomplete: 'new-password',
+          })),
+          formField('显示名（可选）', 'register-display-name', h(ElInput, {
+            id: 'register-display-name',
             modelValue: regDisplay.value,
             'onUpdate:modelValue': (v: string) => { regDisplay.value = v },
             placeholder: '显示名（会话里的称呼，可留空）',
+            autocomplete: 'nickname',
             onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') void doRegister() },
-          }),
+          })),
           regOk.value
             ? h(ElText, { type: 'success' }, { default: () => '注册成功，正在进入…' })
             : null,
@@ -207,6 +229,7 @@ const AuthPage = defineComponent({
             : null,
           h(ElButton, {
             type: 'primary', class: 'sp-login-btn', loading: regBusy.value,
+            disabled: !regName.value.trim() || !regPass.value,
             onClick: () => void doRegister(),
           }, { default: () => '注册' }),
         ],
@@ -218,7 +241,7 @@ const AuthPage = defineComponent({
           h('div', { class: 'sp-login-brand' }, [
             h('div', { class: 'sp-login-logo' }, 'TS'),
             h('div', { class: 'sp-login-title' }, '团队空间'),
-            h('div', { class: 'sp-login-sub' }, '多人 · 多 Agent 实时协作'),
+            h('div', { class: 'sp-login-sub' }, '登录团队账号，进入共享会话与 Agent 协作。'),
           ]),
           h(ElTabs, null, {
             default: () => [
@@ -232,12 +255,6 @@ const AuthPage = defineComponent({
       // sp-plain：登录/注册页不要外壳左侧导航（im.css 按 :has 藏掉）。
       return h('div', { class: 'k-content sp-plain' }, [
         h(ThemeStyle),
-        probeError.value
-          ? h(ElAlert, {
-              title: probeError.value, type: 'warning', closable: true,
-              onClose: () => { probeError.value = '' },
-            })
-          : null,
         me.value === null
           ? h(ElEmpty, { description: '正在检查登录状态…' })
           : me.value ? loggedIn() : card(),

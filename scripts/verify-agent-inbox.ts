@@ -84,6 +84,8 @@ async function main(): Promise<void> {
   ]
   for (let i = 0; i < 50 && started < 2; i++) await new Promise((resolve) => setTimeout(resolve, 0))
   assert.equal(started, 2, 'Agents in the active session process in parallel')
+  assert.equal(inbox.processing().filter((item) => item.sessionId === 's_alpha' && item.phase === 'extracting-memory').length, 2,
+    'live inbox state identifies each Agent currently extracting message memory')
   assert.equal(inbox.activeSessionId(), 's_alpha')
   assert.equal(ctx.sessionWork.state().activeSessionId, 's_alpha', 'Agent Inbox holds the shared active-session slot')
   assert.equal(ctx.sessionWork.tryEnter('s_beta', 'orchestrator:s_beta'), false,
@@ -114,6 +116,8 @@ async function main(): Promise<void> {
   await barrier
   assert.equal(barrierPassed, true, 'the mention barrier opens after the Agent memory cursor reaches the event')
   await Promise.all(waits)
+  assert.equal(inbox.processing().some((item) => item.sessionId === 's_alpha' || item.sessionId === 's_beta'), false,
+    'live inbox state clears after the durable cursor catches up')
 
   for (const agentId of ['a_alpha', 'a_beta']) {
     assert.equal(await inbox.cursor(agentId, 's_alpha'), first.seq)

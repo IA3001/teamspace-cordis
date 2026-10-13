@@ -104,11 +104,19 @@ declare module '@cordisjs/plugin-database' {
       id: string
       scope: string
       kind: string
+      folder_path: string
       text: string
       weight: number
       author_id: string | null
       created_at: string
       source_event_id: string | null
+    }
+    memory_folders: {
+      scope: string
+      path: string
+      name: string
+      parent_path: string
+      created_at: string
     }
     msg_reactions: {
       event_id: string
@@ -122,6 +130,8 @@ declare module '@cordisjs/plugin-database' {
       source: string
       size: number
       created_at: string
+      content: string
+      folder_path: string
     }
     kb_chunks: {
       id: string
@@ -129,6 +139,13 @@ declare module '@cordisjs/plugin-database' {
       idx: number
       text: string
       embedding: string
+      embedding_model: string
+      created_at: string
+    }
+    kb_folders: {
+      path: string
+      name: string
+      parent_path: string
       created_at: string
     }
     agent_definitions: {
@@ -320,12 +337,20 @@ export function apply(ctx: Context, config: Config = {}) {
     id: { type: 'string', nullable: false },
     scope: { type: 'string', nullable: false },
     kind: { type: 'string', nullable: false },
+    folder_path: { type: 'string', nullable: false },
     text: { type: 'string', nullable: false },
     weight: { type: 'double', nullable: false },
     author_id: { type: 'string', nullable: true },
     created_at: { type: 'string', nullable: false },
     source_event_id: { type: 'string', nullable: true },
   }, { primary: 'id' })
+  ctx.database.extend('memory_folders', {
+    scope: { type: 'string', nullable: false },
+    path: { type: 'string', nullable: false },
+    name: { type: 'string', nullable: false },
+    parent_path: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: ['scope', 'path'] })
 
   // 表情回应（IM 化 2026-10-01）：与 0009_reactions 逐列对齐（三元组复合主键）。
   ctx.database.extend('msg_reactions', {
@@ -343,6 +368,8 @@ export function apply(ctx: Context, config: Config = {}) {
     source: { type: 'string', nullable: false },
     size: { type: 'integer', nullable: false },
     created_at: { type: 'string', nullable: false },
+    content: { type: 'string', nullable: false },
+    folder_path: { type: 'string', nullable: false },
   }, { primary: 'id' })
   ctx.database.extend('kb_chunks', {
     id: { type: 'string', nullable: false },
@@ -350,8 +377,15 @@ export function apply(ctx: Context, config: Config = {}) {
     idx: { type: 'integer', nullable: false },
     text: { type: 'string', nullable: false },
     embedding: { type: 'string', nullable: false },
+    embedding_model: { type: 'string', nullable: false },
     created_at: { type: 'string', nullable: false },
   }, { primary: 'id' })
+  ctx.database.extend('kb_folders', {
+    path: { type: 'string', nullable: false },
+    name: { type: 'string', nullable: false },
+    parent_path: { type: 'string', nullable: false },
+    created_at: { type: 'string', nullable: false },
+  }, { primary: 'path' })
 
   // Team-shared Agent definitions (0014); deliberately no creator/owner field.
   ctx.database.extend('agent_definitions', {

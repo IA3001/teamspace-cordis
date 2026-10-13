@@ -7,7 +7,7 @@ import { defineComponent, h, ref, resolveComponent } from 'vue'
 import type { PropType, VNode } from 'vue'
 import { authorLabel } from './labels'
 import type { EventLite, MemberLite } from './labels'
-import { renderMarkdown } from './md'
+import { renderMarkdown, visibleAgentReply } from './md'
 
 export default defineComponent({
   name: 'SpaceEventItem',
@@ -28,7 +28,7 @@ export default defineComponent({
     return () => {
       const ElTag = resolveComponent('el-tag') as unknown as string
       const ElButton = resolveComponent('el-button') as unknown as string
-      const ElText = resolveComponent('el-text') as unknown as string
+      const Markdown = resolveComponent('k-markdown') as unknown as string
       const kind = props.event.authorKind
       const type = kind === 'human' ? 'primary' : kind === 'agent' ? 'success' : 'info'
       const children: VNode[] = [
@@ -39,8 +39,8 @@ export default defineComponent({
         children.push(h(ElTag, { size: 'small', type: 'warning' }, { default: () => props.event.kind }))
       }
       if (kind === 'agent' && props.event.kind === 'message') {
-        // agent 正文：轻量 Markdown 渲染（代码块/行内代码/粗体/链接；全部 h() 分词，无 v-html）
-        children.push(h('span', renderMarkdown(props.event.text, h, { ElText })))
+        // Agent 正文使用外壳已注册的安全 Markdown 组件。
+        children.push(h('div', { class: 'sp-event-markdown' }, renderMarkdown(visibleAgentReply(props.event.text), h, { Markdown, Button: ElButton })))
       } else if (kind === 'human') {
         // human：纯文本（@高亮等由外层页面处理，此处保持原样）
         children.push(h('span', ` ${props.event.text}`))

@@ -262,7 +262,7 @@ export function apply(ctx: Context) {
       if (!activeReview || !reviewComplete(ctx, activeReview)) {
         try {
           const review = await startReview(ctx, c.sessionId, c.authorId, target, action, reason)
-          return { text: `复核已完成，${review.questions} 个 Agent 问题已显示在会话中。请阅读后再次执行相同的 /decision 命令定案。` }
+          return { text: `复核已完成，${review.questions} 个 Agent 问题已显示在会话中。请阅读后再次从回复卡片提交决策。` }
         } catch (error) { return { text: `复核尚未完成，决策未执行：${(error as Error).message}` } }
       }
 

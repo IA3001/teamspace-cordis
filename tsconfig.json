@@ -20,7 +20,8 @@
       "@cordisjs/client": [
         "./types/cordis-client.stub.d.ts"
       ]
-    }
+    },
+    "noUnusedLocals": true
   },
   "include": [
     "src",

@@ -1,19 +1,21 @@
 // 账号管理页（客户端）—— 2026-10-01 新增，挂在 5172 调试控制台。
 //
-// 结构：onMounted 先验证独立 Admin session；未登录时显示后台凭据登录表单。
+// 后台面板按用户决定免登录开放；此页所有管理 RPC 均不要求会话令牌。
 //
 // 表列：Team 用户显示名 / 用户名 / id / 创建时间 / 操作。后台管理员不在 Team users 表中。
 //
-// 所有操作成功后刷新列表；失败把 { error, detail } 显示在页首 el-alert。
+// 页面操作失败显示在页首；弹窗操作的失败反馈留在对应弹窗内，避免被遮挡。
 //
-// 鉴权：RPC 首参使用独立 localStorage 'admin_token'；绝不复用 Team token。
+// 注意：公开管理入口，不读取 Team token 或后台 session。
 //
 // 铁律 1：只用外壳全局注册的 el-* / k-*（resolveComponent），零 import
 // element-plus、零手写样式、零内联样式。
-import { computed, defineComponent, h, onMounted, ref, resolveComponent } from 'vue'
-import { useRpc } from '@cordisjs/client'
+import { computed, defineComponent, h, onMounted, onUnmounted, ref, resolveComponent } from 'vue'
+import type { Component } from 'vue'
+import { useRoute, useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
-import { pageHead, status, section, actionsRow, loginGate } from 'space-client-ui-shared/client/console.ts'
+import { ICONS, pageHead, section, actionsRow } from 'space-client-ui-shared/client/console.ts'
+import { userFacingFailure } from 'space-client-ui-shared/client/errors.ts'
 
 /** 用户行（users RPC 的返回形状 = PublicUser）。 */
 interface UserRow {
@@ -25,14 +27,21 @@ interface UserRow {
   createdAt: string
 }
 
-interface MeRow { id: string; username: string }
 interface ApiShape { baseURL: string; model: string; hasKey: boolean; keyTail: string; timeoutMs?: number }
+interface EmbeddingIndexStatus {
+  state: 'disabled' | 'pending' | 'running' | 'ready' | 'failed'
+  model: string; total: number; completed: number; failed: number; error: string; updatedAt: string
+}
 interface ApiConfig {
   text: ApiShape
   textProfiles: Array<{ id: string; name: string; baseURL: string; model: string; maxOutputTokens: number | null; hasKey: boolean; keyTail: string }>
   activeTextProfileRef: string
   embedding: ApiShape
+  embeddingProfiles: Array<{ id: string; name: string; baseURL: string; model: string; hasKey: boolean; keyTail: string }>
+  activeEmbeddingProfileRef: string
   webSearch: ApiShape
+  webSearchProfiles: Array<{ id: string; name: string; baseURL: string; hasKey: boolean; keyTail: string }>
+  activeWebSearchProfileRef: string
   status: { text: boolean; embedding: boolean }
 }
 interface PluginRow {
@@ -54,9 +63,8 @@ interface WriteResult {
   detail?: string
 }
 
-/** 后台独立 token。浏览器 origin/storage 与 Teamspace 分离。 */
-const TOKEN_KEY = 'admin_token'
-const getToken = () => localStorage.getItem(TOKEN_KEY) ?? ''
+/** RPC 仍保留兼容参数；开放后台不附带任何 session token。 */
+const getToken = () => ''
 
 /** 创建时间 → YYYY-MM-DD HH:mm（本地时区）。 */
 function fmtTime(iso: string): string {
@@ -74,23 +82,8 @@ const AdminPage = defineComponent({
   name: 'SpaceAdminPage',
   setup() {
 
-    // 拒绝态就地登录的状态（必须在 setup 体 —— 放渲染闭包里每次重渲染会
-    // 重建为空，填的值全丢，2026-10-02 实测踩坑）。
-    const loginName = ref('')
-    const loginPass = ref('')
-    const loginErr = ref('')
-    const loginBusy = ref(false)
-    async function doAdminLogin() {
-      loginBusy.value = true
-      loginErr.value = ''
-      const r = await rpc.value.login(loginName.value, loginPass.value)
-      loginBusy.value = false
-      if ('error' in r) { loginErr.value = r.detail ?? r.error; return }
-      localStorage.setItem(TOKEN_KEY, r.token)
-      window.location.reload()
-    }
+    const route = useRoute()
     const rpc = useRpc<{
-      me(token: string): Promise<MeRow | null>
       users(token: string): Promise<UserRow[] | null>
       plugins(token: string): Promise<PluginRow[] | null>
       createUser(token: string, input: { username: string; password: string; displayName?: string; teamRole: 'dri' | 'member' }): Promise<WriteResult | null>
@@ -99,6 +92,12 @@ const AdminPage = defineComponent({
       resetPassword(token: string, userId: string, password: string): Promise<WriteResult | null>
       removeUser(token: string, userId: string): Promise<WriteResult | null>
       getApiConfig(token: string): Promise<ApiConfig | null>
+      getEmbeddingIndexStatus(token: string): Promise<EmbeddingIndexStatus | null>
+      retryEmbeddingIndex(token: string): Promise<WriteResult | null>
+      fetchTextModels(token: string, input: { target: 'text' | 'embedding' | 'profile' | 'embeddingProfile'; profileId?: string; baseURL?: string; apiKey?: string }): Promise<{ ok: boolean; models?: string[]; detail?: string; credentialSource?: string } | null>
+      saveServiceProfile(token: string, kind: 'embedding' | 'webSearch', input: { id?: string; name?: string; baseURL?: string; model?: string; apiKey?: string }): Promise<WriteResult | null>
+      activateServiceProfile(token: string, kind: 'embedding' | 'webSearch', id: string): Promise<WriteResult | null>
+      removeServiceProfile(token: string, kind: 'embedding' | 'webSearch', id: string): Promise<WriteResult | null>
       saveTextApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string; timeoutMs?: number }): Promise<WriteResult | null>
       saveTextProfile(token: string, cfg: { id: string; name: string; baseURL: string; model: string; apiKey?: string; maxOutputTokens: number | null }): Promise<WriteResult | null>
       removeTextProfile(token: string, id: string): Promise<WriteResult | null>
@@ -112,87 +111,170 @@ const AdminPage = defineComponent({
       testWebSearchApi(token: string): Promise<WriteResult | null>
       sandboxApprovals(token: string): Promise<SandboxApprovalRow[] | null>
       decideSandboxApproval(token: string, id: string, decision: 'approved' | 'rejected', note?: string): Promise<(WriteResult & { request?: SandboxApprovalRow }) | null>
-      logout(token: string): Promise<WriteResult>
-      login(username: string, password: string): Promise<{ token: string; user: MeRow } | { error: string; detail?: string }>
     }>()
 
-    // 探测态：null = 还在 me()；undefined = 未登录（出登录表单）；
-    // 对象 = 当前 Admin principal（出管理页面）。
-    const me = ref<MeRow | null | undefined>(null)
     const users = ref([]) as { value: UserRow[] }
     const plugins = ref([]) as { value: PluginRow[] }
+    const pluginSearch = ref('')
+    const pluginStatusFilter = ref('')
+    const pluginPageNo = ref(1)
+    const PLUGIN_PAGE_SIZE = 15
+    const filteredPlugins = computed(() => {
+      const query = pluginSearch.value.trim().toLocaleLowerCase()
+      return plugins.value.filter((plugin) => {
+        const statusMatch = !pluginStatusFilter.value ||
+          (pluginStatusFilter.value === 'running' && plugin.status === '运行中') ||
+          (pluginStatusFilter.value === 'disabled' && plugin.status === '配置停用') ||
+          (pluginStatusFilter.value === 'other' && !['运行中', '配置停用'].includes(plugin.status))
+        const queryMatch = !query ||
+          `${plugin.id} ${plugin.name} ${plugin.status} ${JSON.stringify(plugin.config ?? {})}`.toLocaleLowerCase().includes(query)
+        return statusMatch && queryMatch
+      })
+    })
+    const pagedPlugins = computed(() =>
+      filteredPlugins.value.slice((pluginPageNo.value - 1) * PLUGIN_PAGE_SIZE, pluginPageNo.value * PLUGIN_PAGE_SIZE))
     const sandboxApprovals = ref([]) as { value: SandboxApprovalRow[] }
     // 页首失败条（所有写操作的 {error, detail} 都落这里）。
     const error = ref('')
+    const loadFailed = ref(false)
+    const dataLoaded = ref(false)
     // 刷新忙标记（表格 v-loading）。
     const busy = ref(false)
     // 注册开关状态（A4）。
     const regOpen = ref(true)
     const regBusy = ref(false)
+    const regError = ref('')
     const apiConfig = ref<ApiConfig | null>(null)
     const apiKeys = ref({ text: '', embedding: '', webSearch: '' })
     const apiNotice = ref('')
+    const serviceFeedbackType = ref<'info' | 'success' | 'error'>('info')
+    const embeddingIndex = ref<EmbeddingIndexStatus | null>(null)
+    const indexLoadError = ref('')
+    const indexRetryBusy = ref(false)
+    let indexFetching = false
+    const apiSectionFeedback = ref({
+      kind: '' as 'text' | 'embedding' | 'webSearch' | '',
+      message: '',
+      type: 'info' as 'success' | 'error' | 'info',
+    })
     const apiBusy = ref('')
+    const activeModelCategory = ref<'text' | 'embedding' | 'webSearch'>('text')
+    const selectedModelProvider = ref('default')
     const profileDraft = ref({ id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null as number | null })
+    const serviceDraft = ref({ id: '', name: '', baseURL: '', model: '', apiKey: '', hasKey: false, keyTail: '' })
+    const modelCatalogs = ref<Record<string, { models: string[]; query: string; message: string; type: 'info' | 'success' | 'error' }>>({})
+    function modelCatalogKey(target: 'text' | 'embedding' | 'profile', draft?: { id: string; baseURL: string }) {
+      const cfg = draft ?? (target === 'profile' ? profileDraft.value : apiConfig.value?.[target])
+      return JSON.stringify([target, draft ? 'service-profile' : target === 'profile' ? 'text-profile' : 'default',
+        draft?.id ?? (target === 'profile' ? profileDraft.value.id : 'default'), cfg?.baseURL.trim() ?? ''])
+    }
+    function invalidateModelCatalog(target: 'text' | 'embedding' | 'profile', draft?: { id: string; baseURL: string }) {
+      delete modelCatalogs.value[modelCatalogKey(target, draft)]
+    }
     // 筛选 + 分页（用户反馈①⑤，2026-10-07）。
     const query = ref('')
+    const accountRoleFilter = ref('')
     const pageNo = ref(1)
-    const PAGE_SIZE = 10
+    const PAGE_SIZE = 15
 
     // ── 修改密码弹窗状态 ──────────────────────────────────────────────
     const pwVisible = ref(false)
     const pwTarget = ref<UserRow | null>(null)
     const pwValue = ref('')
     const pwBusy = ref(false)
+    const pwError = ref('')
     const createOpen = ref(false)
     const newUsername = ref('')
     const newDisplayName = ref('')
     const newPassword = ref('')
     const newTeamRole = ref<'dri' | 'member'>('member')
     const createBusy = ref(false)
+    const createError = ref('')
+    const approvalDialogOpen = ref(false)
+    const approvalTarget = ref<SandboxApprovalRow | null>(null)
+    const approvalDecision = ref<'approved' | 'rejected'>('approved')
+    const approvalNote = ref('')
+    const approvalBusy = ref(false)
+    const approvalError = ref('')
 
     async function refresh() {
       busy.value = true
+      loadFailed.value = false
       try {
-        const list = await rpc.value.users(getToken())
-        users.value = Array.isArray(list) ? list : []
-        const pluginList = await rpc.value.plugins(getToken())
-        plugins.value = Array.isArray(pluginList) ? pluginList : []
-        const approvalList = await rpc.value.sandboxApprovals(getToken())
-        sandboxApprovals.value = Array.isArray(approvalList) ? approvalList : []
-        const reg = await rpc.value.getRegisterEnabled(getToken())
-        if (reg) regOpen.value = reg.enabled
-        apiConfig.value = await rpc.value.getApiConfig(getToken())
+        const [list, pluginList, approvalList, reg, config] = await Promise.all([
+          rpc.value.users(getToken()),
+          rpc.value.plugins(getToken()),
+          rpc.value.sandboxApprovals(getToken()),
+          rpc.value.getRegisterEnabled(getToken()),
+          rpc.value.getApiConfig(getToken()),
+        ])
+        if (!list || !pluginList || !approvalList || !reg || !config) throw new Error('admin-data-unavailable')
+        users.value = list
+        plugins.value = pluginList
+        sandboxApprovals.value = approvalList
+        regOpen.value = reg.enabled
+        apiConfig.value = config
+        dataLoaded.value = true
         // 数据量变化后页码越界收口。
         if (pageNo.value > Math.ceil(users.value.length / PAGE_SIZE)) pageNo.value = 1
+        error.value = ''
+      } catch {
+        loadFailed.value = true
+        error.value = userFacingFailure('加载后台管理数据')
       } finally {
         busy.value = false
       }
     }
 
     async function toggleRegister(v: boolean | string | number) {
+      if (regBusy.value) return
+      const previous = regOpen.value
+      const next = Boolean(v)
+      regOpen.value = next
       regBusy.value = true
+      regError.value = ''
       try {
-        const r = await rpc.value.setRegisterEnabled(getToken(), Boolean(v))
+        const r = await rpc.value.setRegisterEnabled(getToken(), next)
         if (r && r.ok) {
           error.value = ''
-          regOpen.value = Boolean(v)
         } else {
           const d = r as { error?: string; detail?: string } | null
-          error.value = d?.detail ?? d?.error ?? '操作失败'
+          regOpen.value = previous
+          regError.value = d?.detail ?? d?.error ?? '修改注册设置失败，请重试。'
         }
+      } catch {
+        regOpen.value = previous
+        regError.value = userFacingFailure('修改注册设置')
       } finally { regBusy.value = false }
     }
 
-    onMounted(async () => {
-      const m = await rpc.value.me(getToken())
-      if (!m) {
-        me.value = undefined
-        return
-      }
-      me.value = m
-      await refresh()
+    async function refreshEmbeddingIndex() {
+      if (indexFetching || route.path !== '/admin/models' || activeModelCategory.value !== 'embedding') return
+      indexFetching = true
+      try {
+        const result = await rpc.value.getEmbeddingIndexStatus(getToken())
+        if (!result) throw new Error('index-status-unavailable')
+        embeddingIndex.value = result
+        indexLoadError.value = ''
+      } catch { indexLoadError.value = userFacingFailure('读取向量索引进度') }
+      finally { indexFetching = false }
+    }
+    async function retryEmbeddingIndex() {
+      if (indexRetryBusy.value) return
+      indexRetryBusy.value = true
+      try {
+        const result = await rpc.value.retryEmbeddingIndex(getToken())
+        if (!result?.ok) throw new Error('index-retry-failed')
+        await refreshEmbeddingIndex()
+      } catch { indexLoadError.value = userFacingFailure('重试向量索引任务') }
+      finally { indexRetryBusy.value = false }
+    }
+    let indexPoll: ReturnType<typeof setInterval> | undefined
+    onMounted(() => {
+      void refresh()
+      indexPoll = setInterval(() => void refreshEmbeddingIndex(), 1500)
     })
+    onUnmounted(() => { if (indexPoll) clearInterval(indexPoll) })
 
     /** 统一处理写操作返回：ok → 刷新列表；{error,detail} → 页首 alert。 */
     async function handleResult(r: WriteResult | null) {
@@ -209,22 +291,35 @@ const AdminPage = defineComponent({
     function openPw(row: UserRow) {
       pwTarget.value = row
       pwValue.value = ''
+      pwError.value = ''
       pwVisible.value = true
     }
 
     async function doResetPassword() {
-      if (!pwTarget.value) return
+      if (!pwTarget.value || pwBusy.value) return
       pwBusy.value = true
+      pwError.value = ''
       try {
         const r = await rpc.value.resetPassword(getToken(), pwTarget.value.id, pwValue.value)
-        if (await handleResult(r)) pwVisible.value = false
+        if (!r?.ok) {
+          pwError.value = r?.detail ?? r?.error ?? '修改失败，请重试。'
+          return
+        }
+        error.value = ''
+        pwValue.value = ''
+        pwVisible.value = false
+        await refresh()
+      } catch {
+        pwError.value = userFacingFailure('修改账号密码')
       } finally {
         pwBusy.value = false
       }
     }
 
     async function doCreateUser() {
+      if (createBusy.value) return
       createBusy.value = true
+      createError.value = ''
       try {
         const result = await rpc.value.createUser(getToken(), {
           username: newUsername.value,
@@ -232,77 +327,170 @@ const AdminPage = defineComponent({
           password: newPassword.value,
           teamRole: newTeamRole.value,
         })
-        if (await handleResult(result)) {
-          createOpen.value = false
-          newUsername.value = ''
-          newDisplayName.value = ''
-          newPassword.value = ''
-          newTeamRole.value = 'member'
+        if (!result?.ok) {
+          createError.value = result?.detail ?? result?.error ?? '创建失败，请重试。'
+          return
         }
+        error.value = ''
+        createOpen.value = false
+        newUsername.value = ''
+        newDisplayName.value = ''
+        newPassword.value = ''
+        newTeamRole.value = 'member'
+        await refresh()
+      } catch {
+        createError.value = userFacingFailure('创建 Team 账号')
       } finally { createBusy.value = false }
     }
 
     async function saveApi(kind: 'text' | 'embedding' | 'webSearch') {
-      if (!apiConfig.value) return
+      if (!apiConfig.value || apiBusy.value) return
       apiBusy.value = kind
       apiNotice.value = ''
+      apiSectionFeedback.value = { kind, message: '', type: 'info' }
       const cfg = apiConfig.value[kind]
       const input = { baseURL: cfg.baseURL, model: cfg.model, apiKey: apiKeys.value[kind] || undefined }
-      const result = kind === 'text'
-        ? await rpc.value.saveTextApi(getToken(), { ...input, timeoutMs: cfg.timeoutMs })
-        : kind === 'embedding'
-          ? await rpc.value.saveEmbeddingApi(getToken(), input)
-          : await rpc.value.saveWebSearchApi(getToken(), input)
-      apiBusy.value = ''
-      if (result?.ok) {
-        apiKeys.value[kind] = ''
-        apiNotice.value = '配置已保存；密钥不会回显。'
-        await refresh()
-      } else apiNotice.value = result?.detail ?? result?.error ?? '保存失败'
+      try {
+        const result = kind === 'text'
+          ? await rpc.value.saveTextApi(getToken(), { ...input, timeoutMs: cfg.timeoutMs })
+          : kind === 'embedding'
+            ? await rpc.value.saveEmbeddingApi(getToken(), input)
+            : await rpc.value.saveWebSearchApi(getToken(), input)
+        if (result?.ok) {
+          apiKeys.value[kind] = ''
+          apiSectionFeedback.value = { kind, message: '配置已保存；密钥不会回显。', type: 'success' }
+          await refresh()
+        } else apiSectionFeedback.value = {
+          kind, message: result?.detail ?? result?.error ?? '保存失败', type: 'error',
+        }
+      } catch {
+        apiSectionFeedback.value = {
+          kind,
+          message: userFacingFailure(kind === 'text' ? '保存文字模型配置' : kind === 'embedding' ? '保存 Embedding 配置' : '保存网页搜索配置'),
+          type: 'error',
+        }
+      } finally { apiBusy.value = '' }
     }
     async function testApi(kind: 'text' | 'embedding' | 'webSearch') {
+      if (apiBusy.value) return
       apiBusy.value = `test-${kind}`
-      const result = kind === 'text'
-        ? await rpc.value.testTextApi(getToken())
-        : kind === 'embedding'
-          ? await rpc.value.testEmbeddingApi(getToken())
-          : await rpc.value.testWebSearchApi(getToken())
-      apiBusy.value = ''
-      apiNotice.value = result?.detail ?? result?.error ?? '测试失败'
+      apiSectionFeedback.value = { kind, message: '', type: 'info' }
+      try {
+        const result = kind === 'text'
+          ? await rpc.value.testTextApi(getToken())
+          : kind === 'embedding'
+            ? await rpc.value.testEmbeddingApi(getToken())
+            : await rpc.value.testWebSearchApi(getToken())
+        apiSectionFeedback.value = {
+          kind, message: result?.detail ?? result?.error ?? '测试失败',
+          type: result?.ok ? 'success' : 'error',
+        }
+      } catch {
+        apiSectionFeedback.value = {
+          kind,
+          message: userFacingFailure(kind === 'text' ? '测试文字模型连接' : kind === 'embedding' ? '测试 Embedding 连接' : '测试网页搜索连接'),
+          type: 'error',
+        }
+      } finally { apiBusy.value = '' }
+    }
+    async function fetchModels(target: 'text' | 'embedding' | 'profile', draft?: { id: string; baseURL: string; apiKey: string }) {
+      if (apiBusy.value) return
+      const cfg = draft ?? (target === 'profile' ? profileDraft.value : apiConfig.value?.[target])
+      if (!cfg) return
+      apiBusy.value = `models-${target}`
+      apiNotice.value = ''
+      const catalogKey = modelCatalogKey(target, draft)
+      modelCatalogs.value[catalogKey] = { models: [], query: '', message: '', type: 'info' }
+      const catalog = modelCatalogs.value[catalogKey]
+      try {
+        const result = await rpc.value.fetchTextModels(getToken(), {
+          target: draft ? 'embeddingProfile' : target,
+          ...(draft ? { profileId: draft.id } : target === 'profile' ? { profileId: profileDraft.value.id } : {}),
+          baseURL: cfg.baseURL,
+          apiKey: draft ? draft.apiKey : target === 'profile' ? profileDraft.value.apiKey : apiKeys.value[target],
+        })
+        if (result?.ok && result.models) {
+          catalog.models = result.models
+          const source = result.credentialSource ? `本次使用：${result.credentialSource}。` : ''
+          catalog.message = `已获取 ${result.models.length} 个模型，请从列表选择。${source}`
+          catalog.type = 'success'
+        } else {
+          const source = result?.credentialSource ? ` 本次使用：${result.credentialSource}。` : ''
+          const detail = result?.detail ?? '获取模型列表失败。'
+          const message = `${detail}${detail.includes('本次使用：') ? '' : source}`
+          catalog.message = message
+          catalog.type = 'error'
+        }
+      } catch {
+        const message = userFacingFailure('获取供应商模型列表')
+        catalog.message = message
+        catalog.type = 'error'
+      } finally { apiBusy.value = '' }
+    }
+    function apiFeedback(kind: 'text' | 'embedding' | 'webSearch', ElAlert: string) {
+      if (apiSectionFeedback.value.kind !== kind || !apiSectionFeedback.value.message) return null
+      return h(ElAlert, {
+        class: 'sp-admin-api-feedback',
+        title: apiSectionFeedback.value.message,
+        type: apiSectionFeedback.value.type,
+        showIcon: true,
+        closable: true,
+        onClose: () => { apiSectionFeedback.value = { kind: '', message: '', type: 'info' } },
+      })
     }
     async function saveTextProfile() {
+      if (apiBusy.value) return
       apiBusy.value = 'save-profile'
       apiNotice.value = ''
-      const result = await rpc.value.saveTextProfile(getToken(), {
-        ...profileDraft.value,
-        apiKey: profileDraft.value.apiKey || undefined,
-      })
-      apiBusy.value = ''
-      if (result?.ok) {
-        profileDraft.value.apiKey = ''
-        apiNotice.value = '文字模型配置已保存；密钥不会回显。'
-        await refresh()
-      } else apiNotice.value = result?.detail ?? result?.error ?? '保存失败'
+      try {
+        const result = await rpc.value.saveTextProfile(getToken(), {
+          ...profileDraft.value,
+          apiKey: profileDraft.value.apiKey || undefined,
+        })
+        if (result?.ok) {
+          profileDraft.value.apiKey = ''
+          apiNotice.value = '文字模型配置已保存；密钥不会回显。'
+          await refresh()
+        } else apiNotice.value = result?.detail ?? result?.error ?? '保存失败'
+      } catch {
+        apiNotice.value = userFacingFailure('保存对话模型供应商')
+      } finally { apiBusy.value = '' }
     }
     async function testTextProfile(id: string) {
+      if (apiBusy.value) return
       apiBusy.value = `test-profile-${id}`
-      const result = await rpc.value.testTextProfile(getToken(), id)
-      apiBusy.value = ''
-      apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '测试失败'}`
+      try {
+        const result = await rpc.value.testTextProfile(getToken(), id)
+        apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '测试失败'}`
+      } catch { apiNotice.value = userFacingFailure(`测试 ${id} 连接`) }
+      finally { apiBusy.value = '' }
     }
     async function testTextProfileStream(id: string) {
+      if (apiBusy.value) return
       apiBusy.value = `test-profile-stream-${id}`
-      const result = await rpc.value.testTextProfileStream(getToken(), id)
-      apiBusy.value = ''
-      apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '流式测试失败'}`
+      try {
+        const result = await rpc.value.testTextProfileStream(getToken(), id)
+        apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '流式测试失败'}`
+      } catch { apiNotice.value = userFacingFailure(`测试 ${id} 流式连接`) }
+      finally { apiBusy.value = '' }
     }
     async function removeTextProfile(id: string) {
-      const result = await rpc.value.removeTextProfile(getToken(), id)
-      await handleResult(result)
+      if (apiBusy.value) return
+      apiBusy.value = `remove-profile-${id}`
+      try {
+        const result = await rpc.value.removeTextProfile(getToken(), id)
+        await handleResult(result)
+      } catch { error.value = userFacingFailure('删除文字模型配置') }
+      finally { apiBusy.value = '' }
     }
     async function setDefaultTextProfile(id: string) {
-      const result = await rpc.value.setDefaultTextProfile(getToken(), id)
-      await handleResult(result)
+      if (apiBusy.value) return
+      apiBusy.value = `default-profile-${id}`
+      try {
+        const result = await rpc.value.setDefaultTextProfile(getToken(), id)
+        await handleResult(result)
+      } catch { error.value = userFacingFailure('设置默认文字模型') }
+      finally { apiBusy.value = '' }
     }
     function editTextProfile(profile: NonNullable<ApiConfig['textProfiles']>[number]) {
       profileDraft.value = {
@@ -311,23 +499,107 @@ const AdminPage = defineComponent({
       }
     }
 
-    async function decideApproval(row: SandboxApprovalRow, decision: 'approved' | 'rejected') {
-      const note = decision === 'rejected' ? window.prompt('拒绝原因（可留空）', '') ?? null : ''
-      if (note === null) return
-      const result = await rpc.value.decideSandboxApproval(getToken(), row.id, decision, note)
-      await handleResult(result)
+    function editServiceProfile(profile: NonNullable<ApiConfig['embeddingProfiles']>[number] | NonNullable<ApiConfig['webSearchProfiles']>[number]) {
+      serviceDraft.value = {
+        id: profile.id, name: profile.name, baseURL: profile.baseURL,
+        model: 'model' in profile ? profile.model : '', apiKey: '',
+        hasKey: profile.hasKey, keyTail: profile.keyTail,
+      }
     }
-    async function doLogout() {
-      try { await rpc.value.logout(getToken()) } catch { /* idempotent */ }
-      localStorage.removeItem(TOKEN_KEY)
-      location.reload()
+    async function saveServiceProfile() {
+      if (apiBusy.value || !['embedding', 'webSearch'].includes(activeModelCategory.value)) return
+      const kind = activeModelCategory.value as 'embedding' | 'webSearch'
+      apiBusy.value = `save-service-profile-${kind}`
+      apiNotice.value = ''; serviceFeedbackType.value = 'info'
+      try {
+        const result = await rpc.value.saveServiceProfile(getToken(), kind, serviceDraft.value)
+        if (!result?.ok) { serviceFeedbackType.value = 'error'; apiNotice.value = result?.detail ?? result?.error ?? '保存供应商配置失败。'; return }
+        selectedModelProvider.value = serviceDraft.value.id
+        await refresh()
+        const saved = (kind === 'embedding' ? apiConfig.value?.embeddingProfiles : apiConfig.value?.webSearchProfiles)
+          ?.find((profile) => profile.id === serviceDraft.value.id)
+        if (saved) editServiceProfile(saved)
+        serviceFeedbackType.value = 'success'
+        apiNotice.value = '供应商配置已保存。'
+      } catch { serviceFeedbackType.value = 'error'; apiNotice.value = userFacingFailure('保存供应商配置') }
+      finally { apiBusy.value = '' }
+    }
+    async function activateServiceProfile(id: string) {
+      if (apiBusy.value || !['embedding', 'webSearch'].includes(activeModelCategory.value)) return
+      const kind = activeModelCategory.value as 'embedding' | 'webSearch'
+      apiBusy.value = `activate-service-profile-${kind}`
+      apiNotice.value = ''; serviceFeedbackType.value = 'info'
+      try {
+        const result = await rpc.value.activateServiceProfile(getToken(), kind, id)
+        if (!result?.ok) { serviceFeedbackType.value = 'error'; apiNotice.value = result?.detail ?? result?.error ?? '切换服务配置失败。'; return }
+        selectedModelProvider.value = id === 'default' ? 'default' : id
+        await refresh()
+        if (id !== 'default') {
+          const profile = (kind === 'embedding' ? apiConfig.value?.embeddingProfiles : apiConfig.value?.webSearchProfiles)
+            ?.find((item) => item.id === id)
+          if (profile) editServiceProfile(profile)
+        }
+        serviceFeedbackType.value = 'success'
+        apiNotice.value = `已切换到${id === 'default' ? '系统默认服务' : serviceDraft.value.name}。`
+      } catch { serviceFeedbackType.value = 'error'; apiNotice.value = userFacingFailure('切换服务配置') }
+      finally { apiBusy.value = '' }
+    }
+    async function removeServiceProfile(id: string) {
+      if (apiBusy.value || !['embedding', 'webSearch'].includes(activeModelCategory.value)) return
+      const kind = activeModelCategory.value as 'embedding' | 'webSearch'
+      apiBusy.value = `remove-service-profile-${kind}`
+      apiNotice.value = ''; serviceFeedbackType.value = 'info'
+      try {
+        const result = await rpc.value.removeServiceProfile(getToken(), kind, id)
+        if (!result?.ok) { serviceFeedbackType.value = 'error'; apiNotice.value = result?.detail ?? result?.error ?? '删除供应商配置失败。'; return }
+        if (kind === 'embedding') invalidateModelCatalog('embedding', serviceDraft.value)
+        selectedModelProvider.value = 'default'
+        serviceDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', hasKey: false, keyTail: '' }
+        await refresh()
+        serviceFeedbackType.value = 'success'
+        apiNotice.value = '供应商配置已删除。'
+      } catch { serviceFeedbackType.value = 'error'; apiNotice.value = userFacingFailure('删除供应商配置') }
+      finally { apiBusy.value = '' }
     }
 
+    function openApproval(row: SandboxApprovalRow, decision: 'approved' | 'rejected') {
+      approvalTarget.value = row
+      approvalDecision.value = decision
+      approvalNote.value = ''
+      approvalError.value = ''
+      approvalDialogOpen.value = true
+    }
+    function closeApproval() {
+      if (approvalBusy.value) return
+      approvalDialogOpen.value = false
+      approvalTarget.value = null
+      approvalNote.value = ''
+      approvalError.value = ''
+    }
+    async function decideApproval() {
+      const row = approvalTarget.value
+      const decision = approvalDecision.value
+      if (!row || approvalBusy.value) return
+      approvalBusy.value = true
+      approvalError.value = ''
+      try {
+        const result = await rpc.value.decideSandboxApproval(getToken(), row.id, decision, decision === 'rejected' ? approvalNote.value : '')
+        if (!result?.ok) {
+          approvalError.value = result?.detail ?? result?.error ?? '操作失败，请重试。'
+          return
+        }
+        error.value = ''
+        await refresh()
+        closeApproval()
+      } catch { approvalError.value = userFacingFailure(decision === 'approved' ? '批准沙箱请求' : '拒绝沙箱请求') }
+      finally { approvalBusy.value = false }
+    }
     /** 筛选 + 分页（2026-10-07 用户反馈⑤）。 */
     const filteredUsers = computed(() => {
       const q = query.value.trim().toLowerCase()
       return users.value.filter((u) => {
         if (u.kind !== 'human') return false
+        if (accountRoleFilter.value && u.teamRole !== accountRoleFilter.value) return false
         if (!q) return true
         return u.displayName.toLowerCase().includes(q) ||
           u.username.toLowerCase().includes(q) ||
@@ -336,16 +608,19 @@ const AdminPage = defineComponent({
     })
     const pagedUsers = computed(() =>
       filteredUsers.value.slice((pageNo.value - 1) * PAGE_SIZE, pageNo.value * PAGE_SIZE))
-    const agentsList = computed(() => users.value.filter((u) => u.kind === 'agent'))
     const humans = computed(() => users.value.filter((u) => u.kind === 'human'))
 
     async function doRemove(row: UserRow) {
-      const r = await rpc.value.removeUser(getToken(), row.id)
-      await handleResult(r)
+      try {
+        const r = await rpc.value.removeUser(getToken(), row.id)
+        await handleResult(r)
+      } catch { error.value = userFacingFailure('删除 Team 账号') }
     }
 
     return () => {
       const ElAlert = resolveComponent('el-alert') as unknown as string
+      const ElCard = resolveComponent('el-card') as unknown as string
+      const ElProgress = resolveComponent('el-progress') as unknown as string
       const ElButton = resolveComponent('el-button') as unknown as string
       const ElSpace = resolveComponent('el-space') as unknown as string
       const ElDialog = resolveComponent('el-dialog') as unknown as string
@@ -353,6 +628,8 @@ const AdminPage = defineComponent({
       const ElForm = resolveComponent('el-form') as unknown as string
       const ElFormItem = resolveComponent('el-form-item') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
+      const ElRow = resolveComponent('el-row') as unknown as string
+      const ElCol = resolveComponent('el-col') as unknown as string
       const ElText = resolveComponent('el-text') as unknown as string
       const ElPopconfirm = resolveComponent('el-popconfirm') as unknown as string
       const ElTable = resolveComponent('el-table') as unknown as string
@@ -363,44 +640,87 @@ const AdminPage = defineComponent({
       const ElSelect = resolveComponent('el-select') as unknown as string
       const ElInputNumber = resolveComponent('el-input-number') as unknown as string
       const ElOption = resolveComponent('el-option') as unknown as string
+      const ElDivider = resolveComponent('el-divider') as unknown as string
       const ElDescriptions = resolveComponent('el-descriptions') as unknown as string
       const ElDescriptionsItem = resolveComponent('el-descriptions-item') as unknown as string
-
-      // ── 后台独立账号登录 ──
-      const denied = () => loginGate({
-      brand: 'TS',
-      title: '账号管理',
-      desc: '使用独立后台管理员账号登录。开发/测试默认 admin / 123456；生产环境使用部署配置的凭据。',
-      children: [
-        h(ElInput, {
-          modelValue: loginName.value,
-          'onUpdate:modelValue': (v: string) => { loginName.value = v },
-          placeholder: '管理员用户名',
+      const ElTabs = resolveComponent('el-tabs') as unknown as string
+      const ElTabPane = resolveComponent('el-tab-pane') as unknown as string
+      const ElDropdown = resolveComponent('el-dropdown') as unknown as string
+      const ElDropdownItem = resolveComponent('el-dropdown-item') as unknown as string
+      const renderModelPicker = (
+        target: 'text' | 'embedding' | 'profile',
+        currentModel: string,
+        onSelect: (model: string) => void,
+        draft?: { id: string; baseURL: string },
+      ) => {
+        const catalog = modelCatalogs.value[modelCatalogKey(target, draft)]
+        if (!catalog) return null
+        const search = catalog.query.trim().toLocaleLowerCase()
+        const rows = catalog.models
+          .filter((model) => !search || model.toLocaleLowerCase().includes(search))
+          .map((model) => ({ modelId: model }))
+        return h('div', [
+          catalog.message ? h(ElAlert, { title: catalog.message, type: catalog.type, showIcon: true, closable: true, onClose: () => { catalog.message = '' } }) : null,
+          ...(catalog.models.length ? [
+          h(ElRow, { justify: 'space-between', align: 'middle' }, [
+            h(ElText, { tag: 'strong' }, { default: () => `可选模型 · ${rows.length} / ${catalog.models.length}` }),
+            h(ElText, { size: 'small', type: 'info' }, { default: () => '选择一项填入模型 ID' }),
+          ]),
+          h(ElInput, {
+            modelValue: catalog.query,
+            'onUpdate:modelValue': (value: string) => { catalog.query = value },
+            clearable: true,
+            placeholder: '搜索模型名称或 ID',
+            'aria-label': '搜索模型列表',
+          }),
+          h(ElTable, {
+            data: rows,
+            rowKey: 'modelId',
+            currentRowKey: currentModel,
+            highlightCurrentRow: true,
+            height: 220,
+            scrollbarAlwaysOn: true,
+            size: 'small',
+            emptyText: '没有匹配的模型',
+            'aria-label': '可选择的模型列表',
+            onRowClick: (row: { modelId: string }) => onSelect(row.modelId),
+          }, { default: () => [h(ElTableColumn, { prop: 'modelId', label: '模型 ID', minWidth: 240, showOverflowTooltip: true })] }),
+          ] : []),
+        ])
+      }
+      const profileActionButtons = (profile: ApiConfig['textProfiles'][number]) => [
+        h(ElButton, { size: 'small', disabled: Boolean(apiBusy.value), onClick: () => editTextProfile(profile) }, { default: () => '编辑' }),
+        h(ElDropdown, {
+          trigger: 'click',
+          onCommand: (command: string) => {
+            if (command === 'test') return void testTextProfile(profile.id)
+            if (command === 'stream') return void testTextProfileStream(profile.id)
+            if (command === 'default') return void setDefaultTextProfile(profile.id)
+            if (command === 'remove') return void removeTextProfile(profile.id)
+          },
+        }, {
+          default: () => h(ElButton, { size: 'small' }, { default: () => '更多' }),
+          dropdown: () => [
+            h(ElDropdownItem, {
+              command: 'test', disabled: Boolean(apiBusy.value && apiBusy.value !== `test-profile-${profile.id}`),
+            }, { default: () => apiBusy.value === `test-profile-${profile.id}` ? '测试中…' : '连通测试' }),
+            h(ElDropdownItem, {
+              command: 'stream', disabled: Boolean(apiBusy.value && apiBusy.value !== `test-profile-stream-${profile.id}`),
+            }, { default: () => apiBusy.value === `test-profile-stream-${profile.id}` ? '流式测试中…' : '流式测试' }),
+            h(ElDropdownItem, {
+              command: 'default', divided: true,
+              disabled: Boolean(apiBusy.value && apiBusy.value !== `default-profile-${profile.id}`) || apiConfig.value?.activeTextProfileRef === profile.id,
+            }, { default: () => apiConfig.value?.activeTextProfileRef === profile.id ? '当前默认' : '设为默认' }),
+            h(ElDropdownItem, {
+              command: 'remove', divided: true,
+              disabled: Boolean(apiBusy.value && apiBusy.value !== `remove-profile-${profile.id}`),
+            }, { default: () => '删除' }),
+          ],
         }),
-        h(ElInput, {
-          modelValue: loginPass.value,
-          'onUpdate:modelValue': (v: string) => { loginPass.value = v },
-          type: 'password', showPassword: true,
-          placeholder: '密码',
-          onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') void doAdminLogin() },
-        }),
-        loginErr.value
-          ? h(ElText, { type: 'danger', size: 'small' }, { default: () => loginErr.value })
-          : null,
-        h(ElButton, {
-          type: 'primary', loading: loginBusy.value, style: 'width:100%',
-          onClick: () => void doAdminLogin(),
-        }, { default: () => '登录' }),
-      ],
-    })
+      ]
 
-      // ── 操作列（Team 人类账号可管理；AI 身份只读）──
+      // ── 操作列（Team 登录账号）──
       const actions = (row: UserRow) => {
-        if (row.kind !== 'human') {
-          return h(ElTag, { type: 'info', size: 'small' }, {
-            default: () => 'AI 身份由插件管理',
-          })
-        }
         const isSelf = false
         return h('span', null, [
           // 修改密码：按钮 → 弹窗（el-dialog 内 el-input 新密码）。
@@ -422,55 +742,198 @@ const AdminPage = defineComponent({
       }
 
       // ── 管理员视图：页头 + 表格分区卡 ─────────────────────────────────
-      const panel = () => [
-        pageHead('账号管理',
-          'Team 账号与后台管理员身份完全分离；会话成员管理在团队空间页操作。',
+      const panel = () => {
+        const currentPath = route.path
+        const page = currentPath === '/admin/runtime' ? 'runtime' : currentPath === '/admin/models' ? 'models' : 'accounts'
+        const heading = pageHead(
+          page === 'accounts' ? 'Team 账号' : page === 'runtime' ? '运行状态与审批' : '模型与服务',
+          page === 'accounts'
+            ? '管理团队成员账号、角色、注册入口和密码。'
+            : page === 'runtime'
+              ? '查看插件运行状态，并处理 Agent 越界访问申请。'
+              : '统一配置对话模型、Embedding 和网页搜索供应商；通过 Base URL 与 API Key 接入并获取模型列表。',
           {
             statuses: [
-              { text: `人类 ${users.value.filter((u) => u.kind === 'human').length}`, level: 'ok' },
-              { text: `AI 成员 ${users.value.filter((u) => u.kind === 'agent').length}`, level: 'idle' },
+              { text: `Team 账号 ${humans.value.length}`, level: 'ok' },
             ],
-            actions: [{ label: '登出', onClick: () => void doLogout(), danger: true }],
-          }),
-        error.value
-          ? h('div', { class: 'sp-note sp-note--err' }, error.value)
-          : null,
-        section('用户', 'human 账号可管理；agent 身份由插件注册表管理，此处只读。',
+            actions: [],
+          })
+        const feedback = error.value
+          ? actionsRow([
+            h('div', null, [
+              h('div', { class: 'sp-note sp-note--err' }, error.value),
+              loadFailed.value
+                ? h('div', { class: 'sp-hint', role: 'status' }, dataLoaded.value
+                  ? '仍显示上次成功加载的数据。'
+                  : '后台数据尚未加载，请重试后再继续管理操作。')
+                : null,
+            ]),
+            loadFailed.value
+              ? h(ElButton, { loading: busy.value, onClick: () => void refresh() }, { default: () => '重试加载' })
+              : null,
+          ])
+          : null
+        if (!dataLoaded.value) {
+          return [heading, feedback ?? h(ElEmpty, { description: busy.value ? '正在加载后台管理数据…' : '后台数据尚未加载' })]
+        }
+        const textProfiles = apiConfig.value?.textProfiles ?? []
+        const editingProfile = textProfiles.find((profile) => profile.id === profileDraft.value.id)
+        const pendingSandboxApprovals = sandboxApprovals.value.filter((approval) =>
+          approval.status === 'pending' || approval.status === 'approving').length
+        const providerList = () => h('div', { class: 'sp-admin-model-provider-list' }, [
+          h('div', { class: 'sp-admin-model-provider-list-head' }, [
+            h(ElText, { tag: 'strong' }, { default: () => '供应商列表' }),
+            h(ElTag, { size: 'small', type: 'info' }, { default: () => {
+              const count = activeModelCategory.value === 'text' ? textProfiles.length + 1
+                : activeModelCategory.value === 'embedding' ? (apiConfig.value?.embeddingProfiles.filter((profile) => profile.id !== 'default').length ?? 0) + 1
+                  : (apiConfig.value?.webSearchProfiles.filter((profile) => profile.id !== 'default').length ?? 0) + 1
+              return `${count} 项`
+            } }),
+          ]),
+          ...(activeModelCategory.value === 'text'
+            ? [
+              h('button', {
+                type: 'button',
+                class: `sp-admin-model-provider-item${selectedModelProvider.value === 'default' ? ' is-active' : ''}`,
+                onClick: () => { if (!apiBusy.value) selectedModelProvider.value = 'default' },
+              }, [h('strong', '系统默认对话'), h('span', apiConfig.value?.text.model || '尚未选择模型')]),
+              ...textProfiles.map((profile) => h('button', {
+                key: profile.id,
+                type: 'button',
+                class: `sp-admin-model-provider-item${selectedModelProvider.value === profile.id ? ' is-active' : ''}`,
+                onClick: () => { if (!apiBusy.value) { selectedModelProvider.value = profile.id; editTextProfile(profile) } },
+              }, [
+                h('strong', profile.name || profile.id),
+                h('span', `${profile.model || '未选择模型'} · ${profile.id}`),
+                apiConfig.value?.activeTextProfileRef === profile.id ? h(ElTag, { size: 'small', type: 'success' }, { default: () => '系统默认' }) : null,
+              ])),
+              !textProfiles.length ? h(ElEmpty, { description: '还没有对话供应商配置', imageSize: 48 }) : null,
+              h(ElButton, {
+                class: 'sp-admin-model-provider-add',
+                disabled: Boolean(apiBusy.value),
+                onClick: () => { selectedModelProvider.value = 'new'; profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null } },
+              }, { default: () => '新增对话供应商' }),
+            ]
+            : (() => {
+              const kind = activeModelCategory.value as 'embedding' | 'webSearch'
+              const profiles = kind === 'embedding' ? apiConfig.value?.embeddingProfiles ?? [] : apiConfig.value?.webSearchProfiles ?? []
+              const activeId = kind === 'embedding' ? apiConfig.value?.activeEmbeddingProfileRef : apiConfig.value?.activeWebSearchProfileRef
+              return [
+                h('button', {
+                  type: 'button',
+                  class: `sp-admin-model-provider-item${selectedModelProvider.value === 'default' ? ' is-active' : ''}`,
+                  onClick: () => { if (!apiBusy.value) selectedModelProvider.value = 'default' },
+                }, [h('strong', '系统默认供应商'), h('span', '兼容现有服务配置'), activeId ? null : h(ElTag, { size: 'small', type: 'success' }, { default: () => '当前使用' })]),
+                ...profiles.filter((profile) => profile.id !== 'default').map((profile) => h('button', {
+                  key: profile.id,
+                  type: 'button',
+                  class: `sp-admin-model-provider-item${selectedModelProvider.value === profile.id ? ' is-active' : ''}`,
+                  onClick: () => { if (!apiBusy.value) { selectedModelProvider.value = profile.id; editServiceProfile(profile) } },
+                }, [
+                  h('strong', profile.name || profile.id),
+                  h('span', `${kind === 'embedding' && 'model' in profile ? profile.model : profile.baseURL} · ${profile.id}`),
+                  activeId === profile.id ? h(ElTag, { size: 'small', type: 'success' }, { default: () => '当前使用' }) : null,
+                ])),
+                h(ElButton, {
+                  class: 'sp-admin-model-provider-add',
+                  disabled: Boolean(apiBusy.value),
+                  onClick: () => {
+                    selectedModelProvider.value = 'new'
+                    serviceDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', hasKey: false, keyTail: '' }
+                    apiNotice.value = ''
+                  },
+                }, { default: () => kind === 'embedding' ? '新增嵌入模型供应商' : '新增网页搜索供应商' }),
+              ]
+            })()),
+        ])
+        const sections = [
+        h('div', { class: 'sp-admin-account-frame' }, [
+        section('Team 账号', '管理成员登录账号、角色和密码。',
           [
             // 工具行：注册开关（缩小版）+ 搜索 + 类型筛选
-            h('div', { class: 'sp-toolbar' }, [
-              h('div', { class: 'sp-toolbar-group' }, [
-                h(ElSwitch, {
-                  modelValue: regOpen.value,
-                  'onUpdate:modelValue': (v: boolean | string | number) => { regOpen.value = Boolean(v) },
-                  onChange: (v: boolean | string | number) => void toggleRegister(v),
-                  size: 'small',
-                }),
-                h('span', { class: 'sp-toolbar-label' },
-                  regOpen.value ? '开放注册' : '已关闭注册'),
-              ]),
-              h(ElInput, {
+            h(ElSpace, { size: 12, wrap: true, class: 'sp-admin-user-toolbar' }, {
+              default: () => [
+                h('div', { class: 'sp-toolbar-group' }, [
+                  h(ElSwitch, {
+                    modelValue: regOpen.value,
+                    'onUpdate:modelValue': (v: boolean | string | number) => void toggleRegister(v),
+                    disabled: regBusy.value,
+                    size: 'small',
+                  }),
+                  h('span', { class: 'sp-toolbar-label' },
+                    regOpen.value ? '开放注册' : '已关闭注册'),
+                  regBusy.value
+                    ? h(ElText, { size: 'small', type: 'info', role: 'status' }, { default: () => '正在更新注册设置…' })
+                    : null,
+                ]),
+                h(ElInput, {
+                class: 'sp-admin-user-search',
                 modelValue: query.value,
                 'onUpdate:modelValue': (v: string) => { query.value = v; pageNo.value = 1 },
-                placeholder: '搜索显示名 / 用户名 / id…',
+                placeholder: '姓名 / 用户名 / ID',
                 clearable: true,
-                style: 'width:220px',
               }),
-              h(ElButton, { type: 'primary', onClick: () => { createOpen.value = true } }, { default: () => '创建 Team 账号' }),
-            ]),
-            h(ElTable, { data: pagedUsers.value, loading: busy.value }, {
-              default: () => [
-                h(ElTableColumn, { prop: 'displayName', label: '显示名', width: 130 }),
-                h(ElTableColumn, { prop: 'username', label: '用户名', width: 140 }),
-                h(ElTableColumn, { prop: 'id', label: 'id', width: 150 }),
-                h(ElTableColumn, { label: '团队角色', width: 110 }, {
-                  default: (scope: { row: UserRow }) => scope.row.teamRole === 'dri' ? 'DRI' : '普通成员',
-                }),
-                h(ElTableColumn, { label: '操作', minWidth: 250 }, {
-                  default: (scope: { row: UserRow }) => actions(scope.row),
-                }),
-              ],
+              h(ElSelect, {
+                class: 'sp-admin-role-filter',
+                modelValue: accountRoleFilter.value,
+                placeholder: '全部角色',
+                'onUpdate:modelValue': (value: string) => { accountRoleFilter.value = value; pageNo.value = 1 },
+                'aria-label': '按团队角色筛选账号',
+              }, {
+                default: () => [
+                  h(ElOption, { label: '全部角色', value: '' }),
+                  h(ElOption, { label: 'DRI', value: 'dri' }),
+                  h(ElOption, { label: '普通成员', value: 'member' }),
+                ],
+              }),
+              h(ElText, { size: 'small', type: 'info' }, { default: () => `${filteredUsers.value.length} 个账号` }),
+              h(ElButton, {
+                type: 'primary', size: 'small',
+                onClick: () => { createError.value = ''; createOpen.value = true },
+              }, { default: () => '创建账号' }),
+            ],
             }),
+            regError.value ? h(ElAlert, {
+              title: regError.value, type: 'error', showIcon: true, closable: true,
+              onClose: () => { regError.value = '' },
+            }) : null,
+            h('div', { class: 'sp-admin-account-table-area' }, [
+              h('div', { class: 'sp-table-scroll-hint' }, '表格可左右滑动查看更多列'),
+              h('div', { class: 'sp-account-table-scroll' }, [
+                h(ElTable, { data: pagedUsers.value, loading: busy.value }, {
+                  default: () => [
+                    h(ElTableColumn, { prop: 'displayName', label: '显示名', minWidth: 130 }),
+                    h(ElTableColumn, { prop: 'username', label: '用户名', minWidth: 140 }),
+                    h(ElTableColumn, { prop: 'id', label: 'id', minWidth: 150 }),
+                    h(ElTableColumn, { label: '团队角色', minWidth: 110 }, {
+                      default: (scope: { row: UserRow }) => scope.row.teamRole === 'dri' ? 'DRI' : '普通成员',
+                    }),
+                    h(ElTableColumn, { label: '操作', minWidth: 250 }, {
+                      default: (scope: { row: UserRow }) => actions(scope.row),
+                    }),
+                  ],
+                }),
+              ]),
+            ]),
+            h('div', { class: 'sp-admin-account-rows' }, pagedUsers.value.map((user) => h('article', {
+              key: user.id,
+              class: 'sp-admin-account-row',
+            }, [
+              h('div', { class: 'sp-admin-account-row-head' }, [
+                h('strong', user.displayName || user.username),
+                h(ElTag, { size: 'small', type: user.teamRole === 'dri' ? 'primary' : 'info' }, {
+                  default: () => user.teamRole === 'dri' ? 'DRI' : '普通成员',
+                }),
+              ]),
+              h('div', { class: 'sp-admin-account-row-meta' }, [
+                h('span', `@${user.username}`),
+                h('span', { class: 'sp-admin-account-row-id' }, [
+                  h('span', 'ID'),
+                  h('code', user.id),
+                ]),
+              ]),
+              h('div', { class: 'sp-admin-account-row-actions' }, [actions(user)]),
+            ]))),
             h('div', { class: 'sp-pager' }, [
               h(ElPagination, {
                 currentPage: pageNo.value,
@@ -483,22 +946,31 @@ const AdminPage = defineComponent({
               }),
             ]),
           ]),
+        ]),
 
-        // ── AI 成员（只读，独立一表）───────────────────────────────────
-        section('AI 成员', '身份与行为由插件管理 —— 提示词与预算在「Agent 配置」页调。',
-          [
-            h(ElTable, { data: agentsList.value, size: 'small' }, {
-              default: () => [
-                h(ElTableColumn, { prop: 'displayName', label: '名称', width: 160 }),
-                h(ElTableColumn, { prop: 'id', label: 'id', minWidth: 160 }),
-                h(ElTableColumn, { label: '说明', minWidth: 220 }, {
-                  default: () => '由插件注册表管理',
-                }),
-              ],
-            }),
-          ]),
         section('插件状态', '显示当前进程实际加载的插件及其配置摘要。插件启停由系统配置决定；此页不提供运行时启停。敏感配置值已隐藏。', [
-          h(ElTable, { data: plugins.value, size: 'small', rowKey: 'id' }, {
+          h('div', { class: 'sp-admin-plugin-toolbar' }, [
+            h(ElSpace, { size: 8 }, { default: () => [
+              h(ElInput, { class: 'sp-admin-plugin-search', modelValue: pluginSearch.value, clearable: true,
+                placeholder: '搜索插件 ID / 配置', title: '搜索插件 ID、入口或配置',
+                'onUpdate:modelValue': (value: string) => { pluginSearch.value = value; pluginPageNo.value = 1 } }),
+              h(ElSelect, {
+                class: 'sp-admin-plugin-status',
+                modelValue: pluginStatusFilter.value,
+                clearable: true,
+                placeholder: '全部状态',
+                onChange: (value: string) => { pluginStatusFilter.value = value ?? ''; pluginPageNo.value = 1 },
+              }, { default: () => [
+                h(ElOption, { label: '运行中', value: 'running' }),
+                h(ElOption, { label: '配置停用', value: 'disabled' }),
+                h(ElOption, { label: '其他状态', value: 'other' }),
+              ] }),
+            ] }),
+            h('span', { class: 'sp-admin-plugin-count', role: 'status' }, `${filteredPlugins.value.length} / ${plugins.value.length} 个插件`),
+          ]),
+          h('div', { class: 'sp-table-scroll-hint sp-admin-plugin-table-hint' }, '表格可左右滑动查看更多列'),
+          h('div', { class: 'sp-admin-runtime-table-scroll sp-admin-plugin-table-scroll' }, [
+          h(ElTable, { data: pagedPlugins.value, size: 'small', rowKey: 'id', emptyText: '没有匹配的插件' }, {
             default: () => [
               h(ElTableColumn, { prop: 'id', label: '插件 ID', minWidth: 160 }),
               h(ElTableColumn, { prop: 'name', label: '入口', minWidth: 280 }),
@@ -509,16 +981,58 @@ const AdminPage = defineComponent({
                 }, { default: () => scope.row.status }),
               }),
               h(ElTableColumn, { label: '配置摘要', minWidth: 300 }, {
-                default: (scope: { row: PluginRow }) => h(ElDescriptions, { column: 1, size: 'small', border: false }, {
-                  default: () => Object.entries(scope.row.config ?? {}).map(([key, value]) => h(ElDescriptionsItem, { label: key }, {
-                    default: () => typeof value === 'object' ? JSON.stringify(value) : String(value),
-                  })),
-                }),
+                default: (scope: { row: PluginRow }) => h('div', { class: 'sp-admin-plugin-config' },
+                  Object.entries(scope.row.config ?? {}).map(([key, value]) => h('div', {
+                    key: `${scope.row.id}-${key}`, class: 'sp-admin-plugin-row-config',
+                  }, [
+                    h('span', `${key} ·`),
+                    h('span', typeof value === 'object' ? JSON.stringify(value) : String(value)),
+                  ]))),
               }),
             ],
           }),
+          ]),
+          h('div', { class: 'sp-admin-plugin-rows' }, filteredPlugins.value.length
+            ? pagedPlugins.value.map((plugin) => h('article', {
+            key: plugin.id,
+            class: 'sp-admin-plugin-row',
+          }, [
+            h('div', { class: 'sp-admin-plugin-row-head' }, [
+              h('strong', plugin.id),
+              h(ElTag, {
+                type: plugin.status === '运行中' ? 'success' : plugin.status === '配置停用' ? 'info' : 'warning',
+                size: 'small',
+              }, { default: () => plugin.status }),
+            ]),
+            h('div', { class: 'sp-admin-plugin-row-entry' }, plugin.name),
+            ...Object.entries(plugin.config ?? {}).map(([key, value]) => h('div', {
+              key: `${plugin.id}-${key}`,
+              class: 'sp-admin-plugin-row-config',
+            }, [
+              h('span', `${key} ·`),
+              h('span', typeof value === 'object' ? JSON.stringify(value) : String(value)),
+            ])),
+          ]))
+            : [h(ElEmpty, { description: '没有匹配的插件', imageSize: 48 })]),
+          filteredPlugins.value.length > PLUGIN_PAGE_SIZE ? h(ElRow, { justify: 'end', class: 'sp-admin-plugin-pagination' }, [
+            h(ElPagination, {
+              currentPage: pluginPageNo.value,
+              'onUpdate:currentPage': (value: number) => { pluginPageNo.value = value },
+              pageSize: PLUGIN_PAGE_SIZE,
+              total: filteredPlugins.value.length,
+              layout: 'prev, pager, next',
+              background: true,
+              small: true,
+            }),
+          ]) : null,
         ]),
-        section('沙箱越界审批', '申请仅对后台管理员可见。批准会将单个普通文件复制到团队共享工作区，Agent 只能从共享区只读访问；不会挂载原始宿主机路径。', [
+        section(pendingSandboxApprovals ? `沙箱越界审批 · ${pendingSandboxApprovals} 项待处理` : '沙箱越界审批', sandboxApprovals.value.length
+          ? '申请仅对后台管理员可见。批准会将单个普通文件复制到团队共享工作区，Agent 只能从共享区只读访问；不会挂载原始宿主机路径。'
+          : '', [
+          ...(sandboxApprovals.value.length
+            ? [
+          h('div', { class: 'sp-table-scroll-hint' }, '表格可左右滑动查看更多列'),
+          h('div', { class: 'sp-admin-runtime-table-scroll sp-admin-approval-table-scroll' }, [
           h(ElTable, { data: sandboxApprovals.value, size: 'small', rowKey: 'id' }, {
             default: () => [
               h(ElTableColumn, { prop: 'createdAt', label: '申请时间', width: 170 }, { default: (s: { row: SandboxApprovalRow }) => fmtTime(s.row.createdAt) }),
@@ -529,198 +1043,420 @@ const AdminPage = defineComponent({
               h(ElTableColumn, { prop: 'status', label: '状态', width: 100 }, { default: (s: { row: SandboxApprovalRow }) => s.row.status === 'pending' ? '待处理' : s.row.status === 'approving' ? '交付中，可重试' : s.row.status === 'approved' ? '已批准' : '已拒绝' }),
               h(ElTableColumn, { label: '决定 / 交付路径', minWidth: 230 }, { default: (s: { row: SandboxApprovalRow }) => [s.row.decisionNote, s.row.deliveryPath].filter(Boolean).join(' · ') || '—' }),
               h(ElTableColumn, { label: '操作', width: 190, fixed: 'right' }, { default: (s: { row: SandboxApprovalRow }) => !['pending', 'approving'].includes(s.row.status) ? '—' : h(ElSpace, null, { default: () => [
-                h(ElButton, { size: 'small', type: 'success', onClick: () => void decideApproval(s.row, 'approved') }, { default: () => s.row.status === 'approving' ? '重试交付' : '批准并复制' }),
-                s.row.status === 'pending' ? h(ElButton, { size: 'small', type: 'danger', onClick: () => void decideApproval(s.row, 'rejected') }, { default: () => '拒绝' }) : null,
+                h(ElButton, { size: 'small', type: 'success', onClick: () => openApproval(s.row, 'approved') }, { default: () => s.row.status === 'approving' ? '重试交付' : '批准并复制' }),
+                s.row.status === 'pending' ? h(ElButton, { size: 'small', type: 'danger', onClick: () => openApproval(s.row, 'rejected') }, { default: () => '拒绝' }) : null,
               ] }) }),
             ],
           }),
+          ]),
+            ]
+            : [h('div', { class: 'sp-admin-approval-empty-state', role: 'status' }, '暂无待审批请求')]),
         ]),
-        section('模型与 API 配置', '文字模型、Embedding 与网页搜索分别配置；密钥只写入，不回显。', [
-          apiNotice.value ? h('div', { class: 'sp-note' }, apiNotice.value) : null,
-          ...([
-            ['text', '文字模型 API', true],
-            ['embedding', 'Embedding API', true],
-            ['webSearch', '网页搜索 API', false],
-          ] as const).map(([kind, title, hasModel]) => {
+        section('AI 服务供应商', '在一个管理区配置对话、Embedding 与网页搜索服务。OpenAI 兼容供应商统一使用 Base URL 与 API Key，可获取模型列表；密钥只写入，不回显。', [
+          h(ElTabs, {
+            class: 'sp-admin-model-category-tabs',
+            modelValue: activeModelCategory.value,
+            'onUpdate:modelValue': (value: 'text' | 'embedding' | 'webSearch') => {
+              activeModelCategory.value = value
+              if (value === 'embedding') void refreshEmbeddingIndex()
+              if (value === 'text') selectedModelProvider.value = 'default'
+              else {
+                const activeRef = value === 'embedding' ? apiConfig.value?.activeEmbeddingProfileRef : apiConfig.value?.activeWebSearchProfileRef
+                selectedModelProvider.value = activeRef || 'default'
+                const profiles = value === 'embedding' ? apiConfig.value?.embeddingProfiles : apiConfig.value?.webSearchProfiles
+                const active = profiles?.find((profile) => profile.id === activeRef)
+                if (active) editServiceProfile(active)
+              }
+            },
+          }, { default: () => [
+            h(ElTabPane, { label: '对话模型', name: 'text' }),
+            h(ElTabPane, { label: '嵌入模型', name: 'embedding' }),
+            h(ElTabPane, { label: '网页搜索', name: 'webSearch' }),
+          ] }),
+          h('div', { class: 'sp-admin-model-category-description', role: 'note' },
+            activeModelCategory.value === 'text'
+              ? '配置系统默认对话模型，并管理可供 Agent 选择的对话供应商。'
+              : activeModelCategory.value === 'embedding'
+                ? '配置知识库检索使用的嵌入模型；此配置与对话模型相互独立。'
+                : '配置网页搜索服务。搜索服务只负责检索网页，不属于语言模型。'),
+          activeModelCategory.value === 'embedding' ? h(ElCard, { shadow: 'never' }, { default: () => [
+            h(ElText, { tag: 'strong' }, { default: () => '知识库向量索引' }),
+            indexLoadError.value ? h(ElAlert, { title: indexLoadError.value, type: 'error', showIcon: true, closable: false }) : null,
+            embeddingIndex.value ? h('div', [
+              h(ElAlert, {
+                title: ({ disabled: '向量服务未配置', pending: '等待重建向量索引', running: '正在重建向量索引', ready: '向量索引已就绪', failed: '向量索引重建失败' })[embeddingIndex.value.state],
+                description: embeddingIndex.value.error || (embeddingIndex.value.state === 'ready'
+                  ? `当前模型：${embeddingIndex.value.model}` : '重建完成前使用关键词检索；原文和已完成的分块会保留。'),
+                type: embeddingIndex.value.state === 'failed' ? 'error' : embeddingIndex.value.state === 'ready' ? 'success' : 'info',
+                showIcon: true, closable: false,
+              }),
+              h(ElProgress, {
+                percentage: embeddingIndex.value.total ? Math.floor(embeddingIndex.value.completed * 100 / embeddingIndex.value.total) : 100,
+                status: embeddingIndex.value.state === 'failed' ? 'exception' : embeddingIndex.value.state === 'ready' ? 'success' : undefined,
+              }),
+              h(ElText, { size: 'small' }, { default: () => `已完成 ${embeddingIndex.value!.completed} / ${embeddingIndex.value!.total} 个分块 · 当前模型 ${embeddingIndex.value!.model}` }),
+              ['pending', 'failed'].includes(embeddingIndex.value.state) ? h(ElButton, {
+                loading: indexRetryBusy.value, onClick: () => void retryEmbeddingIndex(),
+              }, { default: () => '重试未完成索引' }) : null,
+            ]) : h(ElText, { type: 'info' }, { default: () => '正在读取索引进度…' }),
+          ] }) : null,
+          h('div', { class: 'sp-admin-model-provider-workspace' }, [
+          providerList(),
+          h('div', { class: 'sp-admin-model-provider-editor' }, [
+          selectedModelProvider.value === 'default' ? h('div', { class: 'sp-admin-api-config-grid sp-admin-api-config-grid--single' }, [...([
+            ['text', '默认对话供应商', true],
+            ['embedding', 'Embedding 供应商', true],
+            ['webSearch', '网页搜索供应商', false],
+          ] as const).filter(([kind]) => kind === activeModelCategory.value).map(([kind, title, hasModel]) => {
             const cfg = apiConfig.value?.[kind]
             if (!cfg) return null
-            return h('div', null, [
+            return h('div', { class: 'sp-admin-api-config-block' }, [
               h(ElText, { tag: 'strong' }, { default: () => title }),
-              h(ElForm, { labelPosition: 'top' }, {
+              h(ElForm, { labelPosition: 'top', disabled: Boolean(apiBusy.value) }, {
                 default: () => [
                   h(ElFormItem, { label: 'API 地址' }, { default: () => h(ElInput, {
                     modelValue: cfg.baseURL,
                     'onUpdate:modelValue': (v: string) => { cfg.baseURL = v },
+                    type: 'textarea', autosize: { minRows: 1, maxRows: 3 }, resize: 'none',
                     placeholder: 'https://provider.example/v1', clearable: true,
                   }) }),
-                  hasModel ? h(ElFormItem, { label: '模型名' }, { default: () => h(ElInput, {
-                    modelValue: cfg.model,
-                    'onUpdate:modelValue': (v: string) => { cfg.model = v },
-                    placeholder: '模型 ID', clearable: true,
-                  }) }) : null,
+                  hasModel ? h(ElFormItem, { label: '模型 ID' }, { default: () => h('div', [
+                    h(ElSpace, { alignment: 'start', fill: true }, { default: () => [
+                      h(ElInput, {
+                        modelValue: cfg.model,
+                        'onUpdate:modelValue': (v: string) => { cfg.model = v },
+                        clearable: true,
+                        placeholder: '手动输入或从下方列表选择模型',
+                      }),
+                      h(ElButton, {
+                        loading: apiBusy.value === `models-${kind}`,
+                        disabled: Boolean(apiBusy.value && apiBusy.value !== `models-${kind}`),
+                        onClick: () => void fetchModels(kind as 'text' | 'embedding'),
+                      }, { default: () => '获取模型列表' }),
+                    ] }),
+                    renderModelPicker(kind as 'text' | 'embedding', cfg.model, (model) => { cfg.model = model }),
+                  ]) }) : null,
+                  kind === 'embedding'
+                    ? h(ElText, { size: 'small', type: 'info' }, { default: () => '列表仅显示识别为 Embedding 的模型；也可手动输入供应商支持的模型 ID。' })
+                    : null,
                   h(ElFormItem, { label: cfg.hasKey ? `API 密钥（已配置 · 尾号 ${cfg.keyTail}；输入 - 可清除）` : 'API 密钥' }, {
                     default: () => h(ElInput, {
                       modelValue: apiKeys.value[kind],
-                      'onUpdate:modelValue': (v: string) => { apiKeys.value[kind] = v },
-                      type: 'password', showPassword: true,
+                      'onUpdate:modelValue': (v: string) => { apiKeys.value[kind] = v; if (kind !== 'webSearch') invalidateModelCatalog(kind) },
+                      type: 'password', showPassword: true, autocomplete: 'new-password',
                       placeholder: cfg.hasKey ? '留空保留现有密钥' : '输入 API 密钥',
                     }),
                   }),
+                  h(ElText, { size: 'small', type: 'info' }, { default: () => '获取模型列表会优先使用此输入框；留空则使用已保存密钥。' }),
+                  kind === 'text' && cfg.timeoutMs !== undefined
+                    ? h(ElFormItem, { label: '请求超时（毫秒）' }, { default: () => h(ElInputNumber, {
+                        modelValue: cfg.timeoutMs,
+                        min: 1, step: 1000, controlsPosition: 'right',
+                        'onUpdate:modelValue': (v: number | null) => { if (v !== null) cfg.timeoutMs = v },
+                      }) })
+                    : null,
                 ],
               }),
-              kind === 'text' && cfg.timeoutMs !== undefined
-                ? h(ElFormItem, { label: '超时毫秒' }, { default: () => h(ElInput, {
-                    modelValue: String(cfg.timeoutMs),
-                    'onUpdate:modelValue': (v: string) => { cfg.timeoutMs = Number(v) || 60000 },
-                  }) })
-                : null,
               h(ElSpace, null, { default: () => [
-                h(ElButton, { type: 'primary', loading: apiBusy.value === kind, onClick: () => void saveApi(kind) }, { default: () => '保存' }),
-                h(ElButton, { loading: apiBusy.value === `test-${kind}`, onClick: () => void testApi(kind) }, { default: () => '连通测试' }),
+                h(ElButton, {
+                  type: 'primary', loading: apiBusy.value === kind,
+                  disabled: Boolean(apiBusy.value && apiBusy.value !== kind), onClick: () => void saveApi(kind),
+                }, { default: () => '保存' }),
+                kind !== 'text' && (kind === 'embedding' ? apiConfig.value?.activeEmbeddingProfileRef : apiConfig.value?.activeWebSearchProfileRef) ? h(ElButton, {
+                  disabled: Boolean(apiBusy.value), onClick: () => void activateServiceProfile('default'),
+                }, { default: () => '设为当前服务' }) : null,
+                h(ElButton, {
+                  loading: apiBusy.value === `test-${kind}`,
+                  disabled: Boolean(apiBusy.value && apiBusy.value !== `test-${kind}`) || (kind === 'embedding' ? Boolean(apiConfig.value?.activeEmbeddingProfileRef) : kind === 'webSearch' ? Boolean(apiConfig.value?.activeWebSearchProfileRef) : false), onClick: () => void testApi(kind),
+                }, { default: () => '连通测试' }),
               ] }),
+              apiFeedback(kind, ElAlert),
             ])
-          }),
-        ]),
-        section('文字模型供应商配置', '可保存多组 OpenAI 兼容供应商配置，并单独测试；默认配置供协调器与未指定模型的 Agent 使用。', [
-          h(ElFormItem, { label: '系统默认文字模型配置' }, {
+          })]) : null,
+        activeModelCategory.value === 'text' && selectedModelProvider.value !== 'default' ? h('div', { class: 'sp-admin-profile-workspace' }, [
+          h(ElDivider, { contentPosition: 'left' }, { default: () => '可供 Agent 选择的对话模型' }),
+          apiNotice.value ? h('div', { class: 'sp-note', role: 'status' }, apiNotice.value) : null,
+          h(ElFormItem, { label: '系统默认文字模型配置', class: 'sp-admin-default-profile-item' }, {
             default: () => h(ElSelect, {
               modelValue: apiConfig.value?.activeTextProfileRef ?? '',
+            disabled: Boolean(apiBusy.value),
               onChange: (value: string) => void setDefaultTextProfile(value),
               placeholder: '使用兼容默认配置',
             }, {
               default: () => [
-                h(ElOption, { label: '兼容默认配置（上方文字模型 API）', value: '' }),
-                ...(apiConfig.value?.textProfiles ?? []).map((profile) => h(ElOption, {
+                h(ElOption, { label: '默认对话供应商（上方）', value: '' }),
+                ...textProfiles.map((profile) => h(ElOption, {
                   label: `${profile.name}（${profile.id}）`, value: profile.id,
                 })),
               ],
             }),
           }),
-          h(ElTable, { data: apiConfig.value?.textProfiles ?? [], size: 'small', rowKey: 'id' }, {
+          h('div', { class: 'sp-admin-profile-editor-shell' }, [
+              h(ElRow, { justify: 'space-between', align: 'middle' }, [
+                h(ElText, { tag: 'strong' }, { default: () => editingProfile ? `编辑供应商 · ${editingProfile.name}` : '新增供应商配置' }),
+                editingProfile ? h(ElSpace, { size: 6 }, { default: () => profileActionButtons(editingProfile).slice(1) }) : null,
+              ]),
+              h(ElForm, { class: 'sp-admin-profile-editor', labelPosition: 'top', disabled: Boolean(apiBusy.value) }, {
             default: () => [
-              h(ElTableColumn, { prop: 'name', label: '名称', width: 150 }),
-              h(ElTableColumn, { prop: 'id', label: '配置 ID', width: 150 }),
-              h(ElTableColumn, { prop: 'baseURL', label: 'Base URL', minWidth: 220 }),
-              h(ElTableColumn, { prop: 'model', label: '模型', minWidth: 150 }),
-              h(ElTableColumn, { label: '最大输出 Token', width: 135 }, { default: (scope: { row: ApiConfig['textProfiles'][number] }) => scope.row.maxOutputTokens ?? '供应商默认' }),
-              h(ElTableColumn, { label: '密钥', width: 125 }, { default: (scope: { row: ApiConfig['textProfiles'][number] }) => scope.row.hasKey ? `已保存 · …${scope.row.keyTail}` : '未配置' }),
-              h(ElTableColumn, { label: '操作', minWidth: 390, fixed: 'right' }, {
-                default: (scope: { row: ApiConfig['textProfiles'][number] }) => h(ElSpace, null, { default: () => [
-                  h(ElButton, { size: 'small', onClick: () => editTextProfile(scope.row) }, { default: () => '编辑' }),
-                  h(ElButton, { size: 'small', loading: apiBusy.value === `test-profile-${scope.row.id}`, onClick: () => void testTextProfile(scope.row.id) }, { default: () => '测试' }),
-                  h(ElButton, { size: 'small', loading: apiBusy.value === `test-profile-stream-${scope.row.id}`, onClick: () => void testTextProfileStream(scope.row.id) }, { default: () => '流式测试' }),
-                  h(ElButton, { size: 'small', type: 'primary', disabled: apiConfig.value?.activeTextProfileRef === scope.row.id, onClick: () => void setDefaultTextProfile(scope.row.id) }, { default: () => apiConfig.value?.activeTextProfileRef === scope.row.id ? '当前默认' : '设为默认' }),
-                  h(ElButton, { size: 'small', type: 'danger', onClick: () => void removeTextProfile(scope.row.id) }, { default: () => '删除' }),
-                ] }),
-              }),
-            ],
-          }),
-          h(ElForm, { labelPosition: 'top' }, {
-            default: () => [
-              h(ElFormItem, { label: '配置 ID（Agent 引用用；如 qwen-prod、ark-coding）' }, { default: () => h(ElInput, {
+              h(ElRow, { gutter: 20 }, { default: () => [
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '配置 ID（供 Agent 引用）' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.id,
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.id = v },
                 placeholder: 'qwen-prod', clearable: true,
-              }) }),
-              h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
+              }) })),
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.name,
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.name = v },
                 placeholder: '阿里云 Qwen', clearable: true,
-              }) }),
-              h(ElFormItem, { label: 'Base URL' }, { default: () => h(ElInput, {
+              }) })),
+              h(ElCol, { span: 24 }, h(ElFormItem, { label: 'Base URL' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.baseURL,
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.baseURL = v },
+                type: 'textarea', autosize: { minRows: 1, maxRows: 3 }, resize: 'none',
                 placeholder: 'https://provider.example/v1', clearable: true,
-              }) }),
-              h(ElFormItem, { label: '模型 ID' }, { default: () => h(ElInput, {
-                modelValue: profileDraft.value.model,
-                'onUpdate:modelValue': (v: string) => { profileDraft.value.model = v },
-                placeholder: '供应商提供的模型 ID', clearable: true,
-              }) }),
-              h(ElFormItem, { label: '最大输出 Token（留空使用供应商默认）' }, { default: () => h(ElInputNumber, {
+              }) })),
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '模型 ID' }, { default: () => h('div', [
+                h(ElSpace, { alignment: 'start', fill: true }, { default: () => [
+                  h(ElInput, {
+                    modelValue: profileDraft.value.model,
+                    'onUpdate:modelValue': (v: string) => { profileDraft.value.model = v },
+                    clearable: true,
+                    placeholder: '手动输入或从下方列表选择模型',
+                  }),
+                  h(ElButton, {
+                    loading: apiBusy.value === 'models-profile',
+                    disabled: Boolean(apiBusy.value && apiBusy.value !== 'models-profile'),
+                    onClick: () => void fetchModels('profile'),
+                  }, { default: () => '获取模型列表' }),
+                ] }),
+                renderModelPicker('profile', profileDraft.value.model, (model) => { profileDraft.value.model = model }),
+              ]) })),
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '最大输出 Token（留空使用供应商默认）' }, { default: () => h(ElInputNumber, {
                 modelValue: profileDraft.value.maxOutputTokens,
                 'onUpdate:modelValue': (v: number | null) => { profileDraft.value.maxOutputTokens = v ? Math.floor(v) : null },
                 min: 1, max: 200000, step: 512, controlsPosition: 'right', clearable: true,
-              }) }),
-              h(ElFormItem, { label: 'API Key（编辑时留空保留现值；输入 - 清除）' }, { default: () => h(ElInput, {
+              }) })),
+              h(ElCol, { span: 24 }, h(ElFormItem, { label: 'API Key（编辑时留空保留现值；输入 - 清除）' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.apiKey,
-                'onUpdate:modelValue': (v: string) => { profileDraft.value.apiKey = v },
-                type: 'password', showPassword: true, placeholder: '仅写入，不回显',
-              }) }),
+                'onUpdate:modelValue': (v: string) => { profileDraft.value.apiKey = v; invalidateModelCatalog('profile') },
+                type: 'password', showPassword: true, autocomplete: 'new-password', placeholder: '仅写入，不回显',
+              }) })),
+              ] }),
               h(ElSpace, null, { default: () => [
-                h(ElButton, { type: 'primary', loading: apiBusy.value === 'save-profile', onClick: () => void saveTextProfile() }, { default: () => '保存供应商配置' }),
-                h(ElButton, { onClick: () => { profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null } } }, { default: () => '清空表单' }),
+                h(ElButton, {
+                  type: 'primary', loading: apiBusy.value === 'save-profile',
+                  disabled: Boolean(apiBusy.value && apiBusy.value !== 'save-profile'), onClick: () => void saveTextProfile(),
+                }, { default: () => '保存供应商配置' }),
+                h(ElButton, { disabled: Boolean(apiBusy.value), onClick: () => { profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null } } }, { default: () => '清空表单' }),
               ] }),
             ],
           }),
+          ]),
+          apiFeedback('text', ElAlert),
+          ]) : null,
+          activeModelCategory.value !== 'text' && selectedModelProvider.value !== 'default' ? h('div', { class: 'sp-admin-profile-workspace' }, [
+            h(ElRow, { justify: 'space-between', align: 'middle' }, [
+              h(ElText, { tag: 'strong' }, { default: () => selectedModelProvider.value === 'new' ? '新增服务供应商' : `编辑供应商 · ${serviceDraft.value.name}` }),
+              selectedModelProvider.value !== 'new' ? h(ElTag, {
+                size: 'small',
+                type: (activeModelCategory.value === 'embedding'
+                  ? apiConfig.value?.activeEmbeddingProfileRef
+                  : apiConfig.value?.activeWebSearchProfileRef) === serviceDraft.value.id ? 'success' : 'info',
+              }, { default: () => (activeModelCategory.value === 'embedding'
+                ? apiConfig.value?.activeEmbeddingProfileRef
+                : apiConfig.value?.activeWebSearchProfileRef) === serviceDraft.value.id ? '当前使用' : '未启用' }) : null,
+            ]),
+            apiNotice.value ? h(ElAlert, { title: apiNotice.value, type: serviceFeedbackType.value, showIcon: true, closable: true, onClose: () => { apiNotice.value = '' } }) : null,
+            h(ElForm, { labelPosition: 'top', disabled: Boolean(apiBusy.value) }, {
+              default: () => [
+                h(ElRow, { gutter: 20 }, { default: () => [
+                  h(ElCol, { span: 12 }, h(ElFormItem, { label: '配置 ID' }, { default: () => h(ElInput, {
+                    modelValue: serviceDraft.value.id,
+                    'onUpdate:modelValue': (value: string) => { serviceDraft.value.id = value },
+                    disabled: selectedModelProvider.value !== 'new',
+                    placeholder: '例如 ark-embedding-prod',
+                  }) })),
+                  h(ElCol, { span: 12 }, h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
+                    modelValue: serviceDraft.value.name,
+                    'onUpdate:modelValue': (value: string) => { serviceDraft.value.name = value },
+                    placeholder: activeModelCategory.value === 'embedding' ? '例如 Ark Embedding' : '例如 Tavily 搜索',
+                  }) })),
+                  h(ElCol, { span: 24 }, h(ElFormItem, { label: 'Base URL' }, { default: () => h(ElInput, {
+                    modelValue: serviceDraft.value.baseURL,
+                    'onUpdate:modelValue': (value: string) => { serviceDraft.value.baseURL = value },
+                    placeholder: activeModelCategory.value === 'embedding' ? 'https://provider.example/v1' : 'https://provider.example',
+                    clearable: true,
+                  }) })),
+                  activeModelCategory.value === 'embedding' ? h(ElCol, { span: 24 }, h(ElFormItem, { label: 'Embedding 模型 ID' }, { default: () => h('div', [
+                    h(ElSpace, { alignment: 'start', fill: true }, { default: () => [
+                      h(ElInput, {
+                        modelValue: serviceDraft.value.model,
+                        'onUpdate:modelValue': (value: string) => { serviceDraft.value.model = value },
+                        placeholder: '手动输入或从下方模型列表选择', clearable: true,
+                      }),
+                      h(ElButton, {
+                        loading: apiBusy.value === 'models-embedding',
+                        disabled: Boolean(apiBusy.value && apiBusy.value !== 'models-embedding'),
+                        onClick: () => void fetchModels('embedding', serviceDraft.value),
+                      }, { default: () => '获取模型列表' }),
+                    ] }),
+                    renderModelPicker('embedding', serviceDraft.value.model, (model) => { serviceDraft.value.model = model }, serviceDraft.value),
+                    h(ElText, { size: 'small', type: 'info' }, { default: () => '只列出识别为 Embedding 的模型；特殊模型 ID 也可以手动填写。' }),
+                  ]) })) : null,
+                  h(ElCol, { span: 24 }, h(ElFormItem, { label: serviceDraft.value.hasKey ? `API Key（已配置 · 尾号 ${serviceDraft.value.keyTail}；留空保留，输入 - 清除）` : 'API Key' }, { default: () => h(ElInput, {
+                    modelValue: serviceDraft.value.apiKey,
+                    'onUpdate:modelValue': (value: string) => { serviceDraft.value.apiKey = value; if (activeModelCategory.value === 'embedding') invalidateModelCatalog('embedding', serviceDraft.value) },
+                    type: 'password', showPassword: true, autocomplete: 'new-password',
+                    placeholder: serviceDraft.value.hasKey ? '留空保留现有密钥' : '输入 API Key',
+                  }) })),
+                ] }),
+                h(ElSpace, null, { default: () => [
+                  h(ElButton, { type: 'primary', loading: apiBusy.value === `save-service-profile-${activeModelCategory.value}`, onClick: () => void saveServiceProfile() }, { default: () => '保存配置' }),
+                  selectedModelProvider.value !== 'new' ? h(ElButton, {
+                    disabled: (activeModelCategory.value === 'embedding'
+                      ? apiConfig.value?.activeEmbeddingProfileRef
+                      : apiConfig.value?.activeWebSearchProfileRef) === serviceDraft.value.id || Boolean(apiBusy.value),
+                    onClick: () => void activateServiceProfile(serviceDraft.value.id),
+                  }, { default: () => '设为当前服务' }) : null,
+                  selectedModelProvider.value !== 'new' ? h(ElPopconfirm, {
+                    title: `确定删除供应商“${serviceDraft.value.name}”吗？`,
+                    confirmButtonText: '删除', cancelButtonText: '取消',
+                    onConfirm: () => void removeServiceProfile(serviceDraft.value.id),
+                  }, { reference: () => h(ElButton, { type: 'danger', disabled: Boolean(apiBusy.value) }, { default: () => '删除配置' }) }) : null,
+                ] }),
+              ],
+            }),
+          ]) : null,
+          ]),
+          ]),
         ]),
-      ]
+        ]
+        const visibleSections = page === 'accounts'
+          ? [sections[0]]
+          : page === 'runtime'
+            ? [sections[1], sections[2]]
+            : [sections[3]]
+        return [heading, feedback, ...visibleSections]
+      }
 
       return h('div', { class: 'k-content sp-admin-wrap' }, [
         h(ThemeStyle),
-        me.value === null
-          ? h(ElEmpty, { description: '正在检查权限…' })
-          : (me.value ? panel() : denied()),
+        panel(),
         // 修改密码弹窗（el-dialog + el-form + el-input showPassword）。
         h(ElDialog, {
+          class: 'sp-admin-password-dialog',
           modelValue: pwVisible.value,
-          'onUpdate:modelValue': (v: boolean) => { pwVisible.value = v },
+          'onUpdate:modelValue': (v: boolean) => { if (!pwBusy.value) pwVisible.value = v },
           title: `修改密码 —— ${pwTarget.value?.displayName ?? ''}（${pwTarget.value?.username ?? ''}）`,
           width: 420,
         }, {
-          default: () => h(ElForm, { labelPosition: 'top' }, {
-            default: () => h(ElFormItem, { label: '新密码' }, {
-              default: () => h(ElInput, {
-                modelValue: pwValue.value,
-                'onUpdate:modelValue': (v: string) => { pwValue.value = v },
-                type: 'password',
-                showPassword: true,
-                placeholder: '输入新密码',
+          default: () => [
+            pwError.value ? h(ElAlert, {
+              title: pwError.value, type: 'error', showIcon: true, closable: false,
+            }) : null,
+            h(ElForm, { labelPosition: 'top', disabled: pwBusy.value }, {
+              default: () => h(ElFormItem, { label: '新密码' }, {
+                default: () => h(ElInput, {
+                  modelValue: pwValue.value,
+                  'onUpdate:modelValue': (v: string) => { pwValue.value = v },
+                  type: 'password',
+                  showPassword: true,
+                  autocomplete: 'new-password',
+                  placeholder: '输入新密码',
+                }),
               }),
             }),
-          }),
+          ],
           footer: () => h('span', null, [
-            h(ElButton, { onClick: () => { pwVisible.value = false } }, { default: () => '取消' }),
+            h(ElButton, { disabled: pwBusy.value, onClick: () => { pwVisible.value = false } }, { default: () => '取消' }),
             h(ElButton, {
-              type: 'primary', loading: pwBusy.value, disabled: !pwValue.value,
+              type: 'primary', loading: pwBusy.value, disabled: pwBusy.value || !pwValue.value,
               onClick: () => void doResetPassword(),
-            }, { default: () => '确定' }),
+            }, { default: () => pwBusy.value ? '正在保存…' : '确定' }),
           ]),
         }),
         h(ElDialog, {
+          class: 'sp-admin-create-dialog',
           modelValue: createOpen.value,
           'onUpdate:modelValue': (v: boolean) => { createOpen.value = v },
           title: '创建 Team 账号',
         }, {
-          default: () => h(ElForm, { labelPosition: 'top' }, {
-            default: () => [
-              h(ElFormItem, { label: '用户名' }, { default: () => h(ElInput, {
+          default: () => [
+            createError.value ? h(ElAlert, {
+              title: createError.value, type: 'error', showIcon: true, closable: false,
+            }) : null,
+            h(ElForm, { labelPosition: 'top', disabled: createBusy.value }, {
+              default: () => h(ElRow, { gutter: 20 }, [
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '用户名' }, { default: () => h(ElInput, {
                 modelValue: newUsername.value,
                 'onUpdate:modelValue': (v: string) => { newUsername.value = v },
                 autocomplete: 'off',
-              }) }),
-              h(ElFormItem, { label: '显示名' }, { default: () => h(ElInput, {
+              }) })),
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '显示名' }, { default: () => h(ElInput, {
                 modelValue: newDisplayName.value,
                 'onUpdate:modelValue': (v: string) => { newDisplayName.value = v },
                 autocomplete: 'off',
-              }) }),
-              h(ElFormItem, { label: '初始密码' }, { default: () => h(ElInput, {
+              }) })),
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '初始密码' }, { default: () => h(ElInput, {
                 modelValue: newPassword.value,
                 'onUpdate:modelValue': (v: string) => { newPassword.value = v },
                 type: 'password', showPassword: true, autocomplete: 'new-password',
-              }) }),
-              h(ElFormItem, { label: '团队角色' }, { default: () => h(ElSelect, {
-                modelValue: newTeamRole.value,
-                'onUpdate:modelValue': (v: 'dri' | 'member') => { newTeamRole.value = v },
-              }, { default: () => [
-                h(ElOption, { label: '普通成员', value: 'member' }),
-                h(ElOption, { label: 'DRI', value: 'dri' }),
-              ] }) }),
-            ],
-          }),
+              }) })),
+              h(ElCol, { span: 12 }, h(ElFormItem, { label: '团队角色' }, {
+                default: () => h(ElSelect, {
+                  modelValue: newTeamRole.value,
+                  'onUpdate:modelValue': (v: 'dri' | 'member') => { newTeamRole.value = v },
+                }, { default: () => [
+                  h(ElOption, { label: '普通成员', value: 'member' }),
+                  h(ElOption, { label: 'DRI', value: 'dri' }),
+                ] }),
+              })),
+              ]),
+            }),
+          ],
           footer: () => h(ElSpace, null, { default: () => [
-            h(ElButton, { onClick: () => { createOpen.value = false } }, { default: () => '取消' }),
-            h(ElButton, { type: 'primary', loading: createBusy.value, disabled: !newUsername.value || !newPassword.value, onClick: () => void doCreateUser() }, { default: () => '创建' }),
+            h(ElButton, { disabled: createBusy.value, onClick: () => { createOpen.value = false } }, { default: () => '取消' }),
+            h(ElButton, { type: 'primary', loading: createBusy.value, disabled: createBusy.value || !newUsername.value || !newPassword.value, onClick: () => void doCreateUser() }, { default: () => createBusy.value ? '正在创建…' : '创建' }),
+          ] }),
+        }),
+        h(ElDialog, {
+          modelValue: approvalDialogOpen.value,
+          'onUpdate:modelValue': (v: boolean) => { if (!v) closeApproval() },
+          title: approvalDecision.value === 'rejected' ? '拒绝越界请求' : approvalTarget.value?.status === 'approving' ? '重试文件交付' : '批准文件交付',
+          width: 560,
+        }, {
+          default: () => [
+            approvalError.value ? h(ElAlert, { title: approvalError.value, type: 'error', showIcon: true, closable: false }) : null,
+            h(ElAlert, {
+              title: '批准后只会复制该普通文件到团队共享工作区；Agent 只能读取副本，不会获得原始宿主机路径访问权。',
+              type: 'info', showIcon: true, closable: false,
+            }),
+            approvalTarget.value ? h(ElDescriptions, { column: 1, size: 'small', border: true, class: 'sp-approval-details' }, {
+              default: () => [
+                h(ElDescriptionsItem, { label: 'Agent' }, { default: () => approvalTarget.value?.agentId ?? '—' }),
+                h(ElDescriptionsItem, { label: '会话' }, { default: () => approvalTarget.value?.sessionId ?? '全局工作区' }),
+                h(ElDescriptionsItem, { label: '申请路径' }, { default: () => approvalTarget.value?.sourcePath ?? '—' }),
+                h(ElDescriptionsItem, { label: '申请理由' }, { default: () => approvalTarget.value?.reason ?? '—' }),
+              ],
+            }) : null,
+            approvalDecision.value === 'rejected' ? h(ElForm, { labelPosition: 'top', disabled: approvalBusy.value }, {
+              default: () => h(ElFormItem, { label: '拒绝原因（可选）' }, {
+                default: () => h(ElInput, {
+                  modelValue: approvalNote.value,
+                  'onUpdate:modelValue': (v: string) => { approvalNote.value = v },
+                  type: 'textarea', rows: 3, maxlength: 500, showWordLimit: true,
+                  placeholder: '说明拒绝原因，方便申请者调整请求',
+                }),
+              }),
+            }) : null,
+          ],
+          footer: () => h(ElSpace, null, { default: () => [
+            h(ElButton, { disabled: approvalBusy.value, onClick: closeApproval }, { default: () => '取消' }),
+            h(ElButton, {
+              type: approvalDecision.value === 'rejected' ? 'danger' : 'success',
+              loading: approvalBusy.value, disabled: approvalBusy.value,
+              onClick: () => void decideApproval(),
+            }, { default: () => approvalBusy.value ? approvalDecision.value === 'rejected' ? '正在提交…' : '正在交付…' : approvalDecision.value === 'rejected' ? '确认拒绝' : approvalTarget.value?.status === 'approving' ? '重试并复制文件' : '确认批准并复制' }),
           ] }),
         }),
       ])
@@ -732,7 +1468,7 @@ const AdminPage = defineComponent({
 interface PageCtx {
   client: {
     router: {
-      page(options: { path: string; name: string; order?: number; icon?: string; component: unknown }): void
+      page(options: { path: string; name: string; order?: number; icon?: Component | string; component: unknown }): void
     }
   }
 }
@@ -740,8 +1476,23 @@ interface PageCtx {
 export default function main(ctx: PageCtx) {
   ctx.client.router.page({
     path: '/admin',
-    name: '账号管理',
+    name: 'Team 账号',
     order: 900,
-    icon: 'user', component: AdminPage,
+    icon: ICONS.admin,
+    component: AdminPage,
+  })
+  ctx.client.router.page({
+    path: '/admin/runtime',
+    name: '运行与审批',
+    order: 901,
+    icon: ICONS.agents,
+    component: AdminPage,
+  })
+  ctx.client.router.page({
+    path: '/admin/models',
+    name: '模型与服务',
+    order: 902,
+    icon: ICONS.models,
+    component: AdminPage,
   })
 }

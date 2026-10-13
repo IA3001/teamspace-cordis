@@ -106,6 +106,19 @@ export class SqliteSessionStore extends SessionService {
     return this.getSession(id)!
   }
 
+  renameSession(id: string, title: string): Session {
+    const current = this.getSession(id)
+    if (!current) throw new SessionError('not_found', `会议不存在: ${id}`)
+    const normalized = title.trim()
+    if (!normalized || [...normalized].length > 120) {
+      throw new SessionError('invalid_input', '会议标题需为 1–120 个字符')
+    }
+    if (normalized === current.title) return current
+    this.db.prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`)
+      .run(normalized, now(), id)
+    return this.getSession(id)!
+  }
+
   join(input: JoinInput): Membership {
     const role = input.role ?? '成员'
     if (!isRole(role)) {

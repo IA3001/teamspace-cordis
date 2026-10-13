@@ -1,0 +1,189 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "research_date": "2026-10-13",
+  "commit": "d743267388641bc76f17c45ce8b4c231aed1d32c",
+  "commit_authored_at": "2026-10-09T17:31:32+08:00",
+  "package_version": "0.2.1-alpha.2",
+  "shallow": false,
+  "reachable_commits": 21405,
+  "first_parent_commits": 2069,
+  "root_commit": "b67e81ac97647270b3002d78532baf3a5b68cbc3",
+  "root_authored_at": "2026-06-10T22:57:44+08:00",
+  "commit_author_month_counts": {
+    "2026-06": 581,
+    "2026-07": 8297,
+    "2026-08": 6193,
+    "2026-09": 5718,
+    "2026-10": 616
+  },
+  "dated_notes": {
+    "proposed": 41,
+    "archived": 924,
+    "implemented": 251,
+    "rejected": 8
+  },
+  "public_pr_probe": {
+    "deepseek-ai/5946": 404,
+    "deepseek-harness/5946": 404
+  },
+  "platform": {
+    "actions": {
+      "total_count": 58,
+      "sample": [
+        {
+          "id": 36268140918,
+          "name": "uv in /python/sdk - Update #1592951955",
+          "event": "dynamic",
+          "head_sha": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-26T20:02:49Z",
+          "run_started_at": "2026-09-26T20:02:49Z",
+          "updated_at": "2026-09-26T20:03:39Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/36268140918"
+        },
+        {
+          "id": 36183467262,
+          "name": "uv in /python/sdk - Update #1592291310",
+          "event": "dynamic",
+          "head_sha": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-25T20:03:51Z",
+          "run_started_at": "2026-09-25T20:03:51Z",
+          "updated_at": "2026-09-25T20:04:50Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/36183467262"
+        },
+        {
+          "id": 36052449403,
+          "name": "uv in /python/sdk - Update #1590671737",
+          "event": "dynamic",
+          "head_sha": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-24T20:04:53Z",
+          "run_started_at": "2026-09-24T20:04:53Z",
+          "updated_at": "2026-09-24T20:05:50Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/36052449403"
+        },
+        {
+          "id": 35913534154,
+          "name": "uv in /python/sdk - Update #1589232549",
+          "event": "dynamic",
+          "head_sha": "46a7f68b0922371ce7144b668b90e377d8e799f4",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-23T20:04:42Z",
+          "run_started_at": "2026-09-23T20:04:42Z",
+          "updated_at": "2026-09-23T20:05:40Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/35913534154"
+        },
+        {
+          "id": 35778022477,
+          "name": "uv in /python/sdk - Update #1587813436",
+          "event": "dynamic",
+          "head_sha": "00102833dfaee1da9f48a3a8eae9d34005a75218",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-22T20:05:44Z",
+          "run_started_at": "2026-09-22T20:05:44Z",
+          "updated_at": "2026-09-22T20:07:01Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/35778022477"
+        },
+        {
+          "id": 35649407768,
+          "name": "uv in /python/sdk - Update #1586276853",
+          "event": "dynamic",
+          "head_sha": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-21T20:10:32Z",
+          "run_started_at": "2026-09-21T20:10:32Z",
+          "updated_at": "2026-09-21T20:11:29Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/35649407768"
+        },
+        {
+          "id": 35534272553,
+          "name": "uv in /python/sdk - Update #1583841599",
+          "event": "dynamic",
+          "head_sha": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-20T20:03:00Z",
+          "run_started_at": "2026-09-20T20:03:00Z",
+          "updated_at": "2026-09-20T20:04:12Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/35534272553"
+        },
+        {
+          "id": 35466139370,
+          "name": "uv in /python/sdk - Update #1583300442",
+          "event": "dynamic",
+          "head_sha": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-19T20:02:00Z",
+          "run_started_at": "2026-09-19T20:02:00Z",
+          "updated_at": "2026-09-19T20:03:00Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/35466139370"
+        },
+        {
+          "id": 35389437448,
+          "name": "uv in /python/sdk - Update #1582427343",
+          "event": "dynamic",
+          "head_sha": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-18T20:04:24Z",
+          "run_started_at": "2026-09-18T20:04:24Z",
+          "updated_at": "2026-09-18T20:05:18Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/35389437448"
+        },
+        {
+          "id": 35268591513,
+          "name": "uv in /python/sdk - Update #1580708115",
+          "event": "dynamic",
+          "head_sha": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "status": "completed",
+          "conclusion": "failure",
+          "created_at": "2026-09-17T20:04:11Z",
+          "run_started_at": "2026-09-17T20:04:11Z",
+          "updated_at": "2026-09-17T20:06:18Z",
+          "html_url": "https://github.com/deepseek-ai/deepseek-harness/actions/runs/35268591513"
+        }
+      ]
+    },
+    "releases": [
+      {
+        "tag_name": "dsh-v0.2.1-alpha.2",
+        "published_at": "2026-10-09T11:09:26Z",
+        "html_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.2",
+        "prerelease": true
+      },
+      {
+        "tag_name": "dsh-v0.2.1-alpha.1",
+        "published_at": "2026-10-03T06:42:19Z",
+        "html_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.1",
+        "prerelease": true
+      },
+      {
+        "tag_name": "dsh-v0.2.0-rc.2",
+        "published_at": "2026-09-29T09:42:36Z",
+        "html_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.2",
+        "prerelease": true
+      },
+      {
+        "tag_name": "dsh-v0.2.0-rc.1",
+        "published_at": "2026-09-28T12:36:21Z",
+        "html_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.1",
+        "prerelease": true
+      },
+      {
+        "tag_name": "dsh-v0.1.7-rc.2",
+        "published_at": "2026-09-24T14:10:21Z",
+        "html_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.7-rc.2",
+        "prerelease": true
+      }
+    ]
+  },
+  "scope": "All reachable commit subjects/dates and mainline scanned; selected changes and decision records inspected. Not a review of all 21405 diffs."
+}

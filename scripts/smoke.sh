@@ -73,7 +73,7 @@ if [ -n "$sid" ]; then
     events="$(curl -sf -m 5 -b "$JAR" "$BASE/api/sessions/$sid/events")"
     if printf '%s' "$events" | grep -q '【真模型】'; then hit=1; break; fi
     printf '%s' "$events" | grep -q '【占位】' && { printf '  · 模型未配置（占位留痕链路通）\n'; hit=1; break; }
-    if printf '%s' "$events" | grep -q 'Agent 尚未完成此前消息的顺序处理'; then
+    if printf '%s' "$events" | grep -q 'Agent 正在顺序处理更早的会话消息'; then
       bad "@AI 记忆顺序屏障暂停；请检查文字模型连通配置"
       hit=1
       break

@@ -1,0 +1,13 @@
+{
+  "clones": {
+    "4ada6b21f74436de1778a6e8150fe72f9279c6890abeba138930f342f12c52ba": [
+      "plugins/space-auth/index.ts:readToken",
+      "plugins/space-upload/index.ts:readToken"
+    ]
+  },
+  "coverage": {
+    "state.mjs": 0.9142857142857143,
+    "check-graph.mjs": 0.9508196721311475
+  },
+  "scope": "exact normalized blocks of functions >=15 lines; V8 executed-range baseline for two engineering modules only"
+}

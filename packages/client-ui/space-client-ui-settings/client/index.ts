@@ -11,7 +11,7 @@
 //
 // 铁律 1：只用外壳全局注册的 el-*（resolveComponent），样式走 im.css 共享段。
 import { defineComponent, h, onMounted, ref, resolveComponent } from 'vue'
-import { useRpc, useRoute } from '@cordisjs/client'
+import { useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
 import { pageHead, section, field, actionsRow, note, loginGate } from 'space-client-ui-shared/client/console.ts'
 
@@ -31,7 +31,6 @@ const getToken = () => localStorage.getItem(TOKEN_KEY) ?? ''
 const SettingsPage = defineComponent({
   name: 'SpaceSettingsPage',
   setup() {
-    const route = useRoute()
 
     // 拒绝态就地登录（状态必须在 setup 体 —— 渲染闭包里会每次重建）。
     const loginName = ref('')

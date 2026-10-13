@@ -3,7 +3,6 @@
 // 谁提供谁创建：与 command-bus 同款 —— UiRegistry（seam/space-ui 的内存
 // 注册表）只能有一个提供者，各 client-ui 区埿包都往这一个实例登记 Panel，
 // 各自 new 会互相覆盖 ctx.ui。本插件零业务：只负责「让 ctx.ui 存在」。
-import { Service } from 'cordis'
 import type { Context } from 'cordis'
 import { PANEL_SLOTS, UIError, UIService } from 'space-ui'
 import type { Panel, PanelSlot } from 'space-ui'

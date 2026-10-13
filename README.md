@@ -69,7 +69,9 @@ npm start
 
 修改依赖或 workspace 包清单后运行 `npm install` 并提交更新后的 lockfile；npm 会强制要求 Node.js ≥22.5.0。
 
-开发时用 `npm run dev`。服务端口只在 `.env` 配置；启动后可查看 `.env` 中对应的
+使用 `npm start` 或 `npm run dev` 启动服务；支持 `flock` 的环境会阻止同一 `APP_PORT` 的多个实例并发启动。
+可先运行 `npm run stop -- --check` 查看服务与遗留 watcher，再用 `npm run stop` 清理本地进程。
+服务端口只在 `.env` 配置；启动后可查看 `.env` 中对应的
 `APP_PORT`、`DEBUG_PORT`、`CONSOLE_PORT` 和 `TEAMSPACE_PORT`。健康检查路径为 `/healthz`。
 
 常用检查：
@@ -77,8 +79,8 @@ npm start
 ```bash
 npm run gate:static       # 本地快速检查；无需启动服务
 npm start                  # 启动后端和 Web 页面
-npm run gate:runtime      # 完整运行时验收；需要服务已启动
-npm run gate               # 依次运行 static 与 runtime 两组门禁
+npm run gate:runtime      # 隔离运行时验收；自动启动临时服务
+npm run gate               # 在隔离环境运行 static 与 runtime 两组门禁
 npm run verify:ui          # 浏览器交互验收；需要服务和可用 Chromium
 ```
 
@@ -100,3 +102,5 @@ npm run verify:ui          # 浏览器交互验收；需要服务和可用 Chrom
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)：分层模型与依赖方向
 - [`dev-cordis/MODULE-PLAN.md`](dev-cordis/MODULE-PLAN.md)：模块职责与规划
 - [`docs/ROADMAP.md`](docs/ROADMAP.md)：阶段计划和前置条件
+
+CI 平台接入、变更预算与独立审批设置见 [CI 文档](docs/CI.md)。

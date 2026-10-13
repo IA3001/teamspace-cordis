@@ -45,7 +45,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { Context } from 'cordis'
-import { AgentRunCancelledError } from 'space-agent-runtime'
+import { AgentExecutionFailureError, AgentRunCancelledError } from 'space-agent-runtime'
 import { PromptError } from 'space-prompt'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
@@ -55,7 +55,7 @@ import { SqliteAgentCatalog } from '../packages/impl/space-store-sqlite/src/agen
 import { SqliteUserStore } from '../packages/impl/space-store-sqlite/src/users.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
-import { apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
+import { AGENT_PROGRESS_HEARTBEAT_MS, apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
 import { apply as agentDispatcherApply } from '../plugins/agent-runtime-dispatcher/index.ts'
 import { apply as brainApply } from '../plugins/brain-stub/index.ts'
 import { apply as brainLlmApply } from '../plugins/brain-llm/index.ts'
@@ -564,7 +564,7 @@ async function partE(): Promise<void> {
       const tmp = mkdtempSync(join(tmpdir(), 'p8-llm-b-'))
       const db = memoryDb(true)
       const ctx = new Context()
-      const progressEvents: Array<{ sessionId: string; agentId: string; sourceEventId: string | null; phase: string; toolId?: string; delta?: string }> = []
+      const progressEvents: Array<{ sessionId: string; agentId: string; sourceEventId: string | null; phase: string; toolId?: string; toolTitle?: string; ok?: boolean; delta?: string; step?: { inputSummary?: string; resultSummary?: string } }> = []
       ctx.on('space/agent-progress', (update) => progressEvents.push(update))
       new SqliteEventLog(ctx, db)
       const sessions = new SqliteSessionStore(ctx, db)
@@ -580,7 +580,7 @@ async function partE(): Promise<void> {
       runtimeApply(ctx)
       agentDispatcherApply(ctx)
       Object.assign(ctx, { tools: {
-        list: () => [{ id: 'web.search', title: 'Web search', description: 'mock search', capabilities: [] }],
+        list: () => [{ id: 'web.search', title: '网络搜索', description: 'mock search', capabilities: [] }],
         invoke: async () => ({ toolId: 'web.search', ok: true, output: 'MOCK-搜索结果', costMs: 1 }),
       } })
       ctx.agents.get('agent.coder').descriptor.toolIds = ['web.search']
@@ -591,8 +591,10 @@ async function partE(): Promise<void> {
       check('E4a 回执诚实标注【真模型】+ model=mock-model、mode=llm（LLM_SABOTAGE=1 时此处红）',
         r.mode === 'llm' && r.receipt.includes('【真模型】') && r.receipt.includes('model=mock-model'),
         r.receipt)
-      check('E4b 产物两件：任务文件 + artifact-*.md',
-        r.files.length === 2 && r.files[0]!.startsWith('task-') && r.files[1]!.startsWith('artifact-'),
+      check('E4b 产物按任务目录归档：task.md + artifacts/answer.md',
+        r.files.length === 2 && r.files[0]!.startsWith('tasks/') && r.files[0]!.endsWith('/task.md') &&
+          r.files[1]!.startsWith('tasks/') && r.files[1]!.endsWith('/artifacts/answer.md') &&
+          r.files[0]!.split('/')[1] === r.files[1]!.split('/')[1],
         JSON.stringify(r.files))
       const artifact = readFileSync(join(r.root, r.files[1]!), 'utf8')
       check('E4c artifact 含 LLM 输出正文（MOCK-产物正文）', artifact.includes('MOCK-产物正文'), artifact.slice(0, 120))
@@ -613,13 +615,16 @@ async function partE(): Promise<void> {
       const toolRun = await ctx.agentRuntime.perform('agent.coder', 'MOCK-运行搜索工具', {
         sessionId: 's_progress', sourceEventId: 'evt_tool_progress',
       })
-      check('E4d3 工具步骤向人类进度流报告开始/结果，不包含工具参数或输出',
+      const toolProgress = progressEvents.filter((event) => event.sourceEventId === 'evt_tool_progress')
+      const hasToolInput = toolProgress.some((event) => event.phase === 'tool-start' && event.step?.inputSummary?.includes('safe test query'))
+      const hasToolResult = toolProgress.some((event) => event.phase === 'tool-finish' && event.step?.resultSummary?.includes('MOCK-搜索结果'))
+      check('E4d3 人类进度流显示脱敏的工具输入/结果摘要',
         toolRun.toolResults?.length === 1 &&
-          progressEvents.some((event) => event.sourceEventId === 'evt_tool_progress' && event.phase === 'tool-start' && event.toolId === 'web.search') &&
-          progressEvents.some((event) => event.sourceEventId === 'evt_tool_progress' && event.phase === 'tool-finish' && event.ok === true) &&
-          !JSON.stringify(progressEvents.filter((event) => event.sourceEventId === 'evt_tool_progress')).includes('safe test query') &&
-          !JSON.stringify(progressEvents.filter((event) => event.sourceEventId === 'evt_tool_progress')).includes('MOCK-搜索结果') &&
-          !progressEvents.some((event) => event.sourceEventId === 'evt_tool_progress' && event.phase === 'text-delta' && event.delta?.includes('safe test query')))
+          hasToolInput && hasToolResult &&
+          toolRun.worklog?.some((step) => step.kind === 'tool' && step.inputSummary && step.resultSummary) &&
+          !toolProgress.some((event) => event.phase === 'text-delta' && event.delta?.includes('safe test query')),
+        JSON.stringify({ resultCount: toolRun.toolResults?.length, hasToolInput, hasToolResult,
+          worklog: toolRun.worklog?.filter((step) => step.kind === 'tool') }))
 
       // Reproduce Teamspace's data-first creation path with a fresh ID and no
       // Agent-specific plugin: catalog definition → identity → registry → invite
@@ -654,20 +659,53 @@ async function partE(): Promise<void> {
       mock.mode = 'hold'
       const requestsBeforeCancel = mock.requests
       const artifactCountBeforeCancel = readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length
-      const staleRun = ctx.agentRuntime.perform('agent.coder', 'MOCK-撤回时取消运行', { sourceEventId: 'evt_cancel_run' })
-      for (let i = 0; i < 100 && mock.requests === requestsBeforeCancel; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 1))
+      const nativeSetInterval = globalThis.setInterval
+      let triggerHeartbeat: (() => void) | undefined
+      const controlledSetInterval: typeof setInterval = (handler, timeout, ...args) => {
+        if (timeout === AGENT_PROGRESS_HEARTBEAT_MS) {
+          const hold = setTimeout(() => {}, 60_000)
+          triggerHeartbeat = () => handler(...args)
+          return hold as unknown as ReturnType<typeof setInterval>
+        }
+        return nativeSetInterval(handler, timeout, ...args)
       }
-      const cancelledCount = await ctx.agentRuntime.cancelBySource('evt_cancel_run')
+      globalThis.setInterval = controlledSetInterval
       let cancellationError: unknown
-      try { await staleRun } catch (error) { cancellationError = error }
-      await new Promise((resolve) => setImmediate(resolve))
-      check('E4e 撤回来源会 AbortSignal 取消在途模型请求并等待运行收束',
-        cancelledCount === 1 && cancellationError instanceof AgentRunCancelledError &&
-          ctx.agents.get('agent.coder').status === 'idle',
-        `count=${cancelledCount}, error=${(cancellationError as Error | undefined)?.name}, status=${ctx.agents.get('agent.coder').status}`)
-      check('E4f 已取消的旧运行不会写出最终产物',
-        readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length === artifactCountBeforeCancel)
+      try {
+        const staleRun = ctx.agentRuntime.perform('agent.coder', 'MOCK-撤回时取消运行', {
+          sessionId: 's_progress', sourceEventId: 'evt_cancel_run',
+        })
+        for (let i = 0; i < 100 && mock.requests === requestsBeforeCancel; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 1))
+        }
+        const reconnectSnapshot = ctx.agentRuntime.listActiveProgress().find((run) => run.sourceEventId === 'evt_cancel_run')
+        check('E4e0 在途运行可向重连界面提供当前阶段快照',
+          reconnectSnapshot?.phase === 'waiting-model' && reconnectSnapshot.steps.some((step) => step.label === '准备专属工作区') &&
+            reconnectSnapshot.steps.some((step) => step.label === '整理会话、记忆与知识库上下文') &&
+            reconnectSnapshot.steps.some((step) => step.label === '正在请求模型，等待首个响应'),
+          JSON.stringify(reconnectSnapshot && { phase: reconnectSnapshot.phase, steps: reconnectSnapshot.steps }))
+        const priorHeartbeatAt = reconnectSnapshot?.at
+        const priorStepCount = reconnectSnapshot?.steps.length
+        triggerHeartbeat?.()
+        const heartbeatSnapshot = ctx.agentRuntime.listActiveProgress().find((run) => run.sourceEventId === 'evt_cancel_run')
+        const heartbeatEvent = progressEvents.filter((event) => event.sourceEventId === 'evt_cancel_run').at(-1)
+        check('E4e0b 慢模型等待期间心跳刷新最近活动但保留阶段起始时间',
+          Boolean(triggerHeartbeat) && heartbeatSnapshot?.phase === 'waiting-model' && heartbeatSnapshot.at !== priorHeartbeatAt &&
+            heartbeatSnapshot.steps.length === priorStepCount && heartbeatSnapshot.steps.at(-1)?.label === '正在请求模型，等待首个响应' &&
+            heartbeatEvent?.phase === 'waiting-model' && heartbeatEvent.at === heartbeatSnapshot.at,
+          JSON.stringify(heartbeatSnapshot && { phase: heartbeatSnapshot.phase, at: heartbeatSnapshot.at, steps: heartbeatSnapshot.steps }))
+        const cancelledCount = await ctx.agentRuntime.cancelBySource('evt_cancel_run')
+        try { await staleRun } catch (error) { cancellationError = error }
+        await new Promise((resolve) => setImmediate(resolve))
+        check('E4e 撤回来源会 AbortSignal 取消在途模型请求并等待运行收束',
+          cancelledCount === 1 && cancellationError instanceof AgentRunCancelledError &&
+            ctx.agents.get('agent.coder').status === 'idle' && !ctx.agentRuntime.listActiveProgress().some((run) => run.sourceEventId === 'evt_cancel_run'),
+          `count=${cancelledCount}, error=${(cancellationError as Error | undefined)?.name}, status=${ctx.agents.get('agent.coder').status}`)
+        check('E4f 已取消的旧运行不会写出最终产物',
+          readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length === artifactCountBeforeCancel)
+      } finally {
+        globalThis.setInterval = nativeSetInterval
+      }
 
       let staleAnalystReported = false
       let analystLedgerCleared = false
@@ -724,6 +762,15 @@ async function partE(): Promise<void> {
         dropChecks.errorCode === 'http_error' && dropChecks.partialDelta === '已生成但未提交' &&
           dropChecks.finalPhase === 'failed' && dropChecks.agentStatus === 'idle' && dropChecks.newTimelineEvents === 0,
         JSON.stringify(dropChecks))
+      check('E4k 失败异常保留可持久化工作记录且原错误码不变',
+        droppedError instanceof AgentExecutionFailureError &&
+          droppedError.worklog.some((step) => step.label === '执行失败') &&
+          droppedError.worklog.some((step) => step.label === '正在生成回复') &&
+          droppedError.worklog.find((step) => step.label === '执行失败')?.status === 'failed' &&
+          /LLM 流式读取失败/u.test(droppedError.worklog.find((step) => step.label === '执行失败')?.detail ?? '') &&
+          droppedError.code === 'http_error',
+        JSON.stringify({ error: droppedError?.constructor?.name, code: (droppedError as { code?: string })?.code,
+          worklog: (droppedError as AgentExecutionFailureError | undefined)?.worklog }))
       rmSync(tmp, { recursive: true, force: true })
       db.close()
     }
@@ -746,8 +793,8 @@ async function partE(): Promise<void> {
       check('E5 无 LLM → 占位模式诚实标注（mode=stub、含【占位】、无【真模型】、model=null）',
         r.mode === 'stub' && r.receipt.includes('【占位】') && !r.receipt.includes('【真模型】') && r.model === null,
         r.receipt)
-      check('E5b 占位模式仍交付任务文件（机制闭环不回退）',
-        r.files.length === 1 && r.files[0]!.startsWith('task-'))
+      check('E5b 占位模式仍将任务文件归档到独立任务目录',
+        r.files.length === 1 && r.files[0]!.startsWith('tasks/') && r.files[0]!.endsWith('/task.md'))
       rmSync(tmp, { recursive: true, force: true })
       db.close()
     }

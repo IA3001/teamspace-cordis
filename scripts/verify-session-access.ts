@@ -30,6 +30,7 @@ const ctx = {
     activeSessionId: 's-a', owners: ['agent.a'],
     queue: [{ sessionId: 's-a', owner: 'agent.a', position: 1 }, { sessionId: 's-b', owner: 'agent.b', position: 2 }],
   }) },
+  agentRuntime: { listActiveProgress: () => [] },
   on(name: string, listener: Listener) { listeners.set(name, [...(listeners.get(name) ?? []), listener]) },
   effect() {},
 } as never
@@ -45,6 +46,9 @@ for (const id of Object.keys(clients)) {
 }
 await dispatch('space/event-appended', { event: { sessionId: 's-a', id: 'event-secret', seq: 7, text: 'private message body' } })
 await dispatch('space/agent-progress', { sessionId: 's-a', runId: 'run-a', phase: 'text-delta', delta: 'private live answer' })
+await dispatch('space/session-renamed', { sessionId: 's-a', title: 'private new title', updatedAt: '2026-10-11T00:00:00.000Z' })
+// Text deltas are intentionally coalesced before push to avoid flooding sockets.
+await new Promise((resolve) => setTimeout(resolve, 120))
 await dispatch('session-work/changed', (ctx as any).sessionWork.state())
 await flush()
 
@@ -52,8 +56,9 @@ const memberFrames = sent.get('client-a')!
 const nonMemberFrames = sent.get('client-b')!
 assert.ok(memberFrames.some((frame: any) => frame.type === 'space:event' && frame.body.eventId === 'event-secret'))
 assert.ok(memberFrames.some((frame: any) => frame.type === 'space:agent-progress' && frame.body.delta === 'private live answer'))
+assert.ok(memberFrames.some((frame: any) => frame.type === 'space:session-renamed' && frame.body.title === 'private new title'))
 assert.ok(!nonMemberFrames.some((frame: any) => typeof frame === 'object' && JSON.stringify(frame).includes('private')),
-  'session event text and Agent token deltas are never broadcast to non-members')
+  'session event text, title updates, and Agent token deltas are never broadcast to non-members')
 const memberWork = memberFrames.find((frame: any) => frame.type === 'space:session-work') as any
 const outsiderWork = nonMemberFrames.find((frame: any) => frame.type === 'space:session-work') as any
 assert.deepEqual(memberWork.body.queue.map((item: any) => item.sessionId), ['s-a'])

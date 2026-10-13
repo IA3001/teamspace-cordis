@@ -1,0 +1,11 @@
+{
+  "goal": "描述用户可见或工程行为",
+  "acceptance": [
+    "明确可验收结果"
+  ],
+  "scope": [
+    "scripts/",
+    "docs/"
+  ],
+  "surfaces": []
+}

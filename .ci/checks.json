@@ -1,0 +1,697 @@
+{
+  "static": [
+    {
+      "id": "static-00",
+      "script": "verify:ci",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-01",
+      "script": "typecheck",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-02",
+      "script": "verify:startup-lock",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-03",
+      "script": "verify:workdir-quota",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-04",
+      "script": "lint:deps",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-05",
+      "script": "lint:patch",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-06",
+      "script": "lint:layers",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-07",
+      "script": "lint:migrations",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-08",
+      "script": "lint:styles",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-09",
+      "script": "verify:activity-groups",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-10",
+      "script": "verify:user-errors",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-11",
+      "script": "verify:load-state",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-12",
+      "script": "verify:feedback",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-13",
+      "script": "verify:decision-presentation",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-14",
+      "script": "verify:admin-auth",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-15",
+      "script": "verify:admin-plugins",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-16",
+      "script": "verify:settings-encryption",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-17",
+      "script": "verify:session-members",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-18",
+      "script": "verify:session-access",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-19",
+      "script": "verify:staging-delete",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-20",
+      "script": "verify:upload-access",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-21",
+      "script": "verify:session-work",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-22",
+      "script": "verify:agent-speech",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-23",
+      "script": "verify:agent-catalog",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-24",
+      "script": "verify:agent-bootstrap",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-25",
+      "script": "verify:agent-progress",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-26",
+      "script": "verify:agent-explorer",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-27",
+      "script": "verify:agent-teamspace",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-28",
+      "script": "verify:agent-inbox",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-29",
+      "script": "verify:inbox-orchestrator-mix",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-30",
+      "script": "verify:inbox-orchestrator-retry",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-31",
+      "script": "verify:flow-recovery",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-32",
+      "script": "verify:rag",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-33",
+      "script": "verify:embedding-index",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-34",
+      "script": "verify:rag-project",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-35",
+      "script": "verify:decision-commands",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-36",
+      "script": "verify:author-recall",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-37",
+      "script": "verify:empty-message",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-38",
+      "script": "verify:web-search",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-39",
+      "script": "verify:llm-stream",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-40",
+      "script": "verify:backup-restore",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "static-41",
+      "script": "lint:observe",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "verify:docs",
+      "script": "verify:docs",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "docs/",
+        "AGENTS.md",
+        ".agents/",
+        "plugins/",
+        "packages/",
+        "profiles/",
+        "src/",
+        ".ci/",
+        "scripts/",
+        "package"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "verify:development",
+      "script": "verify:development",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "verify:engineering-consumers",
+      "script": "verify:engineering-consumers",
+      "needs": [],
+      "resources": [
+        "database"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "verify:compatibility",
+      "script": "verify:compatibility",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "verify:quality",
+      "script": "verify:quality",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "verify:upgrade-fixtures",
+      "script": "verify:upgrade-fixtures",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 180000
+    }
+  ],
+  "runtime": [
+    {
+      "id": "runtime-00",
+      "script": "check:console",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-01",
+      "script": "check:web",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-02",
+      "script": "verify:release-start",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-03",
+      "script": "wait:runtime-idle",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-04",
+      "script": "verify:orchestrator",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-05",
+      "script": "verify:workdir",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-06",
+      "script": "verify:p8",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-07",
+      "script": "verify:sandbox",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-08",
+      "script": "wait:runtime-idle",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-09",
+      "script": "smoke",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-10",
+      "script": "verify:ui",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "runtime-11",
+      "script": "verify:admin-ui",
+      "needs": [],
+      "resources": [
+        "runtime"
+      ],
+      "paths": [
+        "*"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

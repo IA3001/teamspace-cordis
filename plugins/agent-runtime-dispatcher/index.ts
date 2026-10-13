@@ -1,6 +1,6 @@
 import type { Context } from 'cordis'
 import type { DelegatePayload } from 'space-orchestrator'
-import { AgentRunCancelledError } from 'space-agent-runtime'
+import { AgentExecutionFailureError, AgentRunCancelledError } from 'space-agent-runtime'
 
 export const name = 'agent-runtime-dispatcher'
 export const inject = ['agentCatalog', 'agents', 'agentRuntime', 'orchestrator']
@@ -15,7 +15,9 @@ export function apply(ctx: Context) {
     void ctx.agentRuntime.perform(definition.id, payload.instruction, {
       sessionId: payload.sessionId, sourceEventId: payload.eventId,
     })
-      .then((result) => ctx.orchestrator.reportAgentResult(payload.sessionId, payload.target, result.receipt, result.sourceEventIds))
+      .then((result) => ctx.orchestrator.reportAgentResult(
+        payload.sessionId, payload.target, result.receipt, result.sourceEventIds, result.worklog,
+      ))
       .catch((error: unknown) => {
         if (error instanceof AgentRunCancelledError) {
           ctx.orchestrator.cancelDelegatedTask(payload.sessionId, payload.target, payload.eventId)
@@ -24,10 +26,13 @@ export function apply(ctx: Context) {
         }
         ctx.logger.error('[agent-runtime-dispatcher] Agent 执行失败（%s）：%s', definition.id, (error as Error).message)
         try {
+          const worklog = error instanceof AgentExecutionFailureError ? error.worklog : undefined
           ctx.orchestrator.reportAgentResult(
             payload.sessionId,
             payload.target,
             `【执行失败】${definition.title} 未能完成任务：${(error as Error).message}`,
+            [],
+            worklog,
           )
         } catch (reportError) {
           ctx.logger.error('[agent-runtime-dispatcher] 失败状态无法回报（%s）：%s',

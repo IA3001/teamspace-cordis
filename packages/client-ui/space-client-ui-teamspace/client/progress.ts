@@ -1,6 +1,28 @@
 export const MAX_PROGRESS_PREVIEW_CHARACTERS = 16_000
 
-export type ProgressPreviewPhase = 'started' | 'preparing' | 'processing' | 'tool-start' | 'tool-finish' | 'text-delta' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+export type ProgressPreviewPhase = 'started' | 'preparing' | 'assembling-context' | 'waiting-model' | 'processing' | 'tool-start' | 'tool-finish' | 'text-delta' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+
+export function settlesPendingReply(event: {
+  sourceEventId?: string | null
+  authorKind?: string
+  kind?: string
+}): boolean {
+  return Boolean(event.sourceEventId) && (event.authorKind === 'agent' || event.kind === 'system')
+}
+
+export const SOCKET_SILENCE_WARNING_MS = 45_000
+
+export function shouldWarnAboutSocketSilence(input: {
+  now: number
+  lastActivityAt: number
+  hasAgentWork: boolean
+  pageVisible: boolean
+  socketOpen: boolean
+  state: string
+}): boolean {
+  return input.socketOpen && input.pageVisible && input.hasAgentWork && input.state === 'online' &&
+    input.now - input.lastActivityAt >= SOCKET_SILENCE_WARNING_MS
+}
 
 export interface ProgressPreview {
   text: string

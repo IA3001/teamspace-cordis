@@ -36,14 +36,14 @@ export function decisionPresentation<T extends DecisionEventLike>(
     item.replyTo === latestReview.id && item.kind === 'system' && item.text.startsWith('【复核完成】')))
   const reviewIsCurrent = Boolean(latestReview && (latestDecision?.seq ?? 0) < (latestReview.seq ?? 0))
   if (reviewIsCurrent) return {
-    recommendation: recommendation.trim(), question: question.trim() || '阅读复核意见后，再次执行固定决策命令定案。',
+    recommendation: recommendation.trim(), question: question.trim() || '阅读复核意见后，再次从回复卡片提交决策。',
     title: reviewCompleted
       ? label === '暂缓' ? '复核完成，待 DRI 再次决策' : '复核完成，待 DRI 定案'
       : '正在收集复核意见',
     type: reviewCompleted ? 'info' : 'warning',
   }
   if (!label) return {
-    recommendation: recommendation.trim(), question: question.trim() || '请审阅建议并使用固定决策命令。',
+    recommendation: recommendation.trim(), question: question.trim() || '请审阅建议，并使用下方操作按钮处理。',
     title: '待 DRI 决策', type: 'warning',
   }
   if (label === '暂缓') return {

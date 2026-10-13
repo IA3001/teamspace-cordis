@@ -70,6 +70,9 @@ async function main(): Promise<void> {
   assert.equal(quotaFailure.ok, false)
   assert.match(eventLog.listBySession(invoker.sessionId).at(-1)?.text ?? '', /宿主机磁盘配额/)
   workdir.claim = originalClaim
+  const unorganizedWrite = await tools.invoke('tool.workspace.write', JSON.stringify({ path: 'loose.md', content: 'should be rejected' }), invoker)
+  assert.equal(unorganizedWrite.ok, false, 'workspace writes must follow the standard directory layout')
+  assert.match(unorganizedWrite.output, /工作区目录规范/u)
   await tools.invoke('tool.workspace.write', JSON.stringify({ path: 'notes/result.txt', content: 'personal data' }), invoker)
   const personal = await tools.invoke('tool.workspace.read', JSON.stringify({ path: 'notes/result.txt' }), invoker)
   assert.equal(personal.ok, true)
@@ -163,6 +166,9 @@ async function main(): Promise<void> {
   const executed = await tools.invoke('tool.code.execute', JSON.stringify({ code: 'console.log("sandbox-ok")' }), invoker)
   assert.equal(executed.ok, true, executed.output)
   assert.match(executed.output, /sandbox-ok/)
+  const unorganizedExecution = await tools.invoke('tool.code.execute', JSON.stringify({ code: 'console.log("should not run")', filename: 'loose.mjs' }), invoker)
+  assert.equal(unorganizedExecution.ok, false, 'code execution files must be placed in an organized workspace directory')
+  assert.match(unorganizedExecution.output, /工作区目录规范/u)
   const sandboxUid = await tools.invoke('tool.code.execute', JSON.stringify({ code: 'console.log(process.getuid())' }), invoker)
   assert.equal(sandboxUid.ok, true, sandboxUid.output)
   assert.match(sandboxUid.output, new RegExp(String(typeof process.getuid === 'function' ? process.getuid() : 1000), 'u'),

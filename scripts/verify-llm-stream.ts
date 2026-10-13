@@ -118,6 +118,7 @@ try {
   assert.equal(preview.totalCharacters, MAX_PROGRESS_PREVIEW_CHARACTERS + 9)
   assert.equal(preview.truncated, true)
   assert.match(progressPreviewLabel('text-delta', preview), /仅显示末尾 16000\/16009 字符/u)
+  assert.equal(progressPreviewLabel('waiting-model', { text: '', totalCharacters: 0, truncated: false }), '回复草稿（生成中）')
   assert.match(progressPreviewLabel('failed', preview), /^任务失败（未提交回复草稿）/u)
   assert.match(progressPreviewLabel('cancelled', preview), /^任务已撤回（未提交回复草稿）/u)
   assert.equal(progressPreviewLabel('completed', { text: '完整答复', totalCharacters: 4, truncated: false }), '回复流已完成（预览）')

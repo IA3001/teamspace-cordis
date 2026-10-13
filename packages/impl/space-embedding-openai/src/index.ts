@@ -11,6 +11,7 @@
 //
 // 依赖方向（lint:deps 断言①）：impl 只准依赖 seams —— 本包不依赖任何业务缝。
 import { Service } from 'cordis'
+import { createHash } from 'node:crypto'
 import type { Context } from 'cordis'
 import z from 'schemastery'
 import { SettingsService } from 'space-settings'
@@ -29,7 +30,7 @@ export const EMBED_MODEL_ENV = 'EMBED_MODEL'
 
 /** 向量服务错误（仿 space-llm 的 LlmError 结构，本文件内定义）。 */
 export class EmbeddingError extends Error {
-  constructor(public readonly code: 'not_configured' | 'http_error' | 'timeout' | 'empty_response', message: string) {
+  constructor(public readonly code: 'not_configured' | 'http_error' | 'timeout' | 'empty_response' | 'insufficient_quota', message: string) {
     super(message)
     this.name = 'EmbeddingError'
   }
@@ -70,8 +71,11 @@ declare module 'cordis' {
 export abstract class EmbeddingService extends Service {
   /** 服务是否已配置（三件套齐且 key 非空）。 */
   abstract get configured(): boolean
+  /** Model space identity excludes credentials and includes endpoint/model/dimensions. */
+  abstract get identity(): string
+  abstract get model(): string
   /** 批量向量：返回与 texts 等长的向量数组，顺序一一对应。 */
-  abstract embed(texts: string[]): Promise<number[][]>
+  abstract embed(texts: string[], options?: { expectedIdentity?: string; signal?: AbortSignal }): Promise<number[][]>
 }
 
 export class OpenAiEmbedding extends EmbeddingService {
@@ -113,7 +117,14 @@ export class OpenAiEmbedding extends EmbeddingService {
     return Boolean(key && base && model)
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
+  get identity(): string {
+    const { base, model } = this.resolve()
+    return createHash('sha256').update(JSON.stringify([base.replace(/\/+$/, ''), model, Math.max(0, this.cfg.dimensions ?? 0)])).digest('hex')
+  }
+  get model(): string { return this.resolve().model }
+
+  async embed(texts: string[], options?: { expectedIdentity?: string; signal?: AbortSignal }): Promise<number[][]> {
+    if (options?.expectedIdentity && options.expectedIdentity !== this.identity) throw new EmbeddingError('not_configured', '向量模型已切换，取消旧模型请求')
     const { base, key, model } = this.resolve()
     if (!base || !key || !model) {
       throw new EmbeddingError(
@@ -142,7 +153,7 @@ export class OpenAiEmbedding extends EmbeddingService {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: options?.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         })
       } catch (e) {
         const err = e as Error
@@ -153,6 +164,14 @@ export class OpenAiEmbedding extends EmbeddingService {
       }
       if (!res.ok) {
         const text = await res.text().catch(() => '')
+        let providerCode = ''
+        try {
+          const payload = JSON.parse(text) as { error?: { code?: string; type?: string }; code?: string }
+          providerCode = String(payload.error?.code || payload.error?.type || payload.code || '').toLowerCase()
+        } catch { /* Preserve the normal HTTP failure when the response is not JSON. */ }
+        if (providerCode === 'insufficient_quota') {
+          throw new EmbeddingError('insufficient_quota', `Embedding 返回 ${res.status}：模型可用额度已耗尽；请在供应商控制台检查余额、免费额度与付费设置，或更换有可用额度的供应商。`)
+        }
         throw new EmbeddingError('http_error', `Embedding 返回 ${res.status}（单次不重试）：${text.slice(0, 200)}`)
       }
       let payload: { data?: { index?: number; embedding?: unknown }[] }

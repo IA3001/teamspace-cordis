@@ -4,6 +4,7 @@ import type { Context } from 'cordis'
 import type { ChatMessage } from 'space-llm'
 import type { ToolResult } from 'space-tool'
 import { AgentRunCancelledError } from 'space-agent-runtime'
+import type { AgentWorklogStep } from 'space-agent-runtime'
 
 type ToolRequest = { toolId: string; args: string }
 type ToolEnvelope = { toolCalls?: Array<{ toolId?: unknown; args?: unknown }>; final?: unknown }
@@ -40,16 +41,29 @@ function toRequests(envelope: ToolEnvelope): ToolRequest[] {
 
 function activityArgs(args: string): string {
   try {
-    const value = JSON.parse(args) as Record<string, unknown>
-    const summary: Record<string, unknown> = {}
-    for (const [key, item] of Object.entries(value)) {
-      if (/code|content|password|secret|token|api.?key/i.test(key)) summary[key] = '[已隐藏]'
-      else summary[key] = typeof item === 'string' ? item.slice(0, 120) : item
+    const summarize = (value: unknown, depth = 0, key = ''): unknown => {
+      if (/code|content|password|secret|token|api.?key|credential/i.test(key)) return '[已隐藏]'
+      if (typeof value === 'string') return safeActivityText(value, 120)
+      if (Array.isArray(value)) return depth > 2 ? '[嵌套数据]' : value.slice(0, 8).map((item) => summarize(item, depth + 1))
+      if (value && typeof value === 'object') {
+        if (depth > 2) return '[嵌套数据]'
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 16)
+          .map(([childKey, child]) => [childKey, summarize(child, depth + 1, childKey)]))
+      }
+      return value
     }
-    return JSON.stringify(summary).slice(0, 500)
+    return JSON.stringify(summarize(JSON.parse(args))).slice(0, 500)
   } catch {
     return '[参数不可显示]'
   }
+}
+
+function safeActivityText(value: string, max = 1000): string {
+  return value
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[已隐藏]')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})\b/g, '[已隐藏凭据]')
+    .replace(/((?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[=:]\s*)["']?[^\s,"'&}]+/gi, '$1[已隐藏]')
+    .slice(0, max)
 }
 
 export async function runAgentExecutionGraph(input: {
@@ -61,12 +75,14 @@ export async function runAgentExecutionGraph(input: {
   allowedToolIds: readonly string[]
   messages: ChatMessage[]
   signal?: AbortSignal
-  onProgress?: (phase: 'processing' | 'tool-start' | 'tool-finish' | 'text-delta', toolId?: string, ok?: boolean, delta?: string) => void
+  onProgress?: (phase: 'waiting-model' | 'processing' | 'tool-start' | 'tool-finish' | 'text-delta', toolId?: string, ok?: boolean, delta?: string, step?: Partial<AgentWorklogStep>) => void
 }): Promise<{ answer: string; toolResults: ToolResult[] }> {
   const toolResults: ToolResult[] = []
   const model = async (state: typeof State.State) => {
     if (input.signal?.aborted) throw new AgentRunCancelledError('execution graph')
-    input.onProgress?.('processing')
+    input.onProgress?.('waiting-model', undefined, undefined, undefined, {
+      detail: `已提交 ${state.messages.length} 条上下文消息，等待模型供应商返回首个响应`,
+    })
     let buffered = ''
     let streamFinalText = false
     const streamToHuman = (text: string) => {
@@ -109,7 +125,9 @@ export async function runAgentExecutionGraph(input: {
     const resultMessages: ChatMessage[] = []
     for (const request of state.pending) {
       if (input.signal?.aborted) throw new AgentRunCancelledError('execution graph')
-      input.onProgress?.('tool-start', request.toolId)
+      input.onProgress?.('tool-start', request.toolId, undefined, undefined, {
+        kind: 'tool', status: 'running', inputSummary: activityArgs(request.args),
+      })
       const started = Date.now()
       let result: ToolResult
       if (!input.allowedToolIds.includes(request.toolId)) {
@@ -127,7 +145,10 @@ export async function runAgentExecutionGraph(input: {
       }
       if (input.signal?.aborted) throw new AgentRunCancelledError('execution graph')
       toolResults.push(result)
-      input.onProgress?.('tool-finish', result.toolId, result.ok)
+      input.onProgress?.('tool-finish', result.toolId, result.ok, undefined, {
+        kind: 'tool', status: result.ok ? 'success' : 'failed',
+        resultSummary: safeActivityText(result.output), durationMs: result.costMs,
+      })
       resultMessages.push({
         role: 'user',
         content: `工具结果 ${result.toolId}（${result.ok ? '成功' : `失败:${result.code ?? 'error'}`}）：\n${result.output.slice(0, 8000)}`,
@@ -141,8 +162,8 @@ export async function runAgentExecutionGraph(input: {
           toolCalls: [{
             name: result.toolId,
             args: activityArgs(request.args),
-            result: result.ok ? `成功（${result.output.length} 字符，${result.costMs}ms）` : undefined,
-            err: result.ok ? undefined : `${result.code ?? 'error'}：${result.output.slice(0, 400)}`,
+            result: result.ok ? safeActivityText(result.output, 1200) : undefined,
+            err: result.ok ? undefined : `${result.code ?? 'error'}：${safeActivityText(result.output, 400)}`,
           }],
         })
       }

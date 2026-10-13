@@ -1,4 +1,5 @@
-// space-client-ui-settings —— 模型与接入设置页（2026-10-05 新增包）。
+// @deprecated 旧模型与接入设置页。未加入活动插件组合；当前 API 设置由 /admin 提供。
+// 保留此包用于追溯早期 ctx.settings 设置 UI 的实现。
 //
 // 背景：cordis 面板的原生 schemastery 配置表单对本地 ts 插件渲染不出来
 // （插件页显示「此插件尚未安装」、/config 404），模型接入必须有自己的

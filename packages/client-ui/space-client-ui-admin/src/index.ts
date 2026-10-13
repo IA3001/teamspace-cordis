@@ -1,24 +1,24 @@
-// 后台入口：独立 Admin session；所有 RPC 首参必须是 admin token。
+// 后台入口：按用户决定免登录开放；管理操作使用统一的 open-admin 审计主体。
 import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
 import type {} from '@cordisjs/plugin-loader'
 import type { Entry } from '@cordisjs/plugin-loader'
+import type { AdminPrincipal } from 'space-admin-auth'
 import { IdentityError } from 'space-identity'
 import type { TeamRole } from 'space-identity'
-import { AdminAuthError } from 'space-admin-auth'
-import type { AdminPrincipal } from 'space-admin-auth'
 import type {} from 'space-sandbox-approval'
 import type {} from 'space-agent-catalog'
 
 export const name = 'space-client-ui-admin'
-export const inject = ['webui', 'users', 'settings', 'adminAuth', 'sandboxApproval', 'sandboxApprovalDelivery', 'llm', 'embeddings', 'loader', 'agentCatalog']
+export const inject = ['webui', 'users', 'settings', 'sandboxApproval', 'sandboxApprovalDelivery', 'llm', 'embeddings', 'loader', 'agentCatalog', 'kbIndex']
 
-async function auth(ctx: Context, token: string): Promise<AdminPrincipal | null> {
-  try { return await ctx.adminAuth.verifyToken(String(token ?? '')) }
-  catch { return null }
+async function auth(_ctx: Context, _token: string): Promise<AdminPrincipal> {
+  // The user explicitly chose an open, login-free administration panel.
+  // Keep a stable audit actor so write operations remain attributable in logs.
+  return { id: 'admin-open', username: 'open-admin' }
 }
 function fail(e: unknown): { error: string; detail: string } {
-  if (e instanceof IdentityError || e instanceof AdminAuthError) return { error: e.code, detail: e.message }
+  if (e instanceof IdentityError) return { error: e.code, detail: e.message }
   return { error: 'internal', detail: e instanceof Error ? e.message : String(e) }
 }
 function saveApi(ctx: Context, prefix: string, cfg: { baseURL?: string; model?: string; apiKey?: string }) {
@@ -29,6 +29,84 @@ function saveApi(ctx: Context, prefix: string, cfg: { baseURL?: string; model?: 
 }
 function audit(ctx: Context, adminId: string, action: string, target: string) {
   ctx.logger.info('[admin-audit] admin=%s action=%s target=%s', adminId, action, target)
+}
+
+type ManagedService = 'embedding' | 'webSearch'
+type ManagedServiceProfile = { id: string; name: string }
+function serviceKeys(kind: ManagedService) {
+  return kind === 'embedding' ? ['baseURL', 'model', 'apiKey'] as const : ['baseURL', 'apiKey'] as const
+}
+function servicePrefix(kind: ManagedService) { return kind === 'embedding' ? 'embed' : 'search' }
+function serviceProfilesKey(kind: ManagedService) { return `${servicePrefix(kind)}.profiles` }
+function serviceActiveKey(kind: ManagedService) { return `${servicePrefix(kind)}.activeProfileRef` }
+function serviceProfilePrefix(kind: ManagedService, id: string) { return `${servicePrefix(kind)}.profile.${id}` }
+function readServiceProfiles(ctx: Context, kind: ManagedService) {
+  return ctx.settings.get<ManagedServiceProfile[]>(serviceProfilesKey(kind), []) ?? []
+}
+function profileShape(ctx: Context, kind: ManagedService, profile: ManagedServiceProfile) {
+  const prefix = serviceProfilePrefix(kind, profile.id)
+  const key = ctx.settings.get<string>(`${prefix}.apiKey`, '')
+  return {
+    ...profile,
+    baseURL: ctx.settings.get<string>(`${prefix}.baseURL`, ''),
+    ...(kind === 'embedding' ? { model: ctx.settings.get<string>(`${prefix}.model`, '') } : {}),
+    hasKey: Boolean(key), keyTail: key ? key.slice(-4) : '',
+  }
+}
+function copyServiceProfile(ctx: Context, kind: ManagedService, id: string) {
+  const sourcePrefix = serviceProfilePrefix(kind, id)
+  const targetPrefix = servicePrefix(kind)
+  for (const key of serviceKeys(kind)) {
+    const value = ctx.settings.get<string>(`${sourcePrefix}.${key}`, '')
+    ctx.settings.set(`${targetPrefix}.${key}`, value || undefined)
+  }
+}
+
+function modelId(row: unknown): string {
+  return typeof row === 'string' ? row : row && typeof row === 'object' && 'id' in row ? String((row as { id: unknown }).id) : ''
+}
+
+function isEmbeddingModel(row: unknown): boolean {
+  const id = modelId(row)
+  const metadata = row && typeof row === 'object'
+    ? ['type', 'task', 'model_type', 'modelType', 'capabilities', 'supported_tasks', 'supportedTasks', 'endpoints']
+      .map((key) => (row as Record<string, unknown>)[key])
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .filter((value): value is string => typeof value === 'string')
+      .join(' ')
+      .toLowerCase()
+    : ''
+  if (/embedding|text[-_ ]?embedding|embed(?:ding)?/i.test(metadata)) return true
+  if (/chat|completion|text[-_ ]?generation|language[-_ ]?model/i.test(metadata)) return false
+  return /(?:^|[-_./:])(?:text[-_]?embedding|embedding|embed(?:ding)?|bge|gte|e5|mxbai)(?:[-_./:]|$)/i.test(id) ||
+    /(?:jina|voyage)[-_./:].*(?:embed|embedding)/i.test(id)
+}
+
+async function listProviderModels(baseURLInput: string, apiKey: string, target: 'text' | 'embedding'): Promise<{ ok: true; models: string[] } | { ok: false; detail: string }> {
+  const baseURL = String(baseURLInput ?? '').trim().replace(/\/+$/, '')
+  if (!baseURL || !apiKey) return { ok: false, detail: '请先填写 API 地址和密钥；已保存的密钥可直接使用。' }
+  let url: URL
+  try { url = new URL(`${baseURL}/models`) }
+  catch { return { ok: false, detail: 'API 地址格式无效。' } }
+  if (!['https:', 'http:'].includes(url.protocol)) return { ok: false, detail: 'API 地址必须使用 HTTP 或 HTTPS。' }
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(12000),
+    })
+    if (!response.ok) return { ok: false, detail: `供应商模型列表接口返回 HTTP ${response.status}。请确认 API 地址、密钥及供应商是否提供 OpenAI 兼容的 /models 接口。` }
+    const body = await response.json() as { data?: unknown[]; models?: unknown[]; result?: { data?: unknown[] } }
+    const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : Array.isArray(body?.result?.data) ? body.result.data : []
+    const eligibleRows = target === 'embedding' ? rows.filter(isEmbeddingModel) : rows
+    const models = [...new Set(eligibleRows.map(modelId).filter((id) => /^[\w./:-]{1,200}$/.test(id)))].sort((a, b) => a.localeCompare(b))
+    if (!models.length && target === 'embedding' && rows.length) {
+      return { ok: false, detail: `接口返回了 ${rows.length} 个模型，但未识别到 Embedding 模型。列表会排除普通对话模型；如供应商使用特殊 ID，可在模型名处手动输入。` }
+    }
+    if (!models.length) return { ok: false, detail: '接口可访问，但没有返回可识别的模型 ID（预期为 OpenAI 兼容的 data[].id）。' }
+    return { ok: true, models: models.slice(0, 500) }
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error && error.name === 'TimeoutError' ? '获取模型列表超时（12 秒）。' : '无法连接供应商模型列表接口，请检查地址、网络与 TLS 配置。' }
+  }
 }
 
 function safeConfig(value: unknown, key = ''): unknown {
@@ -56,16 +134,8 @@ export function apply(ctx: Context) {
     baseUrl: import.meta.url,
     source: '../client/index.ts',
     manifest: '../dist/manifest.json',
-    routes: ['/admin'],
+    routes: ['/admin', '/admin/runtime', '/admin/models'],
   }, {
-    async me(token: string) { return auth(ctx, token) },
-    async login(username: string, password: string) {
-      try {
-        const grant = await ctx.adminAuth.login(username, password)
-        return { user: await ctx.adminAuth.verifyToken(grant.token), token: grant.token }
-      } catch (e) { return fail(e) }
-    },
-    async logout(token: string) { try { await ctx.adminAuth.logout(token) } catch { /* idempotent */ } return { ok: true } },
     async users(token: string) {
       if (!(await auth(ctx, token))) return null
       return ctx.users.listAll()
@@ -133,10 +203,48 @@ export function apply(ctx: Context) {
           }
         }),
         activeTextProfileRef: ctx.settings.get<string>('llm.activeProfileRef', ''),
-        embedding: shape('embed'),
-        webSearch: { ...shape('search'), model: '' },
+        embedding: shape(ctx.settings.get<string>('embed.activeProfileRef', '') ? 'embed.profile.default' : 'embed'),
+        embeddingProfiles: readServiceProfiles(ctx, 'embedding').map((profile) => profileShape(ctx, 'embedding', profile)),
+        activeEmbeddingProfileRef: ctx.settings.get<string>('embed.activeProfileRef', ''),
+        webSearch: { ...shape(ctx.settings.get<string>('search.activeProfileRef', '') ? 'search.profile.default' : 'search'), model: '' },
+        webSearchProfiles: readServiceProfiles(ctx, 'webSearch').map((profile) => profileShape(ctx, 'webSearch', profile)),
+        activeWebSearchProfileRef: ctx.settings.get<string>('search.activeProfileRef', ''),
         status: { text: ctx.llm.configured, embedding: ctx.embeddings.configured },
       }
+    },
+    async getEmbeddingIndexStatus(token: string) {
+      if (!(await auth(ctx, token))) return null
+      return ctx.kbIndex.status()
+    },
+    async retryEmbeddingIndex(token: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      ctx.kbIndex.retry()
+      audit(ctx, admin.id, 'retry_embedding_index', 'knowledge_base')
+      return { ok: true }
+    },
+    async fetchTextModels(token: string, input: { target: 'text' | 'embedding' | 'profile' | 'embeddingProfile'; profileId?: string; baseURL?: string; apiKey?: string }) {
+      if (!(await auth(ctx, token))) return null
+      const target = input?.target
+      if (!['text', 'embedding', 'profile', 'embeddingProfile'].includes(target)) return { ok: false, detail: '不支持的模型配置类型。' }
+      const profileId = String(input.profileId ?? '').trim()
+      if ((target === 'profile' || (target === 'embeddingProfile' && profileId)) && !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(profileId)) return { ok: false, detail: '请先填写有效的配置 ID。' }
+      const prefix = target === 'embedding' ? (ctx.settings.get<string>('embed.activeProfileRef', '') ? 'embed.profile.default' : 'embed') : target === 'embeddingProfile' ? `embed.profile.${profileId}`
+        : target === 'profile' ? `llm.profile.${profileId}` : 'llm'
+      const baseURL = String(input?.baseURL ?? '').trim() || ctx.settings.get<string>(`${prefix}.baseURL`, '')
+      const enteredKey = String(input?.apiKey ?? '').trim()
+      const storedKey = ctx.settings.get<string>(`${prefix}.apiKey`, '')
+      const apiKey = enteredKey === '-' ? '' : enteredKey || storedKey
+      const credentialSource = enteredKey === '-'
+        ? '输入框为 -，本次请求未发送密钥'
+        : enteredKey
+          ? enteredKey === storedKey ? '输入框密钥（与已保存密钥一致）' : '输入框中的未保存密钥'
+          : storedKey ? '已保存密钥（输入框留空）' : '未配置密钥'
+      const result = await listProviderModels(baseURL, apiKey, target === 'embedding' || target === 'embeddingProfile' ? 'embedding' : 'text')
+      const detail = !result.ok && result.detail.includes('HTTP 401')
+        ? `${result.detail} 本次使用：${credentialSource}。输入框密钥未保存时，清空输入框可测试已保存密钥；更换密钥后请先保存，再测试。`
+        : result.ok ? undefined : result.detail
+      return { ...result, credentialSource, ...(detail ? { detail } : {}) }
     },
     async saveTextApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string; timeoutMs?: number }) {
       const admin = await auth(ctx, token)
@@ -201,17 +309,105 @@ export function apply(ctx: Context) {
       audit(ctx, admin.id, 'set_default_text_model_profile', id || 'legacy')
       return { ok: true }
     },
+    async saveServiceProfile(token: string, kind: ManagedService, input: { id?: string; name?: string; baseURL?: string; model?: string; apiKey?: string }) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      if (!['embedding', 'webSearch'].includes(kind)) return { ok: false, error: 'invalid_input', detail: '不支持的服务类型。' }
+      const id = String(input.id ?? '').trim()
+      const name = String(input.name ?? '').trim()
+      const baseURL = String(input.baseURL ?? '').trim()
+      const model = String(input.model ?? '').trim()
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id) || ['default', 'new'].includes(id) || !name || !baseURL || (kind === 'embedding' && !model)) {
+        return { ok: false, error: 'invalid_input', detail: kind === 'embedding'
+          ? '配置 ID、名称、Base URL 和模型 ID 均为必填项；ID 仅允许字母、数字、下划线和连字符。'
+          : '配置 ID、名称和 Base URL 均为必填项；ID 仅允许字母、数字、下划线和连字符。' }
+      }
+      const profiles = readServiceProfiles(ctx, kind)
+      const exists = profiles.some((profile) => profile.id === id)
+      if (!exists && profiles.length >= 32) return { ok: false, error: 'limit', detail: '最多保存 32 组供应商配置。' }
+      ctx.settings.set(serviceProfilesKey(kind), exists
+        ? profiles.map((profile) => profile.id === id ? { id, name } : profile)
+        : [...profiles, { id, name }])
+      const prefix = serviceProfilePrefix(kind, id)
+      ctx.settings.set(`${prefix}.baseURL`, baseURL)
+      if (kind === 'embedding') ctx.settings.set(`${prefix}.model`, model)
+      if (input.apiKey === '-') ctx.settings.set(`${prefix}.apiKey`, undefined)
+      else if (typeof input.apiKey === 'string' && input.apiKey.trim()) ctx.settings.set(`${prefix}.apiKey`, input.apiKey.trim())
+      if (ctx.settings.get<string>(serviceActiveKey(kind), '') === id) copyServiceProfile(ctx, kind, id)
+      if (kind === 'embedding') ctx.emit('space/embedding-config-changed')
+      audit(ctx, admin.id, 'save_service_profile', `${kind}:${id}`)
+      return { ok: true }
+    },
+    async activateServiceProfile(token: string, kind: ManagedService, idInput: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      if (!['embedding', 'webSearch'].includes(kind)) return { ok: false, error: 'invalid_input', detail: '不支持的服务类型。' }
+      const id = String(idInput ?? '').trim()
+      let profiles = readServiceProfiles(ctx, kind)
+      if (id === 'default') {
+        if (profiles.some((profile) => profile.id === 'default')) copyServiceProfile(ctx, kind, 'default')
+        ctx.settings.set(serviceActiveKey(kind), '')
+      } else {
+        if (!profiles.some((profile) => profile.id === id)) return { ok: false, error: 'not_found', detail: '供应商配置不存在。' }
+        if (!profiles.some((profile) => profile.id === 'default')) {
+          const fallback = { id: 'default', name: '系统默认供应商' }
+          const base = servicePrefix(kind)
+          for (const key of serviceKeys(kind)) {
+            const value = ctx.settings.get<string>(`${base}.${key}`, '')
+            ctx.settings.set(`${serviceProfilePrefix(kind, 'default')}.${key}`, value || undefined)
+          }
+          profiles = [fallback, ...profiles]
+          ctx.settings.set(serviceProfilesKey(kind), profiles)
+        }
+        copyServiceProfile(ctx, kind, id)
+        ctx.settings.set(serviceActiveKey(kind), id)
+      }
+      audit(ctx, admin.id, 'activate_service_profile', `${kind}:${id}`)
+      if (kind === 'embedding') ctx.emit('space/embedding-config-changed')
+      return { ok: true }
+    },
+    async removeServiceProfile(token: string, kind: ManagedService, idInput: string) {
+      const admin = await auth(ctx, token)
+      if (!admin) return null
+      if (!['embedding', 'webSearch'].includes(kind)) return { ok: false, error: 'invalid_input', detail: '不支持的服务类型。' }
+      const id = String(idInput ?? '').trim()
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id) || id === 'default') return { ok: false, error: 'invalid_input', detail: '系统默认配置不能删除。' }
+      const profiles = readServiceProfiles(ctx, kind)
+      if (!profiles.some((profile) => profile.id === id)) return { ok: false, error: 'not_found', detail: '供应商配置不存在。' }
+      if (ctx.settings.get<string>(serviceActiveKey(kind), '') === id) {
+        if (profiles.some((profile) => profile.id === 'default')) copyServiceProfile(ctx, kind, 'default')
+        ctx.settings.set(serviceActiveKey(kind), '')
+      }
+      ctx.settings.set(serviceProfilesKey(kind), profiles.filter((profile) => profile.id !== id))
+      for (const key of serviceKeys(kind)) ctx.settings.set(`${serviceProfilePrefix(kind, id)}.${key}`, undefined)
+      audit(ctx, admin.id, 'remove_service_profile', `${kind}:${id}`)
+      if (kind === 'embedding') ctx.emit('space/embedding-config-changed')
+      return { ok: true }
+    },
     async saveEmbeddingApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }) {
       const admin = await auth(ctx, token)
       if (!admin) return null
-      saveApi(ctx, 'embed', cfg)
+      saveApi(ctx, ctx.settings.get<string>('embed.activeProfileRef', '') ? 'embed.profile.default' : 'embed', cfg)
+      if (!ctx.settings.get<string>('embed.activeProfileRef', '') && readServiceProfiles(ctx, 'embedding').some((profile) => profile.id === 'default')) {
+        for (const key of serviceKeys('embedding')) {
+          const value = ctx.settings.get<string>(`embed.${key}`, '')
+          ctx.settings.set(`embed.profile.default.${key}`, value || undefined)
+        }
+      }
       audit(ctx, admin.id, 'save_api_config', 'embedding')
+      ctx.emit('space/embedding-config-changed')
       return { ok: true }
     },
     async saveWebSearchApi(token: string, cfg: { baseURL?: string; apiKey?: string }) {
       const admin = await auth(ctx, token)
       if (!admin) return null
-      saveApi(ctx, 'search', cfg)
+      saveApi(ctx, ctx.settings.get<string>('search.activeProfileRef', '') ? 'search.profile.default' : 'search', cfg)
+      if (!ctx.settings.get<string>('search.activeProfileRef', '') && readServiceProfiles(ctx, 'webSearch').some((profile) => profile.id === 'default')) {
+        for (const key of serviceKeys('webSearch')) {
+          const value = ctx.settings.get<string>(`search.${key}`, '')
+          ctx.settings.set(`search.profile.default.${key}`, value || undefined)
+        }
+      }
       audit(ctx, admin.id, 'save_api_config', 'web_search')
       return { ok: true }
     },

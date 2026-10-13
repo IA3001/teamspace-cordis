@@ -75,7 +75,7 @@ async function decision(authorId: string, text: string): Promise<string> {
 }
 async function finalDecision(authorId: string, text: string): Promise<string> {
   const first = await decision(authorId, text)
-  return first.includes('再次执行相同的 /decision') ? decision(authorId, text) : first
+  return first.includes('再次从回复卡片提交决策') ? decision(authorId, text) : first
 }
 
 async function main(): Promise<void> {
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
   assert.equal(eventLog.listBySession('s_decisions').find((event) => event.id === protectedAnswer.id)?.voided, false,
     'non-DRI cannot decide another Agent response')
 
-  assert.match(await decision('u_dec_dri', `/decision pass ${protectedAnswer.id} 已核对`), /再次执行相同的 \/decision/,
+  assert.match(await decision('u_dec_dri', `/decision pass ${protectedAnswer.id} 已核对`), /再次从回复卡片提交决策/,
     'the first final command opens and completes a review without deciding')
   assert.match(await decision('u_dec_dri', `/decision pass ${protectedAnswer.id} 已核对`), /已通过/)
   const approval = eventLog.listBySession('s_decisions').find((event) => event.kind === 'approval')!
@@ -200,7 +200,7 @@ async function main(): Promise<void> {
   assert(eventLog.listBySession('s_decisions').some((event) => event.text.includes('DRI 决策：修改') && event.replyTo === modifyTarget.id),
     'modify decision is recorded as a linked session event')
 
-  console.log('✓ DRI fixed commands enforce session role, retain linked decisions, invalidate source memories, and route targeted redo/modify')
+console.log('✓ DRI decisions enforce session role, retain linked records, invalidate source memories, and route targeted redo/modify')
   db.close()
 }
 

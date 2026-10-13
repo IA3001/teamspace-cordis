@@ -42,9 +42,12 @@ export class RetrievalServiceImpl extends RetrievalService {
     const titles = new Map<string, string>(
       (await this.ctx.kb.listDocuments()).map((d) => [d.id, d.title]),
     )
+    const identity = this.ctx.embeddings.identity
     return vectorRerank(query, keywordHits, {
+      modelIdentity: identity,
+      currentModelIdentity: () => this.ctx.embeddings.identity,
       chunks: await this.ctx.kb.allChunks(),
-      embed: (texts) => this.ctx.embeddings.embed(texts),
+      embed: (texts) => this.ctx.embeddings.embed(texts, { expectedIdentity: identity }),
       topK: limit,
       titles,
     })

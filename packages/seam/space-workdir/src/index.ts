@@ -31,6 +31,20 @@ export interface WorkdirHandle {
   createdAt: number
 }
 
+export interface WorkdirEntry {
+  name: string
+  path: string
+  kind: 'directory' | 'file'
+  size: number
+  modifiedAt: string
+}
+
+export interface WorkdirListing {
+  exists: boolean
+  path: string
+  entries: WorkdirEntry[]
+}
+
 // ── 错误分类法（规律 3：实现与策略不得自造错误串，只能抛这里的错误码）──────
 
 export type WorkdirErrorCode =
@@ -79,4 +93,16 @@ export abstract class WorkdirService extends Service {
   abstract get(agentId: string): WorkdirHandle
 
   abstract list(): WorkdirHandle[]
+
+  /** Read-only, bounded explorer API. Paths are workspace-relative; symlinks are excluded. */
+  abstract browse(agentId: string, relativePath?: string): Promise<WorkdirListing>
+
+  /** Read-only explorer for the team-wide shared workspace, separate from each Agent's private root. */
+  abstract browseShared(relativePath?: string): Promise<WorkdirListing>
+
+  /** Read a small UTF-8 text file from an Agent workspace; binary/oversized files are rejected. */
+  abstract readText(agentId: string, relativePath: string): Promise<string>
+
+  /** Read a small UTF-8 text file from the shared workspace using the same redaction and path rules. */
+  abstract readSharedText(relativePath: string): Promise<string>
 }

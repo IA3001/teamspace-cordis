@@ -13,7 +13,10 @@ import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
 import type { PublicUser } from 'space-identity'
 import type { ReactSummary, SessionEvent } from 'space-event'
-import { AGENT_HISTORY_BOOTSTRAP_MARKER, isAgentVisibleEvent } from 'space-event'
+import {
+  AGENT_HISTORY_BOOTSTRAP_MARKER, AGENT_REVIEW_QUESTION_MARKER,
+  DECISION_REVIEW_REQUEST_MARKER, isAgentVisibleEvent,
+} from 'space-event'
 import { AgentCatalogError } from 'space-agent-catalog'
 import type { AgentDefinition, AgentDefinitionInput, AgentDefinitionPatch } from 'space-agent-catalog'
 import type { PromptTemplate } from 'space-prompt'
@@ -22,7 +25,7 @@ import { handleInbound } from '../../../../plugins/staging-commands/index.ts'
 
 export const name = 'space-client-ui-teamspace'
 // 'memory'：AI 记忆透明面板（memories RPC 经 ctx.memory.recall 读取会话沉淀记忆）。
-export const inject = ['webui', 'ui', 'session', 'eventLog', 'staging', 'commands', 'orchestrator', 'users', 'agents', 'agentCatalog', 'prompts', 'settings', 'memory', 'sessionWork', 'tools']
+export const inject = ['webui', 'ui', 'session', 'eventLog', 'staging', 'commands', 'orchestrator', 'users', 'agents', 'agentCatalog', 'prompts', 'settings', 'memory', 'sessionWork', 'tools', 'workdir', 'agentInbox', 'agentRuntime']
 
 /** token → 用户；无效返回 null（不抛，RPC 层零异常面）。 */
 async function auth(ctx: Context, token: string): Promise<PublicUser | null> {
@@ -51,6 +54,20 @@ async function authTeamHuman(ctx: Context, token: string): Promise<PublicUser | 
 async function sessionMember(ctx: Context, token: string, sessionId: string): Promise<PublicUser | null> {
   const user = await authTeamHuman(ctx, token)
   return user && isMember(ctx, sessionId, user.id) ? user : null
+}
+
+function inboxConsumesEvent(event: { kind: string; text: string; voided: boolean; mentions: string[] }, agentId: string): boolean {
+  if (event.voided) return false
+  if (event.kind === 'message') return !event.text.startsWith(AGENT_REVIEW_QUESTION_MARKER)
+  return event.kind === 'decision' && event.text.startsWith(DECISION_REVIEW_REQUEST_MARKER) && event.mentions.includes(agentId)
+}
+
+function redactInboxText(value: string): string {
+  return value
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_KEY]')
+    .replace(/((?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[=:]\s*)["']?[^\s,"'&}]+/gi, '$1[REDACTED]')
 }
 
 export interface TeamspaceApiConfig {
@@ -160,7 +177,7 @@ export function apply(ctx: Context) {
       baseUrl: import.meta.url,
       source: '../client/index.ts', // 开发态用 —— 我们不启用（A2 构建口径）
       manifest: '../dist/manifest.json', // 生产态用 —— 只走这条
-      routes: ['/teamspace', '/teamspace/agents'],
+      routes: ['/teamspace', '/teamspace/agents', '/teamspace/memories', '/teamspace/workspaces'],
     },
     {
       async me(token: string) {
@@ -180,6 +197,164 @@ export function apply(ctx: Context) {
       async agentDefinitions(token: string): Promise<AgentDefinition[] | null> {
         if (!(await authTeamHuman(ctx, token))) return null
         return ctx.agentCatalog.list()
+      },
+      /** Paginated explorer data for one Agent's durable memory scope. */
+      async agentMemories(token: string, agentId: string, offset = 0, includeInvalidated = false, limit = 20, folderPath = '') {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { ctx.agentCatalog.get(String(agentId)) } catch { return null }
+        try {
+          const result = await ctx.memory.list(`agent:${String(agentId)}`, {
+            offset: Math.max(0, Number(offset) || 0), limit: Math.min(50, Math.max(1, Number(limit) || 20)),
+            includeInvalidated: Boolean(includeInvalidated), folderPath: String(folderPath || '') || undefined, excludeSystem: true,
+          })
+          return {
+            total: result.total,
+            items: result.items.map((item) => ({
+              ...item,
+              text: item.text
+                .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[REDACTED]')
+                .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
+                .replace(/((?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[=:]\s*)["']?[^\s,"'&}]+/gi, '$1[REDACTED]'),
+            })),
+          }
+        } catch { return { total: 0, items: [] } }
+      },
+      async agentMemoryCatalog(token: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        return ctx.agentCatalog.list(true).map(({ id, title, status }) => ({ id, title, status }))
+      },
+      async agentMemoryFolders(token: string, agentId: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { ctx.agentCatalog.get(String(agentId)) } catch { return null }
+        return (await ctx.memory.listFolders(`agent:${String(agentId)}`)).filter((folder) => !folder.path.startsWith('.system'))
+      },
+      async agentMemoryCreateFolder(token: string, agentId: string, name: string, parentPath = '') {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { ctx.agentCatalog.get(String(agentId)) } catch { return null }
+        try { return await ctx.memory.createFolder(`agent:${String(agentId)}`, String(name ?? ''), String(parentPath ?? '')) }
+        catch (error) { return { error: (error as Error).message } }
+      },
+      async agentMemoryMove(token: string, agentId: string, memoryId: string, folderPath: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { ctx.agentCatalog.get(String(agentId)) } catch { return null }
+        try {
+          const item = await ctx.memory.move(`agent:${String(agentId)}`, String(memoryId), String(folderPath ?? ''))
+          return { id: item.id, folderPath: item.folderPath }
+        } catch (error) { return { error: (error as Error).message } }
+      },
+      /** Current progress, pending per-Agent session inboxes, and safe workspace metadata. */
+      async agentWorkspaceOverview(token: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        const definitions = ctx.agentCatalog.list(true)
+        const agents = await Promise.all(definitions.map(async (definition) => {
+          let runtime: ReturnType<typeof ctx.agents.get> | null = null
+          try { runtime = ctx.agents.get(definition.id) } catch { /* archived Agent */ }
+          const listing = await ctx.workdir.browse(definition.id).catch(() => ({ exists: false }))
+          return { id: definition.id, title: definition.title, status: runtime?.status ?? definition.status, workdirAvailable: listing.exists }
+        }))
+        const progress = ctx.agentRuntime.listActiveProgress().map(({
+          delta: _delta, streamText: _streamText, streamCharacterCount: _streamCount,
+          streamTruncated: _streamTruncated, ...run
+        }) => run)
+        const work = ctx.sessionWork.state()
+        const agentIds = new Set(agents.map((agent) => agent.id))
+        const sessions = ctx.session.listSessions().map((session) => ({
+          session,
+          members: ctx.session.listMembers(session.id, true).filter((member) => agentIds.has(member.principalId)),
+          events: ctx.eventLog.listBySession(session.id),
+        }))
+        const inboxes = await Promise.all(agents.map(async (agent) => {
+          const pending: Array<{ sessionId: string; sessionTitle: string; count: number; processedCount: number; cursor: number; latestSeq: number; active: boolean }> = []
+          for (const { session, members, events } of sessions) {
+            if (!members.some((member) => member.principalId === agent.id)) continue
+            const cursor = await ctx.agentInbox.cursor(agent.id, session.id).catch(() => 0)
+            const count = events.filter((event) => event.seq > cursor && inboxConsumesEvent(event, agent.id)).length
+            const processedCount = events.filter((event) => event.seq <= cursor && inboxConsumesEvent(event, agent.id)).length
+            if (count || processedCount) pending.push({ sessionId: session.id, sessionTitle: session.title, count, processedCount, cursor,
+              latestSeq: events.reduce((max, event) => Math.max(max, event.seq), 0), active: ctx.agentInbox.activeSessionId() === session.id })
+          }
+          return { agentId: agent.id, pending }
+        }))
+        return { agents, progress, inboxes, processing: ctx.agentInbox.processing(), activeSessionId: work.activeSessionId,
+          queue: work.queue.map((item) => ({ ...item })) }
+      },
+      /** Paginated, redacted events that this Agent's background inbox has not consumed yet. */
+      async agentWorkspaceInbox(token: string, agentId: string, sessionId: string, page = 1, pageSize = 20) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        const id = String(agentId ?? ''), sid = String(sessionId ?? '')
+        try { ctx.agentCatalog.get(id) } catch { return null }
+        const session = ctx.session.listSessions().find((item) => item.id === sid)
+        if (!session || !ctx.session.listMembers(sid, true).some((member) => member.principalId === id)) return null
+        const cursor = await ctx.agentInbox.cursor(id, sid).catch(() => 0)
+        const allEvents = ctx.eventLog.listBySession(sid)
+        const events = allEvents
+          .filter((event) => event.seq > cursor && inboxConsumesEvent(event, id))
+          .sort((a, b) => a.seq - b.seq)
+        const size = Math.min(50, Math.max(1, Number(pageSize) || 20))
+        const currentPage = Math.max(1, Number(page) || 1)
+        const items = await Promise.all(events.slice((currentPage - 1) * size, currentPage * size).map(async (event) => {
+          const author = event.authorId ? await ctx.users.byId(event.authorId).catch(() => null) : null
+          return {
+            id: event.id, seq: event.seq, at: event.ts, kind: event.kind,
+            author: author?.displayName ?? (event.authorId || '系统'),
+            authorKind: event.authorKind, text: redactInboxText(event.text),
+          }
+        }))
+        return {
+          sessionId: sid, sessionTitle: session.title, total: events.length, page: currentPage, pageSize: size,
+          cursor, latestSeq: allEvents.reduce((max, event) => Math.max(max, event.seq), 0),
+          active: ctx.agentInbox.activeSessionId() === sid, items,
+        }
+      },
+      /** Paginated history already consumed by this Agent's durable inbox cursor. */
+      async agentWorkspaceHistory(token: string, agentId: string, sessionId: string, page = 1, pageSize = 20) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        const id = String(agentId ?? ''), sid = String(sessionId ?? '')
+        try { ctx.agentCatalog.get(id) } catch { return null }
+        const session = ctx.session.listSessions().find((item) => item.id === sid)
+        if (!session || !ctx.session.listMembers(sid, true).some((member) => member.principalId === id)) return null
+        const cursor = await ctx.agentInbox.cursor(id, sid).catch(() => 0)
+        const allEvents = ctx.eventLog.listBySession(sid)
+        const events = allEvents
+          .filter((event) => event.seq <= cursor && inboxConsumesEvent(event, id))
+          .sort((a, b) => b.seq - a.seq)
+        const size = Math.min(50, Math.max(1, Number(pageSize) || 20))
+        const currentPage = Math.max(1, Number(page) || 1)
+        const items = await Promise.all(events.slice((currentPage - 1) * size, currentPage * size).map(async (event) => {
+          const author = event.authorId ? await ctx.users.byId(event.authorId).catch(() => null) : null
+          return {
+            id: event.id, seq: event.seq, at: event.ts, kind: event.kind,
+            author: author?.displayName ?? (event.authorId || '系统'),
+            authorKind: event.authorKind, text: redactInboxText(event.text),
+          }
+        }))
+        return {
+          sessionId: sid, sessionTitle: session.title, total: events.length, page: currentPage, pageSize: size,
+          cursor, latestSeq: allEvents.reduce((max, event) => Math.max(max, event.seq), 0),
+          active: ctx.agentInbox.activeSessionId() === sid, items,
+        }
+      },
+      async agentWorkspaceBrowse(token: string, agentId: string, path = '') {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { ctx.agentCatalog.get(String(agentId)) } catch { return null }
+        try { return await ctx.workdir.browse(String(agentId), String(path ?? '')) }
+        catch (error) { return { error: (error as Error).message } }
+      },
+      async agentWorkspaceRead(token: string, agentId: string, path: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { ctx.agentCatalog.get(String(agentId)) } catch { return null }
+        try { return { text: await ctx.workdir.readText(String(agentId), String(path ?? '')) } }
+        catch (error) { return { error: (error as Error).message } }
+      },
+      async sharedWorkspaceBrowse(token: string, path = '') {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { return await ctx.workdir.browseShared(String(path ?? '')) }
+        catch (error) { return { exists: false, path: String(path ?? ''), entries: [], error: (error as Error).message } }
+      },
+      async sharedWorkspaceRead(token: string, path: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try { return { text: await ctx.workdir.readSharedText(String(path ?? '')) } }
+        catch (error) { return { error: (error as Error).message } }
       },
       async agentTemplates(token: string, includeArchived = false) {
         if (!(await authTeamHuman(ctx, token))) return null
@@ -291,9 +466,36 @@ export function apply(ctx: Context) {
         if (!user) return []
         return ctx.session.listSessions().filter((session) => isMember(ctx, session.id, user.id))
       },
-      async commands(token: string) {
-        if (!(await auth(ctx, token))) return []
-        return ctx.commands.list().map((c) => ({ name: c.name, usage: c.usage, minArgs: c.minArgs, maxArgs: c.maxArgs }))
+      async decide(token: string, sessionId: string, action: string, eventId: string, reason = '') {
+        const user = await sessionMember(ctx, String(token ?? ''), String(sessionId ?? ''))
+        if (!user) return { error: 'not_member', detail: '请登录并加入此会话后再操作' }
+        if (ctx.session.listMembers(sessionId, true).find((member) => member.principalId === user.id)?.role !== 'DRI') {
+          return { error: 'forbidden', detail: '只有本会话 DRI 可以处理 Agent 回复' }
+        }
+        const allowed = new Set(['pass', 'reject', 'modify', 'defer', 'recall', 'redo'])
+        if (!allowed.has(action)) return { error: 'invalid_action', detail: '不支持此决策操作' }
+        try {
+          const rest = [action, String(eventId), String(reason ?? '').trim()].filter(Boolean).join(' ')
+          const reply = await ctx.commands.dispatch(
+            { sessionId, authorId: user.id, arg: '', args: [], raw: '' },
+            { name: 'decision', rest },
+          )
+          return { ok: true, text: reply.text }
+        } catch (e) { return { error: 'decision_failed', detail: (e as Error).message } }
+      },
+      async generateSummary(token: string, sessionId: string) {
+        const user = await sessionMember(ctx, String(token ?? ''), String(sessionId ?? ''))
+        if (!user) return { error: 'not_member', detail: '请登录并加入此会话后再操作' }
+        if (ctx.session.getSession(sessionId)?.status !== 'open') {
+          return { error: 'session_closed', detail: '已结束的会话不能生成新纪要' }
+        }
+        try {
+          const reply = await ctx.commands.dispatch(
+            { sessionId, authorId: user.id, arg: '', args: [], raw: '' },
+            { name: 'summary', rest: '' },
+          )
+          return { ok: true, text: reply.text }
+        } catch (e) { return { error: 'summary_failed', detail: (e as Error).message } }
       },
       // 消息搜索（FTS/LIKE 已封装在 eventLog store；query 为空直接返回 []）。
       async search(token: string, sessionId: string, query: string): Promise<unknown[] | null> {
@@ -358,9 +560,7 @@ export function apply(ctx: Context) {
           return []
         }
       },
-      // 团队待办（2026-10-01）：读取本会话 /todo 的待办（存记忆层 kind='todo'）。
-      // 解析 text JSON（{done,text}）；解析失败的脏条目直接跳过。序号不在这里
-      // 编 —— 前端按 createdAt 升序自行编号（与 /todo 指令同口径）。
+      // 团队待办存记忆层 kind='todo'；操作由协作面板的表单和行内按钮完成。
       async todos(token: string, sessionId: string):
         Promise<Array<{ id: string; done: boolean; text: string; createdAt: string }> | null> {
         if (!(await sessionMember(ctx, String(token ?? ''), String(sessionId ?? '')))) return null
@@ -380,6 +580,48 @@ export function apply(ctx: Context) {
         } catch {
           return [] // memory 未就绪 / recall 抛错：面板显示「暂无待办」
         }
+      },
+      async addTodo(token: string, sessionId: string, rawText: string) {
+        const user = await sessionMember(ctx, String(token ?? ''), String(sessionId ?? ''))
+        if (!user) return { error: 'not_member', detail: '请登录并加入此会话后再操作' }
+        const text = String(rawText ?? '').trim()
+        if (!text || text.length > 500) return { error: 'invalid_text', detail: '待办需为 1–500 个字符' }
+        try {
+          await ctx.memory.remember(`session:${sessionId}`, 'todo', JSON.stringify({ done: false, text }), {
+            weight: 0.8, authorId: user.id,
+          })
+          return { ok: true }
+        } catch (e) { return { error: 'save_failed', detail: (e as Error).message } }
+      },
+      async setTodoDone(token: string, sessionId: string, id: string, done: boolean) {
+        const user = await sessionMember(ctx, String(token ?? ''), String(sessionId ?? ''))
+        if (!user) return { error: 'not_member', detail: '请登录并加入此会话后再操作' }
+        try {
+          const list = await ctx.memory.recall(`session:${sessionId}`, { kind: 'todo', limit: 100 })
+          const target = (Array.isArray(list) ? list : []).find((item) => item.id === String(id))
+          if (!target) return { error: 'not_found', detail: '待办已不存在，请刷新列表' }
+          const payload = JSON.parse(target.text) as { done?: unknown; text?: unknown }
+          if (typeof payload.text !== 'string' || typeof payload.done !== 'boolean') {
+            return { error: 'invalid_item', detail: '待办数据格式无效' }
+          }
+          if (payload.done === Boolean(done)) return { ok: true }
+          await ctx.memory.forget(target.id)
+          await ctx.memory.remember(`session:${sessionId}`, 'todo', JSON.stringify({ done: Boolean(done), text: payload.text }), {
+            weight: 0.8, authorId: user.id,
+          })
+          return { ok: true }
+        } catch (e) { return { error: 'update_failed', detail: (e as Error).message } }
+      },
+      async deleteTodo(token: string, sessionId: string, id: string) {
+        const user = await sessionMember(ctx, String(token ?? ''), String(sessionId ?? ''))
+        if (!user) return { error: 'not_member', detail: '请登录并加入此会话后再操作' }
+        try {
+          const list = await ctx.memory.recall(`session:${sessionId}`, { kind: 'todo', limit: 100 })
+          const target = (Array.isArray(list) ? list : []).find((item) => item.id === String(id))
+          if (!target) return { error: 'not_found', detail: '待办已不存在，请刷新列表' }
+          await ctx.memory.forget(target.id)
+          return { ok: true }
+        } catch (e) { return { error: 'delete_failed', detail: (e as Error).message } }
       },
       // 人类「正在输入」实时指示（2026-10-01）：仅会话成员可发出；事件由
       // space-push 按已认证 socket 用户和成员表定向转发，不落库。

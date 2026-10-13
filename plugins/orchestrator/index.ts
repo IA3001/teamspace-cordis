@@ -63,6 +63,21 @@ export interface Config {
 const DEFAULT_BUDGET = 8
 const PERSISTED_STATE_KEY = 'orchestrator.runtime.v1'
 
+/** Collapse repeated memory-barrier failures into one actionable notice per session. */
+export class InboxPauseNoticeGate {
+  private readonly announcedSessions = new Set<string>()
+
+  shouldAnnounce(sessionId: string): boolean {
+    if (this.announcedSessions.has(sessionId)) return false
+    this.announcedSessions.add(sessionId)
+    return true
+  }
+
+  recovered(sessionId: string): void {
+    this.announcedSessions.delete(sessionId)
+  }
+}
+
 interface PersistedOrchestratorState {
   version: 1
   turns: Array<[string, Turn]>
@@ -75,7 +90,6 @@ interface PersistedOrchestratorState {
   activeDecisions: Array<{ payload: PlanPayload; resetTurn: boolean }>
 }
 
-const now = () => new Date().toISOString()
 
 const staticTurn = (): Turn => ({
   state: 'static',
@@ -469,7 +483,7 @@ export class OrchestratorEngine extends OrchestratorService {
   }
 
   async onPlan(payload: PlanPayload): Promise<StepResult | null> {
-    const { sessionId, authorId, event } = payload
+    const { sessionId, event } = payload
     if (this.decisionReviewHolds.has(sessionId) || this.hasPendingHumanDecision(sessionId)) {
       return this.enqueue(payload, '会话有 Agent 建议正在等待 DRI 决策')
     }
@@ -800,6 +814,7 @@ export class OrchestratorEngine extends OrchestratorService {
   private appendAgentReply(input: {
     sessionId: string; agentId: string; title: string; text: string;
     sourceEventId: string | null; sourceEventIds: string[];
+    worklog?: import('space-agent-runtime').AgentWorklogStep[];
   }): SessionEvent {
     const history = this.ctx.eventLog.listBySession(input.sessionId)
     // Long-term Agent memory may cite events from other sessions. Those sources
@@ -837,7 +852,9 @@ export class OrchestratorEngine extends OrchestratorService {
       kind: 'message',
       text: input.text,
       mentions: [],
-      toolCalls: [],
+      toolCalls: input.worklog?.length
+        ? [{ name: 'agent.worklog', args: JSON.stringify(input.worklog) }]
+        : [],
       replyMode: '',
       sourceEventId: input.sourceEventId,
       sourceEventIds,
@@ -845,7 +862,10 @@ export class OrchestratorEngine extends OrchestratorService {
   }
 
   /** Store a delegated result from a catalog Agent invited to this session. */
-  reportAgentResult(sessionId: string, target: string, text: string, sourceEventIds: string[] = []): SessionEvent {
+  reportAgentResult(
+    sessionId: string, target: string, text: string, sourceEventIds: string[] = [],
+    worklog?: import('space-agent-runtime').AgentWorklogStep[],
+  ): SessionEvent {
     // 同 reportFeedback：账本单一真相源，不卡回合状态（流程轨时序交叠）。
     const t = this.turns.get(sessionId)
     if (!t || !t.delegatedTargets.includes(target)) {
@@ -866,7 +886,7 @@ export class OrchestratorEngine extends OrchestratorService {
     const sourceEventId = this.delegationSources.get(this.delegationKey(sessionId, target))
     const result = this.appendAgentReply({
       sessionId, agentId: agent.descriptor.id, title: agent.descriptor.title,
-      text, sourceEventId: sourceEventId ?? null, sourceEventIds,
+      text, sourceEventId: sourceEventId ?? null, sourceEventIds, worklog,
     })
     this.settleDelegation(sessionId, target)
     return result
@@ -1029,6 +1049,7 @@ export async function waitForMentionedAgentHistory(
 
 export function apply(ctx: Context, config: Config = {}) {
   const engine = new OrchestratorEngine(ctx, config)
+  const inboxPauseNotices = new InboxPauseNoticeGate()
   ctx.on('session-work/changed', () => engine.wakeQueue())
   // 双轨触发 —— 接缝一（/commit 兼容路径，P2 留的接缝，原样保留）：
   ctx.on('staging/plan', (payload) => {
@@ -1042,19 +1063,34 @@ export function apply(ctx: Context, config: Config = {}) {
     const wantsAi = signal.mentions.some((m) => m.startsWith('a_') || memberIds.has(m))
     if (!wantsAi) return
     void waitForMentionedAgentHistory(ctx, signal.sessionId, signal.mentions, signal.event.seq)
-      .then(() => engine.onPlan({
-      sessionId: signal.sessionId,
-      authorId: signal.authorId,
-      event: signal.event,
-      })).catch((error: unknown) => {
+      .then(async () => {
+        inboxPauseNotices.recovered(signal.sessionId)
+        try {
+          await engine.onPlan({
+            sessionId: signal.sessionId,
+            authorId: signal.authorId,
+            event: signal.event,
+          })
+        } catch (error) {
+          ctx.logger.error('[orchestrator] @ Plan 执行失败（session=%s, event=%s）：%s',
+            signal.sessionId, signal.event.id, (error as Error).message)
+        }
+      }, (error: unknown) => {
       ctx.logger.error('[orchestrator] @ 回复前 Agent 消息游标追赶失败（session=%s）：%s',
         signal.sessionId, (error as Error).message)
-      ctx.eventLog.append({
-        id: randomUUID(), sessionId: signal.sessionId, authorId: null, phaseId: null,
-        authorKind: 'system', kind: 'system',
-        text: 'Agent 尚未完成此前消息的顺序处理，本次回复已暂停；请稍后重试。',
-        mentions: [], toolCalls: [], replyMode: '',
-      })
+      if (!inboxPauseNotices.shouldAnnounce(signal.sessionId)) return
+      try {
+        ctx.eventLog.append({
+          id: randomUUID(), sessionId: signal.sessionId, authorId: null, phaseId: null,
+          authorKind: 'system', kind: 'system', sourceEventId: signal.event.id,
+          text: 'Agent 正在顺序处理更早的会话消息；本次 @ 回复已暂停。系统会在后台重试，完成后请重新 @ 发起回复。',
+          mentions: [], toolCalls: [], replyMode: '',
+        })
+      } catch (appendError) {
+        inboxPauseNotices.recovered(signal.sessionId)
+        ctx.logger.error('[orchestrator] 无法显示 Agent 消息同步暂停提示（session=%s）：%s',
+          signal.sessionId, (appendError as Error).message)
+      }
     })
   })
   // 接缝三（结果回流，2026-09-30）：agent 事件落时间线 → 引擎按自治预算

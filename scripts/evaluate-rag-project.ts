@@ -83,8 +83,9 @@ try {
 
   if (withEmbeddings && embeddings) {
     const chunks = await ctx.kb.allChunks()
-    const vectors = await embeddings.embed(chunks.map((chunk: { text: string }) => chunk.text))
-    for (let i = 0; i < chunks.length; i++) await ctx.kb.updateEmbedding(chunks[i]!.chunkId, vectors[i] ?? [])
+    const identity = embeddings.identity
+    const vectors = await embeddings.embed(chunks.map((chunk: { text: string }) => chunk.text), { expectedIdentity: identity })
+    for (let i = 0; i < chunks.length; i++) await ctx.kb.updateEmbedding(chunks[i]!.chunkId, vectors[i] ?? [], identity)
     console.log(`Embedded ${chunks.length} corpus chunks using the configured provider (credentials omitted).`)
     const hybrid = await evaluate('hybrid')
     console.log(`Hybrid retrieval: Hit@3=${(hybrid.hitAt3 * 100).toFixed(1)}% MRR=${hybrid.mrr.toFixed(3)}`)

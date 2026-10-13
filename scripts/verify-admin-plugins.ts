@@ -1,4 +1,4 @@
-// Admin plugin inventory is authenticated, read-only, and never returns secret values.
+// Open Admin plugin operations need no Team token and never return secret values.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import type { Context } from 'cordis'
@@ -19,11 +19,8 @@ let streamedProfile = ''
 let failStreamTest = false
 let agentProfileRefs: Array<{ llmProfileRef: string }> = []
 const ctx = {
+  emit: () => undefined,
   webui: { addEntry: (_entry: unknown, exposed: Record<string, (...args: any[]) => Promise<any>>) => { rpc = exposed } },
-  adminAuth: { verifyToken: async (token: string) => {
-    if (token !== 'admin-session') throw new Error('unauthorized')
-    return { id: 'admin-root', username: 'admin' }
-  } },
   loader: { *entries() { yield* entries } },
   sandboxApproval: {
     list: () => [approval], get: () => approval,
@@ -62,7 +59,7 @@ const ctx = {
 
 apply(ctx)
 assert.ok(rpc)
-assert.equal(await rpc.plugins('invalid-session'), null, 'Team/invalid token cannot read admin-only plugin inventory')
+assert.ok(Array.isArray(await rpc.plugins('')), 'admin inventory is available without a login token')
 const before = JSON.stringify(entries)
 const rows = await rpc.plugins('admin-session') as Array<{ id: string; name: string; status: string; config: Record<string, any> }>
 assert.deepEqual(rows.map((row) => row.id), ['active-plugin', 'disabled-plugin', 'failed-plugin'])
@@ -73,14 +70,13 @@ assert.equal(rows[0].config.apiKey, '已配置（已隐藏）')
 assert.equal(rows[0].config.nested.password, '已配置（已隐藏）')
 assert.equal(JSON.stringify(rows).includes('secret-value'), false)
 assert.equal(JSON.stringify(entries), before, 'inventory endpoint must not mutate loader configuration')
-assert.equal(await rpc.sandboxApprovals('invalid-session'), null, 'approval queue is Admin-only')
+assert.deepEqual(await rpc.sandboxApprovals(''), [approval], 'approval queue is available without a login token')
 assert.deepEqual(await rpc.sandboxApprovals('admin-session'), [approval])
-assert.equal(await rpc.decideSandboxApproval('invalid-session', 'sar_test', 'approved'), null, 'unauthenticated requests cannot decide approvals')
-const decisionResult = await rpc.decideSandboxApproval('admin-session', 'sar_test', 'approved', 'reviewed')
+const decisionResult = await rpc.decideSandboxApproval('', 'sar_test', 'approved', 'reviewed')
 assert.equal(decisionResult.ok, true)
 assert.equal(delivered, true, 'approval copies only through the trusted delivery service')
-assert.equal(decision, 'approved:admin-root:reviewed:approvals/sar_test/input.txt')
-assert.equal(await rpc.saveTextProfile('invalid-session', { id: 'ark-code', name: 'Ark', baseURL: 'https://provider.invalid/v1', model: 'model', apiKey: 'profile-secret' }), null)
+assert.equal(decision, 'approved:admin-open:reviewed:approvals/sar_test/input.txt')
+assert.equal((await rpc.saveTextProfile('', { id: 'ark-code', name: 'Open admin', baseURL: 'https://provider.invalid/v1', model: 'model', apiKey: 'profile-secret' })).ok, true, 'writes are available without a login token')
 assert.equal((await rpc.saveTextProfile('admin-session', {
   id: 'bad-limit', name: 'Invalid cap', baseURL: 'https://provider.invalid/v1', model: 'model', maxOutputTokens: 0,
 })).error, 'invalid_input', 'output token caps must be positive integers')
@@ -96,7 +92,7 @@ assert.deepEqual(apiConfig.textProfiles[0], {
 assert.equal(JSON.stringify(apiConfig).includes('profile-secret'), false, 'profile credentials are never returned by admin config')
 assert.equal((await rpc.testTextProfile('admin-session', 'ark-code')).ok, true)
 assert.equal(testedProfile, 'ark-code')
-assert.equal(await rpc.testTextProfileStream('invalid-session', 'ark-code'), null)
+assert.equal((await rpc.testTextProfileStream('', 'ark-code')).ok, true, 'model operations are available without a login token')
 const streamResult = await rpc.testTextProfileStream('admin-session', 'ark-code')
 assert.equal(streamResult.ok, true)
 assert.match(streamResult.detail, /2 段/u)
@@ -117,5 +113,92 @@ assert.equal((await rpc.removeTextProfile('admin-session', 'ark-code')).ok, true
 assert.equal((await rpc.getApiConfig('admin-session')).activeTextProfileRef, '')
 assert.equal(settingValues.has('llm.profile.ark-code.apiKey'), false, 'removing a profile clears its secret')
 assert.equal(settingValues.has('llm.profile.ark-code.maxOutputTokens'), false, 'removing a profile clears its output cap')
-console.log('✓ Admin plugin inventory, sandbox approvals, and multi-provider API profiles enforce auth and redact credentials')
+for (const kind of ['embedding', 'webSearch'] as const) {
+  const prefix = kind === 'embedding' ? 'embed' : 'search'
+  settingValues.set(`${prefix}.baseURL`, 'https://original.invalid/v1')
+  settingValues.set(`${prefix}.apiKey`, 'original-service-key')
+  if (kind === 'embedding') settingValues.set('embed.model', 'original-embedding')
+  assert.equal((await rpc.saveServiceProfile('', kind, {
+    id: 'alternative', name: 'Alternative', baseURL: 'https://alternative.invalid/v1',
+    model: 'alternative-embedding', apiKey: 'alternative-service-key',
+  })).ok, true, `${kind} supports adding a provider`)
+  let config = await rpc.getApiConfig('')
+  assert.equal(config[kind === 'embedding' ? 'embeddingProfiles' : 'webSearchProfiles'][0].id, 'alternative')
+  assert.ok(!JSON.stringify(config).includes('alternative-service-key'), 'provider credentials never appear in config responses')
+  assert.equal((await rpc.activateServiceProfile('', kind, 'alternative')).ok, true)
+  assert.equal(settingValues.get(`${prefix}.baseURL`), 'https://alternative.invalid/v1', 'activation reaches the runtime configuration')
+  assert.equal(settingValues.get(`${prefix}.apiKey`), 'alternative-service-key')
+  assert.equal((await rpc.activateServiceProfile('', kind, 'default')).ok, true)
+  assert.equal(settingValues.get(`${prefix}.apiKey`), 'original-service-key', 'switching back preserves the original provider')
+  await (kind === 'embedding' ? rpc.saveEmbeddingApi('', { apiKey: 'updated-default-key' }) : rpc.saveWebSearchApi('', { apiKey: 'updated-default-key' }))
+  await rpc.activateServiceProfile('', kind, 'alternative')
+  await rpc.saveServiceProfile('', kind, { id: 'alternative', name: 'Alternative edited', baseURL: 'https://edited.invalid/v1', model: 'edited-embedding', apiKey: '' })
+  assert.equal(settingValues.get(`${prefix}.baseURL`), 'https://edited.invalid/v1', 'editing the active provider updates the live configuration')
+  assert.equal(settingValues.get(`${prefix}.apiKey`), 'alternative-service-key', 'an empty key retains this provider\'s stored key')
+  assert.equal((await rpc.removeServiceProfile('', kind, 'alternative')).ok, true)
+  assert.equal(settingValues.get(`${prefix}.apiKey`), 'updated-default-key', 'deleting the active provider restores the latest default configuration')
+  assert.equal(settingValues.has(`${prefix}.profile.alternative.apiKey`), false, 'deletion clears the removed provider\'s secret')
+}
+let modelRequest: { url: URL; init?: RequestInit } | undefined
+let modelResponseStatus = 200
+let modelResponseBody: unknown = { data: [{ id: 'doubao-seed-2-pro' }, { id: 'ark-code-latest' }] }
+const originalFetch = globalThis.fetch
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  modelRequest = { url: new URL(input instanceof Request ? input.url : input.toString()), init }
+  return new Response(JSON.stringify(modelResponseBody), {
+    status: modelResponseStatus, headers: { 'Content-Type': 'application/json' },
+  })
+}) as typeof fetch
+try {
+  const catalog = await rpc.fetchTextModels('', {
+    target: 'text', baseURL: 'https://ark.cn-beijing.volces.com/api/coding/v3', apiKey: 'coding-plan-api-key',
+  })
+  assert.deepEqual(catalog.models, ['ark-code-latest', 'doubao-seed-2-pro'])
+  assert.equal(catalog.credentialSource, '输入框中的未保存密钥')
+  assert.equal(modelRequest?.url.hostname, 'ark.cn-beijing.volces.com')
+  assert.equal(modelRequest?.url.pathname, '/api/coding/v3/models', 'Ark Coding Plan uses the generic OpenAI-compatible /models path')
+  assert.equal(modelRequest?.init?.method, undefined, 'model listing is a GET request')
+  assert.equal((modelRequest?.init?.headers as Record<string, string>).Authorization, 'Bearer coding-plan-api-key')
+  assert.equal(JSON.stringify(catalog).includes('coding-plan-api-key'), false, 'model-list response never contains credentials')
+  modelResponseBody = { data: [
+    { id: 'doubao-seed-2-pro', type: 'chat' },
+    { id: 'qwen3.7-text-embedding' },
+    { id: 'ark-embed-v1', capabilities: ['embeddings'] },
+  ] }
+  const embedding = await rpc.fetchTextModels('', { target: 'embedding', baseURL: 'https://provider.invalid/v1', apiKey: 'embed-key' })
+  assert.deepEqual(embedding.models, ['ark-embed-v1', 'qwen3.7-text-embedding'], 'Embedding discovery excludes chat models and recognizes metadata and common model IDs')
+  assert.equal(embedding.credentialSource, '输入框中的未保存密钥')
+  assert.equal(modelRequest?.url.pathname, '/v1/models')
+  assert.equal((modelRequest?.init?.headers as Record<string, string>).Authorization, 'Bearer embed-key')
+  settingValues.set('embed.profile.catalog-a.apiKey', 'catalog-a-key')
+  settingValues.set('embed.profile.catalog-b.apiKey', 'catalog-b-key')
+  for (const profileId of ['catalog-a', 'catalog-b']) {
+    const scoped = await rpc.fetchTextModels('', { target: 'embeddingProfile', profileId, baseURL: 'https://provider.invalid/v1', apiKey: '' })
+    assert.equal(scoped.ok, true)
+    assert.equal((modelRequest?.init?.headers as Record<string, string>).Authorization, `Bearer ${profileId}-key`, 'Embedding model discovery uses the selected provider\'s saved key')
+  }
+  const unsaved = await rpc.fetchTextModels('', { target: 'embeddingProfile', profileId: '', baseURL: 'https://provider.invalid/v1', apiKey: '' })
+  assert.equal(unsaved.ok, false, 'an unsaved provider cannot borrow the default provider\'s key')
+  modelResponseBody = { data: [{ id: 'doubao-seed-2-pro', type: 'chat' }] }
+  const noEmbedding = await rpc.fetchTextModels('', { target: 'embedding', baseURL: 'https://provider.invalid/v1', apiKey: 'embed-key' })
+  assert.equal(noEmbedding.ok, false, 'Embedding discovery never presents text-only results as embedding models')
+  assert.match(noEmbedding.detail, /未识别到 Embedding 模型/u)
+  modelResponseBody = { data: [{ id: 'doubao-seed-2-pro' }, { id: 'ark-code-latest' }] }
+  const profile = await rpc.fetchTextModels('', { target: 'profile', profileId: 'custom', baseURL: 'https://provider.invalid/openai/v1/', apiKey: 'profile-key' })
+  assert.equal(profile.ok, true, 'text profiles use generic provider model discovery')
+  assert.equal(profile.credentialSource, '输入框中的未保存密钥')
+  assert.equal(modelRequest?.url.pathname, '/openai/v1/models', 'model discovery preserves a nested OpenAI-compatible Base URL')
+  settingValues.set('llm.apiKey', 'saved-key')
+  modelResponseStatus = 401
+  const rejectedDraft = await rpc.fetchTextModels('', { target: 'text', baseURL: 'https://provider.invalid/v1', apiKey: 'autofilled-account-password' })
+  assert.equal(rejectedDraft.credentialSource, '输入框中的未保存密钥')
+  assert.match(rejectedDraft.detail, /输入框中的未保存密钥/u)
+  assert.equal(JSON.stringify(rejectedDraft).includes('autofilled-account-password'), false, '401 diagnostics describe key origin without exposing key values')
+  const rejectedSaved = await rpc.fetchTextModels('', { target: 'text', baseURL: 'https://provider.invalid/v1', apiKey: '' })
+  assert.equal(rejectedSaved.credentialSource, '已保存密钥（输入框留空）')
+  assert.match(rejectedSaved.detail, /已保存密钥（输入框留空）/u)
+} finally {
+  globalThis.fetch = originalFetch
+}
+console.log('✓ Open Admin operations and generic OpenAI-compatible model discovery for text, embedding, profiles, and Ark Coding Plan are covered')
 execFileSync(process.execPath, ['scripts/record-action.mjs', 'verify-admin-plugins', '{"ok":true}'], { stdio: 'inherit' })

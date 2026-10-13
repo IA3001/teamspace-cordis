@@ -19,13 +19,13 @@
 // 依赖方向（lint:deps 断言①）：impl 只准依赖 seams —— 本包依赖
 // space-workdir（契约）+ space-agent（入驻名单校验）。
 import { mkdirSync, rmSync } from 'node:fs'
-import { dirname, join, normalize, resolve, sep } from 'node:path'
+import { mkdir, lstat, readdir, readFile } from 'node:fs/promises'
+import { join, normalize, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { Service } from 'cordis'
 import type { Context } from 'cordis'
 import { WorkdirError, WorkdirService } from 'space-workdir'
-import type { WorkdirHandle } from 'space-workdir'
+import type { WorkdirEntry, WorkdirHandle, WorkdirListing } from 'space-workdir'
 
 const execFileAsync = promisify(execFile)
 export interface WorkdirQuotaOptions {
@@ -36,6 +36,7 @@ export interface WorkdirQuotaOptions {
 export class LocalWorkdirService extends WorkdirService {
   /** agentId → handle（进程内台账；目录在磁盘，重启后按需重建台账由 claim 补登）。 */
   private readonly handles = new Map<string, WorkdirHandle>()
+  private readonly preparedRoots = new Set<string>()
 
   constructor(
     ctx: Context,
@@ -52,6 +53,10 @@ export class LocalWorkdirService extends WorkdirService {
 
   private rootOf(agentId: string): string {
     return join(resolve(this.dataDir), 'workdirs', this.dirNameOf(agentId))
+  }
+
+  private sharedRoot(): string {
+    return join(resolve(this.dataDir), 'shared-workspace')
   }
 
   async claim(agentId: string): Promise<WorkdirHandle> {
@@ -82,6 +87,10 @@ export class LocalWorkdirService extends WorkdirService {
     }
     try {
       mkdirSync(root, { recursive: true })
+      for (const directory of ['projects', 'tasks', 'scripts', 'notes']) {
+        mkdirSync(join(root, directory), { recursive: true })
+      }
+      this.preparedRoots.add(root)
     } catch (e) {
       throw new WorkdirError('cleanup_failed', `创建工作区目录失败：${(e as Error).message}`)
     }
@@ -152,6 +161,102 @@ export class LocalWorkdirService extends WorkdirService {
 
   list(): WorkdirHandle[] {
     return [...this.handles.values()].sort((a, b) => a.agentId.localeCompare(b.agentId))
+  }
+
+  private async safeTargetIn(rootPath: string, relativePath = ''): Promise<string> {
+    if (relativePath.includes('\\') || relativePath.startsWith('/')) throw new Error('工作区路径必须是相对路径')
+    const root = resolve(rootPath)
+    const target = resolve(root, normalize(relativePath))
+    if (target !== root && !target.startsWith(root + sep)) throw new Error('路径越出工作区边界')
+    try {
+      const rootInfo = await lstat(root)
+      if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) throw new Error('工作区根目录无效')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    let current = root
+    for (const part of relativePath.split('/').filter(Boolean)) {
+      current = join(current, part)
+      try {
+        if ((await lstat(current)).isSymbolicLink()) throw new Error('工作区浏览不跟随符号链接')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') break
+        throw error
+      }
+    }
+    return target
+  }
+
+  private async browseRoot(base: string, relativePath = ''): Promise<WorkdirListing> {
+    const target = await this.safeTargetIn(base, relativePath)
+    try {
+      if (!(await lstat(base)).isDirectory()) return { exists: false, path: relativePath, entries: [] }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { exists: false, path: relativePath, entries: [] }
+      throw error
+    }
+    let dir
+    try { dir = await lstat(target) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { exists: true, path: relativePath, entries: [] }
+      throw error
+    }
+    if (!dir.isDirectory()) throw new Error('只能浏览工作区目录')
+    const hidden = /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.ssh|\.aws|\.gnupg|id_(?:rsa|ed25519)|credentials?(?:\..*)?|.*(?:secret|token|credential|private[-_]?key).*)$/i
+    const rows = await readdir(target, { withFileTypes: true })
+    const entries: WorkdirEntry[] = []
+    for (const row of rows) {
+      if (hidden.test(row.name)) continue
+      const childPath = join(target, row.name)
+      const info = await lstat(childPath)
+      if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) continue
+      const path = relativePath ? `${relativePath}/${row.name}` : row.name
+      entries.push({ name: row.name, path, kind: info.isDirectory() ? 'directory' : 'file', size: info.size, modifiedAt: info.mtime.toISOString() })
+    }
+    entries.sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name))
+    return { exists: true, path: relativePath, entries: entries.slice(0, 500) }
+  }
+
+  async browse(agentId: string, relativePath = ''): Promise<WorkdirListing> {
+    const root = this.rootOf(agentId)
+    if (!this.preparedRoots.has(root)) {
+      try {
+        const info = await lstat(root)
+        if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('工作区根目录无效')
+        await Promise.all(['projects', 'tasks', 'scripts', 'notes'].map((directory) => mkdir(join(root, directory), { recursive: true })))
+        this.preparedRoots.add(root)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    return this.browseRoot(root, relativePath)
+  }
+
+  async browseShared(relativePath = ''): Promise<WorkdirListing> {
+    return this.browseRoot(this.sharedRoot(), relativePath)
+  }
+
+  private async readTextFromRoot(root: string, relativePath: string): Promise<string> {
+    if (!relativePath || relativePath.split('/').some((part) => /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.ssh|\.aws|\.gnupg|id_(?:rsa|ed25519)|credentials?(?:\..*)?|.*(?:secret|token|credential|private[-_]?key).*)$/i.test(part))) {
+      throw new Error('该文件类型不允许在工作区浏览器中预览')
+    }
+    const target = await this.safeTargetIn(root, relativePath)
+    const info = await lstat(target)
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error('仅支持预览普通文件')
+    if (info.size > 256 * 1024) throw new Error('文件超过 256 KB，不能在线预览')
+    const content = await readFile(target)
+    if (content.includes(0)) throw new Error('二进制文件不能在线预览')
+    return content.toString('utf8')
+      .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[REDACTED]')
+      .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
+      .replace(/((?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[=:]\s*)["']?[^\s,"'&}]+/gi, '$1[REDACTED]')
+  }
+
+  async readText(agentId: string, relativePath: string): Promise<string> {
+    return this.readTextFromRoot(this.rootOf(agentId), relativePath)
+  }
+
+  async readSharedText(relativePath: string): Promise<string> {
+    return this.readTextFromRoot(this.sharedRoot(), relativePath)
   }
 }
 

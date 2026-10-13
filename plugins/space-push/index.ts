@@ -11,6 +11,8 @@
 // ctx.client.socket 上按 type 分发（见 space-client-ui-teamspace client）。
 import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
+import type {} from 'space-message'
+import type { AgentProgressUpdate } from 'space-agent-runtime'
 
 interface ClientIdentity { token: string; userId: string }
 interface RpcRequest { args?: unknown[] }
@@ -37,11 +39,15 @@ function isMember(ctx: Context, sessionId: string, userId: string): boolean {
 }
 
 export const name = 'space-push'
-export const inject = ['webui', 'sessionWork', 'users', 'session']
+export const inject = ['webui', 'sessionWork', 'users', 'session', 'agentRuntime']
 
 export function apply(ctx: Context) {
   const identities = new Map<string, ClientIdentity>()
   const generations = new Map<string, number>()
+  const pendingText = new Map<string, AgentProgressUpdate>()
+  const textTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const progressRetentionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const progressQueues = new Map<string, Promise<void>>()
   const rpcHandler = ctx.webui.listeners['rpc:request']
   if (rpcHandler) {
     const wrapped = async function (this: { id: string }, body: RpcRequest) {
@@ -52,7 +58,18 @@ export function apply(ctx: Context) {
         try {
           const user = await ctx.users.verifyToken(token)
           if (generations.get(this.id) === generation && user.kind === 'human') {
+            const prior = identities.get(this.id)
+            const needsProgressSnapshot = !prior || prior.userId !== user.id || prior.token !== token
             identities.set(this.id, { token, userId: user.id })
+            if (needsProgressSnapshot) {
+              const client = ctx.webui.clients[this.id]
+              for (const snapshot of ctx.agentRuntime.listActiveProgress()) {
+                if (isMember(ctx, snapshot.sessionId, user.id)) {
+                  try { client?.send({ type: 'space:agent-progress-snapshot', body: snapshot }) }
+                  catch { /* Reconnect hydration is best-effort; the next authenticated RPC retries it. */ }
+                }
+              }
+            }
           } else if (generations.get(this.id) === generation) identities.delete(this.id)
         } catch {
           if (generations.get(this.id) === generation) identities.delete(this.id)
@@ -82,12 +99,30 @@ export function apply(ctx: Context) {
     }))
   }
 
+  function queueProgress(update: AgentProgressUpdate) {
+    const previous = progressQueues.get(update.runId) ?? Promise.resolve()
+    const next = previous.then(() => sendToSession(update.sessionId, 'space:agent-progress', update))
+    progressQueues.set(update.runId, next.catch(() => {}))
+  }
+
+  function flushTextProgress(runId: string) {
+    const timer = textTimers.get(runId)
+    if (timer) clearTimeout(timer)
+    textTimers.delete(runId)
+    const update = pendingText.get(runId)
+    pendingText.delete(runId)
+    if (update) queueProgress(update)
+  }
+
   ctx.on('space/event-appended', ({ event }) => {
     // Payloads carry only an opaque event pointer. The authenticated session RPC
     // returns content after checking active membership.
     void sendToSession(event.sessionId, 'space:event', {
       sessionId: event.sessionId, eventId: event.id, seq: event.seq,
     })
+  })
+  ctx.on('space/session-renamed', (update) => {
+    void sendToSession(update.sessionId, 'space:session-renamed', update)
   })
   ctx.on('session-work/changed', async (state) => {
     await Promise.all(Object.entries(ctx.webui.clients).map(async ([clientId, client]) => {
@@ -104,11 +139,49 @@ export function apply(ctx: Context) {
       try { client.send({ type: 'space:session-work', body: filtered }) } catch { /* best-effort */ }
     }))
   })
-  ctx.on('space/agent-progress', (update) => {
-    void sendToSession(update.sessionId, 'space:agent-progress', update)
+  ctx.on('space/agent-progress', (update: AgentProgressUpdate) => {
+    if (update.phase !== 'text-delta') {
+      flushTextProgress(update.runId)
+      queueProgress(update)
+      if (['completed', 'failed', 'cancelled'].includes(update.phase)) {
+        const timer = setTimeout(() => {
+          progressQueues.delete(update.runId)
+          progressRetentionTimers.delete(update.runId)
+        }, 60_000)
+        timer.unref?.()
+        progressRetentionTimers.set(update.runId, timer)
+      }
+      return
+    }
+    const pending = pendingText.get(update.runId)
+    pendingText.set(update.runId, {
+      ...update,
+      delta: `${pending?.delta ?? ''}${update.delta ?? ''}`,
+    })
+    if (!textTimers.has(update.runId)) {
+      textTimers.set(update.runId, setTimeout(() => flushTextProgress(update.runId), 100))
+    }
+  })
+  ctx.on('space/plan', (signal) => {
+    if (!signal.mentions.length) return
+    void sendToSession(signal.sessionId, 'space:reply-pending', {
+      sessionId: signal.sessionId,
+      sourceEventId: signal.event.id,
+      authorId: signal.authorId,
+      mentions: signal.mentions,
+      at: new Date().toISOString(),
+    })
   })
   ctx.on('space/typing', (update) => {
     void sendToSession(update.sessionId, 'space:typing', update)
+  })
+  ctx.effect(() => () => {
+    for (const timer of textTimers.values()) clearTimeout(timer)
+    for (const timer of progressRetentionTimers.values()) clearTimeout(timer)
+    textTimers.clear()
+    progressRetentionTimers.clear()
+    pendingText.clear()
+    progressQueues.clear()
   })
   console.log(`[${name}] 就绪：按会话成员鉴权推送事件、Agent 进度与输入状态`)
 }

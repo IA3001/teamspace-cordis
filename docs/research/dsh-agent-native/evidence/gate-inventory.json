@@ -1,0 +1,1318 @@
+{
+  "ci-static": [
+    {
+      "id": "runtime-closure",
+      "command": "pnpm run verify-runtime-closure",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "default-product-isolation",
+      "command": "pnpm run verify-default-product-isolation",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "product-use",
+      "command": "pnpm run verify-product-use",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "official-bundle-catalog",
+      "command": "pnpm run verify-official-bundle-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "application-entrypoints",
+      "command": "pnpm run verify-application-entrypoints",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "constraints",
+      "command": "pnpm run constraints",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-dependencies",
+      "command": "pnpm run verify-package-dependencies",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "dsh-package-licenses",
+      "command": "pnpm run verify-dsh-package-licenses",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-meta",
+      "command": "pnpm run verify-package-meta",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-config",
+      "command": "pnpm run verify-cordis-config",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "optional-dependency-imports",
+      "command": "pnpm run verify-optional-dependency-imports",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-packages",
+      "command": "pnpm run verify-client-packages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-ui-i18n",
+      "command": "pnpm run verify-client-ui-i18n",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-route-resolution",
+      "command": "pnpm run verify-client-route-resolution",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "no-bare-dispatcher",
+      "command": "pnpm run verify-no-bare-dispatcher",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "plugin-record-callers",
+      "command": "pnpm run verify-plugin-record-callers",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "no-unknown-casts",
+      "command": "pnpm run verify-no-unknown-casts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "approval-policy",
+      "command": "pnpm run test:approval-policy",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "issue-management",
+      "command": "pnpm run test:issue-management",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "docs-site-build",
+      "command": "pnpm run docs:build:mpa",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-graphs",
+      "command": "pnpm run verify-doc-graphs",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cli-help",
+      "command": "pnpm run verify-cli-help",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "markdown-links",
+      "command": "pnpm run verify-md-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "type-equivalence",
+      "command": "pnpm run verify-type-equiv",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-catalog",
+      "command": "pnpm run verify-cordis-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-inspect-catalog",
+      "command": "pnpm run verify-cordis-inspect-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "workflow-guest",
+      "command": "pnpm run verify-workflow-guest",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "mermaid",
+      "command": "pnpm run verify-mermaid",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-pairing",
+      "command": "pnpm run verify-translation-pairing",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "markdown-wrap",
+      "command": "pnpm run verify-md-wrap",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-catalog",
+      "command": "pnpm run verify-client-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "export-jsdoc",
+      "command": "pnpm run verify-export-jsdoc",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "tool-catalog",
+      "command": "pnpm run verify-tool-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "config-catalog",
+      "command": "pnpm run verify-config-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "plugin-packages",
+      "command": "pnpm run verify-plugin-packages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "dependency-catalog",
+      "command": "pnpm run verify-dependency-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-catalog",
+      "command": "pnpm run verify-persistence-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-changes",
+      "command": "pnpm run verify-persistence-changes",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-releases",
+      "command": "pnpm run verify-persistence-releases",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-formats",
+      "command": "pnpm run verify-persistence-formats",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "session-format-catalog",
+      "command": "pnpm run verify-session-format-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "public-repository-links",
+      "command": "pnpm run verify-public-repository-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "repository-references",
+      "command": "pnpm run verify-repository-references",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "concrete-terms",
+      "command": "pnpm run verify-concrete-terms",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-refs",
+      "command": "pnpm run verify-doc-refs",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "subsystem-pages",
+      "command": "pnpm run verify-subsystem-pages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-paths",
+      "command": "pnpm run verify-package-paths",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "tsconfig-paths",
+      "command": "pnpm run verify-tsconfig-paths",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "config-source-ownership",
+      "command": "pnpm run verify-config-source-ownership",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-summaries",
+      "command": "pnpm run verify-package-readme-summaries",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-model-experience",
+      "command": "pnpm run verify-package-readme-model-experience",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-classification",
+      "command": "pnpm run verify-agent-note-classification",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-format",
+      "command": "pnpm run verify-agent-note-format",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "archived-agent-notes",
+      "command": "pnpm run verify-archived-agent-notes",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "skill-invocation-metadata",
+      "command": "pnpm run verify-skill-invocation-metadata",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-prompt",
+      "command": "pnpm run verify-translation-prompt",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-budgets",
+      "command": "pnpm run verify-doc-budgets",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "upgrade-guides",
+      "command": "pnpm run verify-upgrade-guides",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-standard-tests",
+      "command": "pnpm exec vitest run scripts/doc-standard.spec.ts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "docs-site-projection",
+      "command": "pnpm exec vitest run scripts/project-doc-site.spec.ts scripts/verify-doc-site-fragments.spec.ts website/tests/mermaid-viewer.spec.ts website/tests/image-viewer.spec.ts website/tests/code-groups.spec.ts website/tests/page-markdown-actions.spec.ts website/tests/raw-markdown.spec.ts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-limitations",
+      "command": "pnpm run verify-package-readme-limitations",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "module-graph",
+      "command": "pnpm run verify-module-graph",
+      "needs": [],
+      "allowFailure": false
+    }
+  ],
+  "ci-coverage": [
+    {
+      "id": "native-system",
+      "command": "pnpm run build:native-system",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "coverage",
+      "command": "pnpm exec vitest run --coverage",
+      "needs": [
+        "native-system"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "coverage-exempt-heavy",
+      "command": "pnpm exec vitest run packages/typert/ packages/experimental/webworker-runtime/tests/ scripts/install-lefthook.spec.ts scripts/oxlint-contract.spec.ts scripts/change-scope.spec.ts packages/experimental/webworker-packer/tests/image-loadable.spec.ts",
+      "needs": [
+        "native-system"
+      ],
+      "allowFailure": false
+    }
+  ],
+  "ci-consumers": [
+    {
+      "id": "build",
+      "command": "pnpm run build",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "node-compat",
+      "command": "pnpm run check:node-compat",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "publint",
+      "command": "pnpm run publint",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "lint-and-duplication",
+      "command": "pnpm run check:ci:lint:contracts-ready",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "snapshot",
+      "command": "pnpm run test:snapshot",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "expected-output",
+      "command": "pnpm run test:expected",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "web-snapshot",
+      "command": "DSH_SNAPSHOT=replay pnpm run test:web:built",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-typecheck",
+      "command": "pnpm run doc-typecheck:contracts-ready",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "node-next-types",
+      "command": "pnpm run verify-node-next-types",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "built-bin-smoke",
+      "command": "pnpm exec vitest run --config vitest.e2e.config.ts apps/cli/tests/profiles/headless/tests/keyless-smoke.e2e.ts apps/cli/tests/profiles/headless/tests/source-tool.built.e2e.ts apps/cli/tests/built-bin.e2e.ts apps/desktop/tests/acl-skill.built.e2e.ts packages/host/directory-picker-native/tests/built-worker.e2e.ts packages/sdk/server/tests/built-scope-carrier.e2e.ts packages/deliverables/tool-present/tests/built-errors.e2e.ts packages/subprocess/subprocess-local/tests/spawn-runner-built.e2e.ts packages/subagent/subagent-codex/tests/loader-composition.e2e.ts packages/subagent/subagent-claude-code/tests/loader-composition.e2e.ts packages/api/remotes/tests/built-lib.e2e.ts packages/experimental/agent-team/tests/built-lib.e2e.ts packages/workflow/workflow-ptc/tests/built-runtime.e2e.ts packages/ptc-runtime/ptc-runtime-node/tests/built-lib.e2e.ts packages/session/session-persistence-jsonl/tests/built-migration-worker.e2e.ts packages/lsp/lsp-stdio/tests/built-lib.e2e.ts",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    }
+  ],
+  "doc-sync": [
+    {
+      "id": "doc-typecheck",
+      "command": "pnpm run doc-typecheck",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "docs-site-build",
+      "command": "pnpm run docs:build",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-graphs",
+      "command": "pnpm run verify-doc-graphs",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cli-help",
+      "command": "pnpm run verify-cli-help",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "markdown-links",
+      "command": "pnpm run verify-md-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "type-equivalence",
+      "command": "pnpm run verify-type-equiv",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-catalog",
+      "command": "pnpm run verify-cordis-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-inspect-catalog",
+      "command": "pnpm run verify-cordis-inspect-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "workflow-guest",
+      "command": "pnpm run verify-workflow-guest",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "mermaid",
+      "command": "pnpm run verify-mermaid",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-pairing",
+      "command": "pnpm run verify-translation-pairing",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "markdown-wrap",
+      "command": "pnpm run verify-md-wrap",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-catalog",
+      "command": "pnpm run verify-client-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "export-jsdoc",
+      "command": "pnpm run verify-export-jsdoc",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "tool-catalog",
+      "command": "pnpm run verify-tool-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "config-catalog",
+      "command": "pnpm run verify-config-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "plugin-packages",
+      "command": "pnpm run verify-plugin-packages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "dependency-catalog",
+      "command": "pnpm run verify-dependency-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-catalog",
+      "command": "pnpm run verify-persistence-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-changes",
+      "command": "pnpm run verify-persistence-changes",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-releases",
+      "command": "pnpm run verify-persistence-releases",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-formats",
+      "command": "pnpm run verify-persistence-formats",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "session-format-catalog",
+      "command": "pnpm run verify-session-format-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "public-repository-links",
+      "command": "pnpm run verify-public-repository-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "repository-references",
+      "command": "pnpm run verify-repository-references",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "concrete-terms",
+      "command": "pnpm run verify-concrete-terms",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-refs",
+      "command": "pnpm run verify-doc-refs",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "subsystem-pages",
+      "command": "pnpm run verify-subsystem-pages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-paths",
+      "command": "pnpm run verify-package-paths",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "tsconfig-paths",
+      "command": "pnpm run verify-tsconfig-paths",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "config-source-ownership",
+      "command": "pnpm run verify-config-source-ownership",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-summaries",
+      "command": "pnpm run verify-package-readme-summaries",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-model-experience",
+      "command": "pnpm run verify-package-readme-model-experience",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-classification",
+      "command": "pnpm run verify-agent-note-classification",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-format",
+      "command": "pnpm run verify-agent-note-format",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "archived-agent-notes",
+      "command": "pnpm run verify-archived-agent-notes",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "skill-invocation-metadata",
+      "command": "pnpm run verify-skill-invocation-metadata",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-prompt",
+      "command": "pnpm run verify-translation-prompt",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-budgets",
+      "command": "pnpm run verify-doc-budgets",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "upgrade-guides",
+      "command": "pnpm run verify-upgrade-guides",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-standard-tests",
+      "command": "pnpm exec vitest run scripts/doc-standard.spec.ts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "docs-site-projection",
+      "command": "pnpm exec vitest run scripts/project-doc-site.spec.ts scripts/verify-doc-site-fragments.spec.ts website/tests/mermaid-viewer.spec.ts website/tests/image-viewer.spec.ts website/tests/code-groups.spec.ts website/tests/page-markdown-actions.spec.ts website/tests/raw-markdown.spec.ts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-limitations",
+      "command": "pnpm run verify-package-readme-limitations",
+      "needs": [],
+      "allowFailure": false
+    }
+  ],
+  "doc-quick": [
+    {
+      "id": "markdown-links",
+      "command": "pnpm run verify-md-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "type-equivalence",
+      "command": "pnpm run verify-type-equiv",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-pairing",
+      "command": "pnpm run verify-translation-pairing",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "markdown-wrap",
+      "command": "pnpm run verify-md-wrap",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "dependency-catalog",
+      "command": "pnpm run verify-dependency-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-formats",
+      "command": "pnpm run verify-persistence-formats",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "public-repository-links",
+      "command": "pnpm run verify-public-repository-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "repository-references",
+      "command": "pnpm run verify-repository-references",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "concrete-terms",
+      "command": "pnpm run verify-concrete-terms",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-refs",
+      "command": "pnpm run verify-doc-refs",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-summaries",
+      "command": "pnpm run verify-package-readme-summaries",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-model-experience",
+      "command": "pnpm run verify-package-readme-model-experience",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-classification",
+      "command": "pnpm run verify-agent-note-classification",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-format",
+      "command": "pnpm run verify-agent-note-format",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "archived-agent-notes",
+      "command": "pnpm run verify-archived-agent-notes",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "skill-invocation-metadata",
+      "command": "pnpm run verify-skill-invocation-metadata",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-prompt",
+      "command": "pnpm run verify-translation-prompt",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-budgets",
+      "command": "pnpm run verify-doc-budgets",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "upgrade-guides",
+      "command": "pnpm run verify-upgrade-guides",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-standard-tests",
+      "command": "pnpm exec vitest run scripts/doc-standard.spec.ts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-limitations",
+      "command": "pnpm run verify-package-readme-limitations",
+      "needs": [],
+      "allowFailure": false
+    }
+  ],
+  "ci-bench": [
+    {
+      "id": "bench",
+      "command": "pnpm exec tsx scripts/run-ci-bench.ts",
+      "needs": [],
+      "allowFailure": false
+    }
+  ],
+  "check-all": [
+    {
+      "id": "runtime-closure",
+      "command": "pnpm run verify-runtime-closure",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-config",
+      "command": "pnpm run verify-cordis-config",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-domain-graph",
+      "command": "pnpm run verify-client-domain-graph",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "test",
+      "command": "pnpm run test",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "approval-policy",
+      "command": "pnpm run test:approval-policy",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "issue-management",
+      "command": "pnpm run test:issue-management",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "duplication",
+      "command": "pnpm run duplication",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "snapshot",
+      "command": "pnpm run test:snapshot",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "expected-output",
+      "command": "pnpm run test:expected",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "build",
+      "command": "pnpm run build",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "build:web",
+      "command": "pnpm run build:web",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "rescope-vendor",
+      "command": "pnpm run rescope-vendor:check",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "publint",
+      "command": "pnpm run publint",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "constraints",
+      "command": "pnpm run constraints",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "default-product-isolation",
+      "command": "pnpm run verify-default-product-isolation",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "product-use",
+      "command": "pnpm run verify-product-use",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "official-bundle-catalog",
+      "command": "pnpm run verify-official-bundle-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-dependencies",
+      "command": "pnpm run verify-package-dependencies",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "application-entrypoints",
+      "command": "pnpm run verify-application-entrypoints",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "dsh-package-licenses",
+      "command": "pnpm run verify-dsh-package-licenses",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "node-next-types",
+      "command": "pnpm run verify-node-next-types",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "optional-dependency-imports",
+      "command": "pnpm run verify-optional-dependency-imports",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-packages",
+      "command": "pnpm run verify-client-packages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-ui-i18n",
+      "command": "pnpm run verify-client-ui-i18n",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-route-resolution",
+      "command": "pnpm run verify-client-route-resolution",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "no-bare-dispatcher",
+      "command": "pnpm run verify-no-bare-dispatcher",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "plugin-record-callers",
+      "command": "pnpm run verify-plugin-record-callers",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "no-unknown-casts",
+      "command": "pnpm run verify-no-unknown-casts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-typecheck",
+      "command": "pnpm run doc-typecheck:contracts-ready",
+      "needs": [
+        "build"
+      ],
+      "allowFailure": false
+    },
+    {
+      "id": "docs-site-build",
+      "command": "pnpm run docs:build",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-graphs",
+      "command": "pnpm run verify-doc-graphs",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cli-help",
+      "command": "pnpm run verify-cli-help",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "markdown-links",
+      "command": "pnpm run verify-md-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "type-equivalence",
+      "command": "pnpm run verify-type-equiv",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-catalog",
+      "command": "pnpm run verify-cordis-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "cordis-inspect-catalog",
+      "command": "pnpm run verify-cordis-inspect-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "workflow-guest",
+      "command": "pnpm run verify-workflow-guest",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "mermaid",
+      "command": "pnpm run verify-mermaid",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-pairing",
+      "command": "pnpm run verify-translation-pairing",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "markdown-wrap",
+      "command": "pnpm run verify-md-wrap",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "client-catalog",
+      "command": "pnpm run verify-client-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "export-jsdoc",
+      "command": "pnpm run verify-export-jsdoc",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "tool-catalog",
+      "command": "pnpm run verify-tool-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "config-catalog",
+      "command": "pnpm run verify-config-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "plugin-packages",
+      "command": "pnpm run verify-plugin-packages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "dependency-catalog",
+      "command": "pnpm run verify-dependency-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-catalog",
+      "command": "pnpm run verify-persistence-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-changes",
+      "command": "pnpm run verify-persistence-changes",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-releases",
+      "command": "pnpm run verify-persistence-releases",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "persistence-formats",
+      "command": "pnpm run verify-persistence-formats",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "session-format-catalog",
+      "command": "pnpm run verify-session-format-catalog",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "public-repository-links",
+      "command": "pnpm run verify-public-repository-links",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "repository-references",
+      "command": "pnpm run verify-repository-references",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "concrete-terms",
+      "command": "pnpm run verify-concrete-terms",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-refs",
+      "command": "pnpm run verify-doc-refs",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "subsystem-pages",
+      "command": "pnpm run verify-subsystem-pages",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-paths",
+      "command": "pnpm run verify-package-paths",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "tsconfig-paths",
+      "command": "pnpm run verify-tsconfig-paths",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "config-source-ownership",
+      "command": "pnpm run verify-config-source-ownership",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-summaries",
+      "command": "pnpm run verify-package-readme-summaries",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-model-experience",
+      "command": "pnpm run verify-package-readme-model-experience",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-classification",
+      "command": "pnpm run verify-agent-note-classification",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "agent-note-format",
+      "command": "pnpm run verify-agent-note-format",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "archived-agent-notes",
+      "command": "pnpm run verify-archived-agent-notes",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "skill-invocation-metadata",
+      "command": "pnpm run verify-skill-invocation-metadata",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "translation-prompt",
+      "command": "pnpm run verify-translation-prompt",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-budgets",
+      "command": "pnpm run verify-doc-budgets",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "upgrade-guides",
+      "command": "pnpm run verify-upgrade-guides",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "doc-standard-tests",
+      "command": "pnpm exec vitest run scripts/doc-standard.spec.ts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "docs-site-projection",
+      "command": "pnpm exec vitest run scripts/project-doc-site.spec.ts scripts/verify-doc-site-fragments.spec.ts website/tests/mermaid-viewer.spec.ts website/tests/image-viewer.spec.ts website/tests/code-groups.spec.ts website/tests/page-markdown-actions.spec.ts website/tests/raw-markdown.spec.ts",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "package-readme-limitations",
+      "command": "pnpm run verify-package-readme-limitations",
+      "needs": [],
+      "allowFailure": false
+    },
+    {
+      "id": "module-graph",
+      "command": "pnpm run verify-module-graph",
+      "needs": [],
+      "allowFailure": false
+    }
+  ]
+}

@@ -24,6 +24,8 @@ if [ ! -d "$REPO_ROOT/node_modules" ]; then
   exit 1
 fi
 
+acquire_app_lock
+
 # 端口占用预检（lsof 缺失时静默跳过，不阻塞启动）。
 if command -v lsof >/dev/null 2>&1; then
   if lsof -nP -iTCP:"$APP_PORT" -sTCP:LISTEN >/dev/null 2>&1; then

@@ -1,0 +1,62 @@
+{
+  "legacyLinks": [
+    {
+      "path": "AGENTS.md",
+      "url": "../TODO.md",
+      "reason": "missing target"
+    },
+    {
+      "path": "AGENTS.md",
+      "url": "../story1.md",
+      "reason": "missing target"
+    },
+    {
+      "path": "AGENTS.md",
+      "url": "../story2.md",
+      "reason": "missing target"
+    },
+    {
+      "path": "AGENTS.md",
+      "url": "../Problem.md",
+      "reason": "missing target"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "url": "../../TODO.md#新一轮-todo桌面-ui-统一与交互修复2026-10-13",
+      "reason": "missing target"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "url": "../../TODO.md",
+      "reason": "missing target"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "url": "../../Problem.md",
+      "reason": "missing target"
+    },
+    {
+      "path": "docs/research/dsh-agent-native/project-mapping.md",
+      "url": "../../../../TODO.md#dsh-agent-native-todos",
+      "reason": "missing target"
+    }
+  ],
+  "budgets": {
+    "AGENTS.md": 6000,
+    "docs/development/WORKFLOW.md": 12000,
+    "docs/development/CONTRACTS.md": 8000
+  },
+  "examples": {
+    "doc": "docs/development/CONTRACTS.md",
+    "equivalence": [
+      {
+        "symbol": "ToolInvoker",
+        "source": "packages/seam/space-tool/src/index.ts"
+      },
+      {
+        "symbol": "ToolResult",
+        "source": "packages/seam/space-tool/src/index.ts"
+      }
+    ]
+  }
+}

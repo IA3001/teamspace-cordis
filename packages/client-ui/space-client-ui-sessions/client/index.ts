@@ -19,6 +19,8 @@
 // 零样式文件、零内联样式、零令牌定义。
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, resolveComponent, watch } from 'vue'
 import { useRoute, useRouter, useRpc, useContext } from '@cordisjs/client'
+import { userFacingFailure } from 'space-client-ui-shared/client/errors.ts'
+import { resolveLoadView } from 'space-client-ui-shared/client/load-state.ts'
 import 'space-client-ui-shared/client/im.css'
 
 /** 会话的客户端视图（列表需要的列；形状 = seam Session 的子集）。 */
@@ -87,6 +89,10 @@ const isError = (r: unknown) =>
 const seenKey = (sid: string) => `space_seen_${sid}`
 const getSeen = (sid: string) => Number(localStorage.getItem(seenKey(sid)) ?? 0)
 const markSeen = (sid: string) => localStorage.setItem(seenKey(sid), String(Date.now()))
+const emptyMark = (symbol: string, className = '') => h('span', {
+  class: ['sp-empty-mark', className],
+  'aria-hidden': 'true',
+}, symbol)
 
 // 置顶 / 免打扰的 localStorage 键（跨包约定，teamspace 页逐字一致读取）。
 /** 置顶会话：值为 sessionId 字符串数组。 */
@@ -132,6 +138,7 @@ const SessionsRail = defineComponent({
       removeMember(token: string, sessionId: string, principalId: string): Promise<unknown>
       setMemberRole(token: string, sessionId: string, principalId: string, role: string): Promise<unknown>
       close(token: string, sessionId: string): Promise<SessionRow | null>
+      rename(token: string, sessionId: string, title: string): Promise<SessionRow | { error: string; detail?: string } | null>
       logout(token: string): Promise<boolean | null>
     }>()
     const appCtx = useContext()
@@ -140,9 +147,13 @@ const SessionsRail = defineComponent({
 
     const me = ref(null) as { value: MeRow | null }
     const sessions = ref([]) as { value: SessionRow[] }
+    const sessionsLoaded = ref(false)
+    const sessionsLoading = ref(true)
+    const sessionsLoadFailed = ref(false)
     const roster = ref([]) as { value: RosterRow[] }
     const humans = ref([]) as { value: HumanRow[] }
     const creating = ref(false)
+    const createError = ref('')
     const error = ref('')
     /** 悬停会话行 id（操作按钮只在悬停行揭示）。 */
 
@@ -172,11 +183,18 @@ const SessionsRail = defineComponent({
     /** 「新会议」对话框：标题输入 + 受邀成员和 Agent 多选。 */
     const dialogOpen = ref(false)
     const newTitle = ref('')
+    const renaming = ref(false)
+    const renameError = ref('')
+    const renameOpen = ref(false)
+    const renameSessionId = ref('')
+    const renameTitle = ref('')
     const selectedUsers = ref([]) as { value: string[] }
     const selected = ref([]) as { value: string[] }
 
     /** 「邀请成员」对话框（针对某个会话）。 */
     const inviteOpen = ref(false)
+    const invitingMembers = ref(false)
+    const inviteError = ref('')
     const inviteSessionId = ref('')
     const inviteUsers = ref([]) as { value: string[] }
 
@@ -185,6 +203,8 @@ const SessionsRail = defineComponent({
     const removeSessionId = ref('')
     const removeUserId = ref('')
     const managedMembers = ref([]) as { value: MemberRow[] }
+    const membersLoading = ref(false)
+    const membersLoadError = ref('')
     const roleDrafts = ref({}) as { value: Record<string, string> }
 
     /** 最近一条消息摘要：sessionId → {text, ts}（summaries RPC + socket 增量）。 */
@@ -195,28 +215,41 @@ const SessionsRail = defineComponent({
     // ── Ctrl+K 快速切换会话（2026-10-01）────────────────────────────────
     const quickOpen = ref(false)
     const quickQuery = ref('')
+    const quickIndex = ref(0)
     const quickInput = ref(null) as { value: HTMLInputElement | null }
     /** openOnes + closedOnes 合并、按 updatedAt 倒序（切换面板不分组，一列到底）。 */
     const allSessions = computed(() => [...openOnes.value, ...closedOnes.value].sort(byUpdatedDesc))
-    /** 输入框过滤：标题包含即命中（大小写不敏感）。 */
+    /** 标题、最近发言人和最近消息内容都可命中（大小写不敏感），便于区分同名会议。 */
     const quickList = computed(() => {
       const q = quickQuery.value.trim().toLowerCase()
-      return q ? allSessions.value.filter((s) => s.title.toLowerCase().includes(q)) : allSessions.value
+      return q ? allSessions.value.filter((s) => {
+        const summary = lastMap.value[s.id]
+        return `${s.title} ${summary?.authorName ?? ''} ${summary?.text ?? ''}`.toLowerCase().includes(q)
+      }) : allSessions.value
     })
+    function openQuickSwitch() {
+      quickQuery.value = ''
+      quickIndex.value = 0
+      quickOpen.value = true
+    }
     /** ⌘/Ctrl+K 切换面板；Esc 在面板开着时只关面板（不进输入框状态机）。 */
     function onGlobalKeydown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
-        quickOpen.value = !quickOpen.value
-        if (!quickOpen.value) quickQuery.value = ''
+        if (quickOpen.value) {
+          quickOpen.value = false
+          quickQuery.value = ''
+        } else openQuickSwitch()
       } else if (e.key === 'Escape' && quickOpen.value) {
         quickOpen.value = false
         quickQuery.value = ''
+        e.preventDefault()
       }
     }
     /** 打开后清过滤并自动聚焦输入框（dialog opened 回调 + nextTick 等 DOM 就绪）。 */
     function onQuickOpened() {
       quickQuery.value = ''
+      quickIndex.value = 0
       void nextTick(() => { quickInput.value?.focus() })
     }
     /** 点选会话：select(id)（= 已读 + 改 URL）并关闭面板。 */
@@ -224,6 +257,20 @@ const SessionsRail = defineComponent({
       select(id)
       quickOpen.value = false
       quickQuery.value = ''
+      quickIndex.value = 0
+    }
+    function navigateQuickList(event: KeyboardEvent) {
+      if (!quickList.value.length) return
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        quickIndex.value = (quickIndex.value + 1) % quickList.value.length
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        quickIndex.value = (quickIndex.value - 1 + quickList.value.length) % quickList.value.length
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        quickPick(quickList.value[quickIndex.value]?.id ?? quickList.value[0]!.id)
+      }
     }
 
     /** 当前选中会话 = URL 上的 ?session=（页面负责在缺省时写入首个会话）。 */
@@ -254,10 +301,18 @@ const SessionsRail = defineComponent({
 
     /** 摘要文本（「作者： 文本」微信式；去换行、截 18 字）。
      *  作者名用服务端解析好的 authorName（系统事件即「系统」）。 */
+    const humanizeMentions = (text: string) => text.replace(/@[^\s@]+/g, (token) => {
+      const id = token.slice(1)
+      if (['all', 'everyone', '所有人'].includes(id.toLowerCase())) return '@所有人'
+      const human = humans.value.find((item) => item.id === id)
+      if (human) return `@${human.displayName || human.username}`
+      const agent = roster.value.find((item) => item.id === id)
+      return agent ? `@${agent.title}` : token
+    })
     const brief = (sid: string) => {
       const last = lastMap.value[sid]
       if (!last?.text) return '（还没有消息）'
-      const oneLine = last.text.replaceAll(/\s+/g, ' ').trim()
+      const oneLine = humanizeMentions(last.text).replaceAll(/\s+/g, ' ').trim()
       const body = oneLine.length > 18 ? `${oneLine.slice(0, 18)}…` : oneLine
       return `${last.authorName || '成员'}：${body}`
     }
@@ -272,6 +327,8 @@ const SessionsRail = defineComponent({
 
     async function load() {
       const token = getToken()
+      const initialLoad = !sessionsLoaded.value
+      if (initialLoad) sessionsLoading.value = true
       try {
         // seen 快照：全部本地已读时刻一并上报，服务端按它数未读（B1）。
         const seen: Record<string, number> = {}
@@ -285,14 +342,19 @@ const SessionsRail = defineComponent({
         ])
         if (list === null) return unauthed()
         sessions.value = list
+        sessionsLoaded.value = true
+        sessionsLoadFailed.value = false
         if (sums) {
           const map: Record<string, SummaryRow> = {}
           for (const s of sums) map[s.sessionId] = s
           lastMap.value = map
         }
         error.value = ''
-      } catch (e) {
-        error.value = `会话栏加载失败：${String((e as Error).message ?? e)}`
+      } catch {
+        if (sessionsLoaded.value) error.value = userFacingFailure('会话栏加载')
+        else sessionsLoadFailed.value = true
+      } finally {
+        if (initialLoad) sessionsLoading.value = false
       }
     }
 
@@ -381,21 +443,31 @@ const SessionsRail = defineComponent({
       newTitle.value = ''
       selectedUsers.value = []
       selected.value = []
+      createError.value = ''
       dialogOpen.value = true
     }
+
+    // Teamspace entry points share the router query across page entries.
+    watch(() => route.query.newMeeting, (value) => {
+      if (value !== '1') return
+      openDialog()
+      void router.replace({ query: { ...route.query, newMeeting: undefined } })
+    })
 
     /** 确定：createGroup(token, 标题(可空→''), 受邀成员, Agent)。
      *  成功后关对话框、刷新列表并选中新会话。 */
     async function create() {
+      if (creating.value) return
       creating.value = true
+      createError.value = ''
       try {
         const s = await rpc.value.createGroup(getToken(), newTitle.value.trim(), [...selectedUsers.value], [...selected.value])
         if (!s) return unauthed()
         dialogOpen.value = false
         await load()
         select(s.id)
-      } catch (e) {
-        error.value = `新建会议失败：${String((e as Error).message ?? e)}`
+      } catch {
+        createError.value = userFacingFailure('新建会话')
       } finally {
         creating.value = false
       }
@@ -403,15 +475,23 @@ const SessionsRail = defineComponent({
 
     /** 邀请成员：invite(token, sessionId, userIds)。结构化拒绝（forbidden）直接进错误条。 */
     async function doInvite() {
+      if (invitingMembers.value || !inviteSessionId.value || inviteUsers.value.length === 0) return
+      invitingMembers.value = true
+      inviteError.value = ''
       try {
         const r = await rpc.value.invite(getToken(), inviteSessionId.value, [...inviteUsers.value]) as unknown
         if (r === null) return unauthed()
-        if (isForbidden(r)) { error.value = (r as { detail: string }).detail; return }
+        if (isError(r)) {
+          inviteError.value = (r as { detail?: string }).detail ?? '邀请成员失败，请检查网络后重试。'
+          return
+        }
         inviteOpen.value = false
         inviteUsers.value = []
-        error.value = ''
-      } catch (e) {
-        error.value = `邀请失败：${String((e as Error).message ?? e)}`
+        inviteError.value = ''
+      } catch {
+        inviteError.value = userFacingFailure('邀请成员')
+      } finally {
+        invitingMembers.value = false
       }
     }
 
@@ -426,22 +506,32 @@ const SessionsRail = defineComponent({
         removeUserId.value = ''
         error.value = ''
         await loadManagedMembers()
-      } catch (e) {
-        error.value = `移除失败：${String((e as Error).message ?? e)}`
+      } catch {
+        error.value = userFacingFailure('移除成员')
       }
     }
 
     async function loadManagedMembers() {
-      const rows = await rpc.value.members(getToken(), removeSessionId.value)
-      managedMembers.value = Array.isArray(rows) ? rows : []
-      roleDrafts.value = Object.fromEntries(managedMembers.value.map((member) => [member.principalId, member.role]))
+      membersLoading.value = true
+      membersLoadError.value = ''
+      try {
+        const rows = await rpc.value.members(getToken(), removeSessionId.value)
+        if (rows === null) return unauthed()
+        managedMembers.value = rows
+        roleDrafts.value = Object.fromEntries(managedMembers.value.map((member) => [member.principalId, member.role]))
+      } catch {
+        membersLoadError.value = userFacingFailure('读取会话成员')
+      } finally {
+        membersLoading.value = false
+      }
     }
     async function openMemberManagement(sessionId: string) {
       removeSessionId.value = sessionId
       removeUserId.value = ''
+      managedMembers.value = []
+      membersLoadError.value = ''
       removeOpen.value = true
-      try { await loadManagedMembers() }
-      catch (e) { error.value = `读取成员失败：${String((e as Error).message ?? e)}` }
+      await loadManagedMembers()
     }
     async function doSetMemberRole(row: MemberRow) {
       const role = roleDrafts.value[row.principalId]
@@ -452,7 +542,7 @@ const SessionsRail = defineComponent({
         if (isForbidden(r) || isError(r)) { error.value = (r as { detail?: string }).detail ?? '角色调整失败'; return }
         error.value = ''
         await loadManagedMembers()
-      } catch (e) { error.value = `角色调整失败：${String((e as Error).message ?? e)}` }
+      } catch { error.value = userFacingFailure('调整角色') }
     }
 
     /** 结束会议：close(token, sessionId)（幂等）。 */
@@ -462,9 +552,30 @@ const SessionsRail = defineComponent({
         if (r === null) return unauthed()
         if (isForbidden(r)) { error.value = (r as { detail: string }).detail; return }
         await load()
-      } catch (e) {
-        error.value = `结束会议失败：${String((e as Error).message ?? e)}`
+      } catch {
+        error.value = userFacingFailure('结束会话')
       }
+    }
+
+    function openRename(session: SessionRow) {
+      renameSessionId.value = session.id
+      renameTitle.value = session.title
+      renameError.value = ''
+      renameOpen.value = true
+    }
+    async function doRename() {
+      if (!renameSessionId.value || !renameTitle.value.trim() || renaming.value) return
+      renaming.value = true
+      renameError.value = ''
+      try {
+        const result = await rpc.value.rename(getToken(), renameSessionId.value, renameTitle.value)
+        if (result === null) return unauthed()
+        if ('error' in result) { renameError.value = result.detail ?? '重命名失败，请重试。'; return }
+        renameOpen.value = false
+        error.value = ''
+        await load()
+      } catch { renameError.value = userFacingFailure('重命名会话') }
+      finally { renaming.value = false }
     }
 
     onMounted(async () => {
@@ -477,6 +588,8 @@ const SessionsRail = defineComponent({
         return unauthed()
       }
       await load()
+      await nextTick()
+      document.querySelector('#space-session-sidebar .sp-rail-item.active')?.scrollIntoView({ block: 'nearest' })
       void loadMeta()
       // IM 化：socket 实时更新摘要/未读，替代 5s 轮询；断线重连全量刷新一次，
       // 另留 30s 慢速兜底（会话新建/更名等 socket 不覆盖的变更）。
@@ -529,6 +642,9 @@ const SessionsRail = defineComponent({
       const ElOption = resolveComponent('el-option') as unknown as string
       const ElDialog = resolveComponent('el-dialog') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
+      const ElScrollbar = resolveComponent('el-scrollbar') as unknown as string
+      const ElForm = resolveComponent('el-form') as unknown as string
+      const ElFormItem = resolveComponent('el-form-item') as unknown as string
       const ElTable = resolveComponent('el-table') as unknown as string
       const ElTableColumn = resolveComponent('el-table-column') as unknown as string
 
@@ -546,7 +662,16 @@ const SessionsRail = defineComponent({
           // 主体行：点击选中（text 按钮，active 由 URL 派生，保留 primary 高亮）。
           h('div', {
             class: 'sp-rail-main',
+            role: 'button',
+            tabindex: 0,
+            'aria-pressed': s.id === activeId.value,
             onClick: () => select(s.id),
+            onKeydown: (event: KeyboardEvent) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                select(s.id)
+              }
+            },
           }, {
             default: () => [
               unread(s)
@@ -580,9 +705,11 @@ const SessionsRail = defineComponent({
                 trigger: 'click',
                 onCommand: (cmd: string) => {
                   if (cmd === 'close') return void doClose(s.id)
+                  if (cmd === 'rename') return openRename(s)
                   if (cmd === 'invite') {
                     inviteSessionId.value = s.id
                     inviteUsers.value = []
+                    inviteError.value = ''
                     inviteOpen.value = true
                     return
                   }
@@ -598,6 +725,7 @@ const SessionsRail = defineComponent({
                 }, { default: () => '⋯' }),
                 dropdown: () => [
                   open ? h(ElDropdownItem, { command: 'close' }, { default: () => '结束会议' }) : null,
+                  h(ElDropdownItem, { command: 'rename' }, { default: () => '重命名' }),
                   h(ElDropdownItem, { command: 'invite' }, { default: () => '邀请' }),
                   h(ElDropdownItem, { command: 'remove' }, { default: () => '移除成员' }),
                   h(ElDropdownItem, { command: 'pinned', divided: true },
@@ -617,14 +745,23 @@ const SessionsRail = defineComponent({
 
       const content = () => {
         if (!getToken()) {
-          return [h(ElEmpty, { description: '请先登录' }, {
+          return [h(ElEmpty, { description: '请先登录', imageSize: 48 }, {
+            image: () => emptyMark('↗'),
             default: () => h(ElButton, {
               type: 'primary', onClick: () => { location.href = '/login' },
             }, { default: () => '去登录' }),
           })]
         }
         if (sessions.value.length === 0) {
-          return [h(ElEmpty, { description: '暂无会议 —— 点上方「新会议」开始', imageSize: 60 })]
+          const state = resolveLoadView(sessionsLoading.value, sessionsLoadFailed.value, false)
+          if (state === 'loading') return [h(ElEmpty, { description: '正在加载会话…', imageSize: 48 }, {
+            image: () => emptyMark('…', 'is-loading'),
+          })]
+          if (state === 'error') return [h(ElEmpty, { description: '会话暂时无法加载', imageSize: 48 }, {
+            image: () => emptyMark('!', 'is-error'),
+            default: () => h(ElButton, { type: 'primary', onClick: () => void load() }, { default: () => '重试' }),
+          })]
+          return [h('div', { class: 'sp-session-empty', role: 'status' }, '创建后，会议会显示在这里')]
         }
         return [
           // 置顶组放最上面（组内按 updatedAt 排序）；下方两组剔除已置顶项。
@@ -641,11 +778,14 @@ const SessionsRail = defineComponent({
       }
 
       /** 新会议主动作：侧栏只留按钮，表单全部收进对话框。 */
-      const header = () => h(ElButton, {
-        type: 'primary',
-        disabled: creating.value,
-        onClick: openDialog,
-      }, { default: () => '新会议' })
+      const header = () => h(ElSpace, { size: 8 }, { default: () => [
+        h(ElButton, {
+          type: 'primary', disabled: creating.value, onClick: openDialog,
+        }, { default: () => '新会议' }),
+        sessions.value.length ? h(ElButton, {
+          title: '快速切换会话（Ctrl+K）', onClick: openQuickSwitch,
+        }, { default: () => '搜索会话' }) : null,
+      ] })
 
       /** 通用多选（label/value 供给项 + 绑定值）。 */
       const multiSelect = (
@@ -653,9 +793,11 @@ const SessionsRail = defineComponent({
         value: string[],
         onUpdate: (v: string[]) => void,
         placeholder: string,
+        disabled = false,
       ) => list.length
         ? h(ElSelect, {
             multiple: true,
+            disabled,
             collapseTags: true,
             collapseTagsTooltip: true,
             clearable: true,
@@ -669,32 +811,90 @@ const SessionsRail = defineComponent({
       /** 「新会议」对话框：标题（可空 → 服务端默认命名）+ 受邀成员和 Agent 多选。 */
       const newSessionDialog = h(ElDialog, {
         modelValue: dialogOpen.value,
-        'onUpdate:modelValue': (v: boolean) => { dialogOpen.value = v },
-        title: '新会议 —— 成员与角色（可多选）',
-        width: 480,
+        'onUpdate:modelValue': (v: boolean) => {
+          if (!creating.value) dialogOpen.value = v
+          if (!v && !creating.value) createError.value = ''
+        },
+        title: '创建新会议',
+        width: 680,
         closeOnClickModal: false,
+        showClose: !creating.value,
+        onOpened: () => {
+          void nextTick(() => document.querySelector<HTMLInputElement>(
+            '.sp-session-create-form .el-form-item:first-child input',
+          )?.focus())
+        },
       }, {
         default: () => [
-          h(ElInput, {
-            modelValue: newTitle.value,
-            'onUpdate:modelValue': (v: string) => { newTitle.value = v },
-            placeholder: '会议标题（可留空 = 自动命名）',
+          createError.value
+            ? h(ElAlert, {
+                title: createError.value, type: 'error', showIcon: true, closable: true,
+                onClose: () => { createError.value = '' },
+              })
+            : null,
+          h(ElText, { type: 'info', class: 'sp-session-form-intro' }, {
+            default: () => '会议主题可留空，创建后也能邀请成员和 Agent。',
           }),
-          multiSelect(humans.value.map((u) => ({
-            id: u.id, label: `${u.displayName}（${u.username}）`,
-          })), selectedUsers.value, (v: string[]) => { selectedUsers.value = v }, '邀请成员（可多选）'),
-          roster.value.length
-            ? multiSelect(roster.value.map((a) => ({ id: a.id, label: a.title })),
-                selected.value, (v: string[]) => { selected.value = v },
-                '邀请 Agent（可多选；不选 = 暂无 Agent 成员）')
-            : h(ElText, { type: 'info' }, { default: () => '当前没有可邀请的 Agent' }),
+          h(ElForm, { labelPosition: 'top', class: 'sp-session-create-form' }, {
+            default: () => [
+              h(ElFormItem, { label: '会议主题（可选）' }, {
+                default: () => h(ElInput, {
+                  modelValue: newTitle.value,
+                  'onUpdate:modelValue': (v: string) => { newTitle.value = v },
+                  disabled: creating.value,
+                  placeholder: '例如：官网改版评审',
+                  maxlength: 120,
+                }),
+              }),
+              h(ElFormItem, { label: '邀请团队成员' }, {
+                default: () => multiSelect(humans.value.map((u) => ({
+                  id: u.id, label: `${u.displayName}（${u.username}）`,
+                })), selectedUsers.value, (v: string[]) => { selectedUsers.value = v }, '搜索并选择成员', creating.value),
+              }),
+              h(ElFormItem, { label: '邀请 Agent' }, {
+                default: () => roster.value.length
+                  ? multiSelect(roster.value.map((a) => ({ id: a.id, label: a.title })),
+                      selected.value, (v: string[]) => { selected.value = v }, '搜索并选择 Agent（可选）', creating.value)
+                  : h(ElText, { type: 'info' }, { default: () => '当前没有可邀请的 Agent' }),
+              }),
+            ],
+          }),
         ],
         footer: () => h(ElSpace, { size: 8 }, {
           default: () => [
-            h(ElButton, { onClick: () => { dialogOpen.value = false } }, { default: () => '取消' }),
+            h(ElButton, { disabled: creating.value, onClick: () => { dialogOpen.value = false } }, { default: () => '取消' }),
             h(ElButton, {
-              type: 'primary', loading: creating.value, onClick: () => void create(),
-            }, { default: () => '确定' }),
+              type: 'primary', loading: creating.value, disabled: creating.value,
+              onClick: () => void create(),
+            }, { default: () => creating.value ? '正在创建…' : '创建会议' }),
+          ],
+        }),
+      })
+
+      const renameDialog = h(ElDialog, {
+        modelValue: renameOpen.value,
+        'onUpdate:modelValue': (value: boolean) => { if (!renaming.value) renameOpen.value = value },
+        title: '重命名会话',
+        width: 420,
+        closeOnClickModal: false,
+        showClose: !renaming.value,
+      }, {
+        default: () => [
+          renameError.value ? h(ElAlert, { title: renameError.value, type: 'error', showIcon: true, closable: false }) : null,
+          h(ElInput, {
+            modelValue: renameTitle.value,
+            'onUpdate:modelValue': (value: string) => { renameTitle.value = value },
+            maxlength: 120,
+            showWordLimit: true,
+            disabled: renaming.value,
+            placeholder: '输入会话标题',
+            onKeydown: (event: KeyboardEvent) => { if (event.key === 'Enter') void doRename() },
+          }),
+        ],
+        footer: () => h(ElSpace, { size: 8 }, {
+          default: () => [
+            h(ElButton, { disabled: renaming.value, onClick: () => { renameOpen.value = false } }, { default: () => '取消' }),
+            h(ElButton, { type: 'primary', loading: renaming.value, disabled: renaming.value || !renameTitle.value.trim(), onClick: () => void doRename() }, { default: () => renaming.value ? '正在保存…' : '保存' }),
           ],
         }),
       })
@@ -702,21 +902,31 @@ const SessionsRail = defineComponent({
       /** 「邀请成员」对话框：listHumans 多选 → invite。 */
       const inviteDialog = h(ElDialog, {
         modelValue: inviteOpen.value,
-        'onUpdate:modelValue': (v: boolean) => { inviteOpen.value = v },
+        'onUpdate:modelValue': (v: boolean) => { if (!invitingMembers.value) inviteOpen.value = v },
         title: '邀请成员加入会议',
         width: 420,
         closeOnClickModal: false,
+        showClose: !invitingMembers.value,
       }, {
-        default: () => multiSelect(
-          humans.value.map((u) => ({ id: u.id, label: `${u.displayName}（${u.username}）` })),
-          inviteUsers.value,
-          (v: string[]) => { inviteUsers.value = v },
-          '选择要邀请的成员（可多选）',
-        ),
+        default: () => [
+          inviteError.value
+            ? h(ElAlert, { title: inviteError.value, type: 'error', showIcon: true, closable: false })
+            : null,
+          multiSelect(
+            humans.value.map((u) => ({ id: u.id, label: `${u.displayName}（${u.username}）` })),
+            inviteUsers.value,
+            (v: string[]) => { inviteUsers.value = v },
+            '选择要邀请的成员（可多选）',
+            invitingMembers.value,
+          ),
+        ],
         footer: () => h(ElSpace, { size: 8 }, {
           default: () => [
-            h(ElButton, { onClick: () => { inviteOpen.value = false } }, { default: () => '取消' }),
-            h(ElButton, { type: 'primary', onClick: () => void doInvite() }, { default: () => '确定' }),
+            h(ElButton, { disabled: invitingMembers.value, onClick: () => { inviteOpen.value = false } }, { default: () => '取消' }),
+            h(ElButton, {
+              type: 'primary', loading: invitingMembers.value,
+              disabled: !inviteUsers.value.length, onClick: () => void doInvite(),
+            }, { default: () => '确定' }),
           ],
         }),
       })
@@ -729,7 +939,19 @@ const SessionsRail = defineComponent({
         width: 760,
         closeOnClickModal: false,
       }, {
-        default: () => h(ElTable, { data: managedMembers.value, size: 'small', rowKey: 'principalId' }, {
+        default: () => [
+          membersLoadError.value
+            ? h(ElAlert, { title: membersLoadError.value, type: 'error', showIcon: true, closable: false })
+            : null,
+          membersLoadError.value
+            ? h(ElButton, {
+                type: 'primary', loading: membersLoading.value, onClick: () => void loadManagedMembers(),
+              }, { default: () => '重试加载成员' })
+            : null,
+          !membersLoadError.value ? h(ElTable, {
+            data: managedMembers.value, size: 'small', rowKey: 'principalId', loading: membersLoading.value,
+            emptyText: membersLoading.value ? '正在加载成员…' : '当前会话暂无成员',
+          }, {
           default: () => [
             h(ElTableColumn, { label: '成员', minWidth: 220 }, {
               default: (scope: { row: MemberRow }) => {
@@ -763,7 +985,8 @@ const SessionsRail = defineComponent({
                 }),
             }),
           ],
-        }),
+        }) : null,
+        ],
         footer: () => h(ElButton, { onClick: () => { removeOpen.value = false } }, { default: () => '完成' }),
       })
 
@@ -781,37 +1004,71 @@ const SessionsRail = defineComponent({
         default: () => [
           h(ElInput, {
             modelValue: quickQuery.value,
-            'onUpdate:modelValue': (v: string) => { quickQuery.value = v },
+            'onUpdate:modelValue': (v: string) => { quickQuery.value = v; quickIndex.value = 0 },
             ref: (inst: { input?: HTMLInputElement } | null) => { quickInput.value = inst?.input ?? null },
-            placeholder: '输入标题过滤会话…（Enter 选第一个）',
-            onKeydown: (e: KeyboardEvent) => {
-              if (e.key === 'Enter' && quickList.value.length) quickPick(quickList.value[0]!.id)
-            },
+            placeholder: '搜索标题、发言人或最近消息…',
+            onKeydown: navigateQuickList,
           }),
+          h(ElText, { size: 'small', type: 'info' }, { default: () => '↑↓ 选择 · Enter 打开' }),
           quickList.value.length
-            ? quickList.value.map((s) => h(ElButton, {
-                key: s.id, text: true, size: 'small',
-                onClick: () => quickPick(s.id),
-              }, {
-                default: () => [
-                  s.title || '（未命名会议）',
-                  h(ElTag, {
-                    size: 'small', type: s.status === 'closed' ? 'info' : 'success',
-                  }, { default: () => (s.status === 'closed' ? '已结束' : '进行中') }),
-                ],
-              }))
+            ? h(ElScrollbar, { maxHeight: 'min(55vh, 440px)' }, {
+                default: () => h(ElSpace, {
+                  direction: 'vertical', fill: true, size: 2, class: 'sp-quick-switch-list',
+                }, {
+                  default: () => quickList.value.map((s, index) => h(ElButton, {
+                    key: s.id,
+                    class: ['sp-quick-session-button', index === quickIndex.value ? 'is-current' : ''],
+                    text: true,
+                    size: 'small',
+                    'aria-pressed': index === quickIndex.value,
+                    title: lastMap.value[s.id]
+                      ? `${lastMap.value[s.id]!.authorName}：${humanizeMentions(lastMap.value[s.id]!.text)}`
+                      : s.title,
+                    onClick: () => quickPick(s.id),
+                  }, {
+                    default: () => {
+                      const summary = lastMap.value[s.id]
+                      return h('div', { class: 'sp-quick-session' }, [
+                        h('div', { class: 'sp-quick-session-head' }, [
+                          h(ElText, { truncated: true, class: 'sp-quick-session-title' }, {
+                            default: () => s.title || '（未命名会议）',
+                          }),
+                          h(ElText, { size: 'small', type: 'info', class: 'sp-quick-session-time' }, {
+                            default: () => hhmm(summary?.ts ?? s.updatedAt),
+                          }),
+                          h(ElTag, {
+                            size: 'small', type: s.status === 'closed' ? 'info' : 'success',
+                          }, { default: () => (s.status === 'closed' ? '已结束' : '进行中') }),
+                        ]),
+                        h('div', { class: 'sp-quick-session-preview' }, summary
+                          ? [
+                              h('span', { class: 'sp-quick-session-author' }, `${summary.authorName} · `),
+                              humanizeMentions(summary.text).replaceAll(/\s+/g, ' ').trim(),
+                            ]
+                          : '暂无最近消息'),
+                      ])
+                    },
+                  })),
+                }),
+              })
             : h(ElText, { size: 'small', type: 'info' }, { default: () => '没有匹配的会话' }),
         ],
       })
 
       return [
         error.value
-          ? h(ElText, { type: 'danger', size: 'small', style: { padding: '4px 2px', display: 'block' },
-              onClick: () => { error.value = '' } }, { default: () => error.value })
+          ? h(ElAlert, {
+              title: error.value,
+              type: 'error',
+              showIcon: true,
+              closable: true,
+              onClose: () => { error.value = '' },
+            })
           : null,
         h('div', { class: 'page-sidebar-header' }, [header()]),
         h('div', { class: 'page-sidebar-content' }, content()),
         newSessionDialog,
+        renameDialog,
         inviteDialog,
         removeDialog,
         quickSwitchDialog,

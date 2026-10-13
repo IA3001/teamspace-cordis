@@ -11,6 +11,7 @@ import type { Context as CordisContext } from 'cordis'
 import type { AgentDefinition, AgentDefinitionInput } from 'space-agent-catalog'
 import { AGENT_TEMPLATES } from 'space-agent-catalog'
 import { AgentError } from 'space-agent'
+import { AgentExecutionFailureError } from 'space-agent-runtime'
 import { AgentRegistry, apply as applyAgentRegistry } from '../plugins/agent-registry/index.ts'
 import { AgentRuntime } from '../packages/impl/space-agent-runtime/src/index.ts'
 import { apply as applyAgentDispatcher } from '../plugins/agent-runtime-dispatcher/index.ts'
@@ -348,6 +349,7 @@ async function main() {
   let toolInvocations = 0
   let toolGraphMode = false
   let toolGraphStep = 0
+  let failNextLlmCall = false
   const runtimeCtx = registryContext as CordisContext & Record<string, any>
   Object.assign(runtimeCtx, {
     settings: { get: (_key: string, fallback: string) => fallback || 'global-model' },
@@ -358,6 +360,7 @@ async function main() {
       async chat(messages: typeof llmMessages, options?: typeof llmOptions) {
         llmMessages = [...messages]
         llmOptions = options
+        if (failNextLlmCall) throw new Error('LLM 请求失败：fetch failed')
         if (toolGraphMode && toolGraphStep++ === 0) {
           return JSON.stringify({ toolCalls: [{ toolId: 'kb.search', args: { query: 'design' } }] })
         }
@@ -374,6 +377,7 @@ async function main() {
         return { toolId, ok: true, output: 'knowledge snippet', costMs: 2 }
       },
     },
+    session: ctx.session,
     context: {
       async assemble(sessionId: string, options: { agentId?: string }) {
         assert.equal(sessionId, 's_open')
@@ -413,13 +417,18 @@ async function main() {
     'the final model answer is delivered in the chat receipt, not only saved as a workspace artifact')
   assert.match(citedReceipt.receipt, /参考来源（本轮检索命中）/,
     'the delivered final answer retains its verified citations')
+  assert.ok((citedReceipt.worklog?.length ?? 0) > 0, 'the runtime receipt retains work milestones')
+  assert.doesNotMatch(citedReceipt.receipt, /【工作记录】/,
+    'human-only work milestones stay out of the Agent-visible receipt text')
   const citedArtifact = readFileSync(join(citedReceipt.root, citedReceipt.files.at(-1)!), 'utf8')
   assert.match(citedArtifact, /参考来源（本轮检索命中）/)
   assert.match(citedArtifact, /部署指南/)
-  let delivered: { sessionId: string; target: string; text: string } | null = null
+  let delivered: { sessionId: string; target: string; text: string; worklog?: Array<{ label: string; at: string }> } | null = null
   Object.assign(runtimeCtx, {
     orchestrator: {
-      reportAgentResult(sessionId: string, target: string, text: string) { delivered = { sessionId, target, text } },
+      reportAgentResult(sessionId: string, target: string, text: string, _sourceEventIds: string[], worklog?: Array<{ label: string; at: string }>) {
+        delivered = { sessionId, target, text, worklog }
+      },
     },
   })
   applyAgentDispatcher(runtimeCtx)
@@ -431,14 +440,39 @@ async function main() {
   assert.equal(delivered?.target, created.title)
   assert.match(delivered?.text ?? '', /【工作区】/)
   assert.ok(llmMessages.some((message) => message.content.includes('分析本会话的决策背景')))
+  delivered = null
+  failNextLlmCall = true
+  runtimeCtx.emit('orchestrator/delegate', {
+    sessionId: 's_open', eventId: 'delegate-failure', target: created.title, instruction: '验证失败阶段可回溯',
+  })
+  for (let i = 0; i < 100 && !delivered; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+  failNextLlmCall = false
+  assert.match(delivered?.text ?? '', /【执行失败】/)
+  assert.deepEqual(delivered?.worklog?.map((step) => step.label), [
+    '开始处理任务', '准备专属工作区', '整理会话、记忆与知识库上下文', '正在请求模型，等待首个响应', '执行失败',
+  ], 'the dispatcher passes ordered failure milestones into the result-persistence boundary')
+  assert.match(delivered?.worklog?.find((step) => step.label === '执行失败')?.detail ?? '', /LLM 请求失败：fetch failed/u,
+    'failure worklogs explain the concrete error rather than only showing a red phase')
+  assert.equal(delivered?.worklog?.find((step) => step.label === '执行失败')?.status, 'failed')
   assert.equal(toolInvocations, 0, 'the shared runtime does not invoke tools unless the model requests one')
   toolGraphMode = true
   const toolReceipt = await runtime.perform(created.id, '检索设计资料', { sessionId: 's_open' })
   assert.equal(llmOptions?.profileRef, 'ark-coding', 'shared Agent selects its configured provider profile')
   assert.equal(toolInvocations, 1, 'LangGraph executes only tools enabled in the Agent definition')
   assert.equal(toolReceipt.toolResults?.[0]?.ok, true)
+  assert.ok(toolReceipt.worklog?.some((step) => step.kind === 'tool' && step.inputSummary), 'tool worklogs include a sanitized input summary')
+  assert.ok(toolReceipt.worklog?.some((step) => step.kind === 'tool' && step.resultSummary), 'tool worklogs include a result summary')
   assert.match(readFileSync(join(toolReceipt.root, toolReceipt.files.at(-1)!), 'utf8'), /Graph answer with a cited result/)
   assert.ok((events.at(-1)?.toolCalls as unknown[] | undefined)?.length, 'tool execution leaves a human-visible activity event')
+  failNextLlmCall = true
+  await assert.rejects(
+    runtime.perform(created.id, '验证模型故障时的阶段保留', { sessionId: 's_open', sourceEventId: 'delegate-failure' }),
+    (error: unknown) => error instanceof AgentExecutionFailureError &&
+      ['开始处理任务', '准备专属工作区', '整理会话、记忆与知识库上下文', '正在请求模型，等待首个响应', '执行失败']
+        .every((label) => error.worklog.some((step) => step.label === label)),
+    'an LLM failure keeps the ordered runtime milestones for later human inspection',
+  )
+  failNextLlmCall = false
   rmSync(workdirRoot, { recursive: true, force: true })
 
   const originalFetch = globalThis.fetch

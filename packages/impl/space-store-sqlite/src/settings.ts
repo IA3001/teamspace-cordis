@@ -59,7 +59,6 @@ function unseal(key: string, stored: string): unknown {
 }
 
 export class SqliteSettingsStore extends SettingsService {
-  private readonly db: DatabaseSync
   private readonly stmtGet: ReturnType<DatabaseSync['prepare']>
   private readonly stmtUpsert: ReturnType<DatabaseSync['prepare']>
   private readonly stmtDelete: ReturnType<DatabaseSync['prepare']>
@@ -72,7 +71,6 @@ export class SqliteSettingsStore extends SettingsService {
     super(ctx)
     // 语句全部在构造体内准备（不能放字段初始化器 —— ES2022 语义下字段
     // 初始化器先于构造体执行，this.db 那时还没赋值）。
-    this.db = db
     this.stmtGet = db.prepare('SELECT value FROM settings WHERE key = ?')
     this.stmtUpsert = db.prepare(
       'INSERT INTO settings(key, value, updated_at) VALUES(?, ?, ?) ' +

@@ -18,13 +18,16 @@
 // space-agent-runtime（契约）+ space-agent（名册/状态机）+ space-workdir
 // （领地与路径边界）+ space-prompt（提示词内容）+ space-command（/tell 词汇）
 // + space-llm（真模型能力，经 ctx 注入消费）。
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
+import { dirname } from 'node:path'
 import type { Context } from 'cordis'
 import { AgentError } from 'space-agent'
-import { AgentRuntimeService } from 'space-agent-runtime'
+import { AgentExecutionFailureError, AgentRuntimeService } from 'space-agent-runtime'
 import { AgentRunCancelledError } from 'space-agent-runtime'
 import type { AgentExecutionReceipt } from 'space-agent-runtime'
+import type { AgentProgressSnapshot } from 'space-agent-runtime'
+import type { AgentWorklogStep } from 'space-agent-runtime'
 import type { AgentRunContext } from 'space-agent-runtime'
 import type { AgentProgressPhase } from 'space-agent-runtime'
 import { CommandError } from 'space-command'
@@ -34,6 +37,8 @@ import type { LlmService } from 'space-llm'
 import { formatCitedAnswer } from 'space-retrieval'
 import type { RetrievalHit } from 'space-retrieval'
 import { runAgentExecutionGraph } from './execution-graph.ts'
+
+export const AGENT_PROGRESS_HEARTBEAT_MS = 15_000
 
 /** ctx.llm 缺席（裸 harness）或代理异常 → null（占位模式）。 */
 function llmOrNull(ctx: Context): LlmService | null {
@@ -46,6 +51,14 @@ function llmOrNull(ctx: Context): LlmService | null {
 
 export class AgentRuntime extends AgentRuntimeService {
   private readonly runsBySource = new Map<string, Set<{ cancel: () => void; done: Promise<unknown> }>>()
+  private readonly activeProgress = new Map<string, AgentProgressSnapshot>()
+
+  listActiveProgress(): AgentProgressSnapshot[] {
+    return [...this.activeProgress.values()].map((snapshot) => ({
+      ...snapshot,
+      steps: snapshot.steps.map((step) => ({ ...step })),
+    }))
+  }
 
   registerSourceRun(sourceEventId: string, cancel: () => void, settled: Promise<unknown>): () => void {
     const run = { cancel, done: settled }
@@ -93,43 +106,115 @@ export class AgentRuntime extends AgentRuntimeService {
     }
     const sourceEventId = runContext.sourceEventId
     const runId = randomUUID()
-    const progress = (phase: AgentProgressPhase, toolId?: string, ok?: boolean, delta?: string) => {
+    const worklog: AgentWorklogStep[] = []
+    let streamText = ''
+    let streamCharacterCount = 0
+    let streamTruncated = false
+    let currentPhase: AgentProgressPhase = 'started'
+    const safeProgressDetail = (value: string) => value
+      .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[已隐藏]')
+      .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})\b/g, '[已隐藏凭据]')
+      .replace(/((?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[=:]\s*)["']?[^\s,"'&}]+/gi, '$1[已隐藏]')
+      .slice(0, 500)
+    const progress = (phase: AgentProgressPhase, toolId?: string, ok?: boolean, delta?: string, detail?: Partial<AgentWorklogStep>) => {
+      currentPhase = phase
+      const toolTitle = toolId ? this.ctx.tools.list().find((tool) => tool.id === toolId)?.title : undefined
+      const toolLabel = toolTitle ?? toolId ?? '未知工具'
+      const label = phase === 'started' ? '开始处理任务'
+        : phase === 'preparing' ? '准备专属工作区'
+          : phase === 'assembling-context' ? '整理会话、记忆与知识库上下文'
+            : phase === 'waiting-model' ? '正在请求模型，等待首个响应'
+          : phase === 'processing' ? '处理任务与上下文'
+            : phase === 'tool-start' ? `调用工具：${toolLabel}`
+              : phase === 'tool-finish' ? `${toolLabel}${ok ? '完成' : '失败'}`
+                : phase === 'text-delta' ? '正在生成回复'
+                  : phase === 'finalizing' ? '整理最终答复'
+                    : phase === 'completed' ? '已完成'
+                      : phase === 'cancelled' ? '已取消' : '执行失败'
+      const at = new Date().toISOString()
+      let step: AgentWorklogStep | undefined
+      if (phase === 'tool-start' && toolId) {
+        step = { label, at, kind: 'tool', status: 'running', toolId, ...detail }
+        worklog.push(step)
+      } else if (phase === 'tool-finish' && toolId) {
+        const previous = [...worklog].reverse().find((item) => item.kind === 'tool' && item.toolId === toolId && item.status === 'running')
+        if (previous) {
+          Object.assign(previous, detail, { at, status: ok ? 'success' : 'failed', label })
+          step = previous
+        } else {
+          step = { label, at, kind: 'tool', status: ok ? 'success' : 'failed', toolId, ...detail }
+          worklog.push(step)
+        }
+      } else {
+        if (worklog.at(-1)?.label !== label) {
+          step = { label, at, kind: 'phase', ...detail }
+          worklog.push(step)
+        } else {
+          step = worklog.at(-1)
+          if (step && detail) Object.assign(step, detail)
+        }
+      }
       if (!runContext.sessionId) return
+      if (delta) {
+        const next = Array.from(`${streamText}${delta}`)
+        streamCharacterCount += Array.from(delta).length
+        streamTruncated ||= next.length > 16_000
+        streamText = next.slice(-16_000).join('')
+      }
+      const snapshot: AgentProgressSnapshot = {
+        runId,
+        sessionId: runContext.sessionId,
+        agentId,
+        title,
+        sourceEventId: sourceEventId ?? null,
+        phase,
+        ...(toolId ? { toolId } : {}),
+        ...(toolTitle ? { toolTitle } : {}),
+        ...(step ? { step: { ...step } } : {}),
+        ...(ok === undefined ? {} : { ok }),
+        ...(delta ? { delta } : {}),
+        at,
+        steps: worklog.map((step) => ({ ...step })),
+        streamText,
+        streamCharacterCount,
+        streamTruncated,
+      }
+      this.activeProgress.set(runId, snapshot)
       try {
-        this.ctx.emit('space/agent-progress', {
-          runId,
-          sessionId: runContext.sessionId,
-          agentId,
-          title,
-          sourceEventId: sourceEventId ?? null,
-          phase,
-          ...(toolId ? { toolId } : {}),
-          ...(ok === undefined ? {} : { ok }),
-          ...(delta ? { delta } : {}),
-          at: new Date().toISOString(),
-        })
+        const { steps: _steps, streamText: _streamText, streamCharacterCount: _count,
+          streamTruncated: _truncated, ...update } = snapshot
+        this.ctx.emit('space/agent-progress', update)
       } catch {
         // Progress delivery is best-effort and must never decide the Agent result.
       }
     }
-    progress('started')
+    progress('started', undefined, undefined, undefined, { detail: `已收到任务，按「${title}」的角色配置开始处理` })
     const controller = new AbortController()
     let finish!: () => void
     const done = new Promise<void>((resolve) => { finish = resolve })
     const unregister = sourceEventId
       ? this.registerSourceRun(sourceEventId, () => controller.abort(), done)
       : () => undefined
+    const progressHeartbeat = runContext.sessionId
+      ? setInterval(() => {
+        if (!controller.signal.aborted) progress(currentPhase)
+      }, AGENT_PROGRESS_HEARTBEAT_MS)
+      : undefined
+    progressHeartbeat?.unref?.()
     const assertCurrent = () => {
       if (controller.signal.aborted) throw new AgentRunCancelledError(sourceEventId ?? '(unknown)')
     }
     try {
       assertCurrent()
-      progress('preparing')
+      progress('preparing', undefined, undefined, undefined, { detail: '正在准备或复用 Agent 专属工作区' })
       const handle = await this.ctx.workdir.claim(agentId)
       assertCurrent()
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const filename = `task-${stamp}.md`
+      const taskDirectory = `tasks/${stamp}`
+      const filename = `${taskDirectory}/task.md`
       const filepath = this.ctx.workdir.resolve(agentId, filename) // execdir 铁则：逃出工作区即炸
+      await mkdir(dirname(filepath), { recursive: true })
+      progress('preparing', undefined, undefined, undefined, { detail: `工作区已就绪；任务记录将写入 ${filename}` })
       // 提示词段（P8，待定 10 形态）：promptRef 绑定的**内容**随任务落盘 ——
       // 引用（AgentDescriptor.promptRef）与内容（prompt_templates）分离，
       // 换文案零改名单。prompts 服务缺席（裸 harness）或 ref 未预置 → 降级。
@@ -171,7 +256,7 @@ export class AgentRuntime extends AgentRuntimeService {
       let finalAnswer: string | null = null
       if (llm && llmReady) {
         // 真模型模式：promptRef 提示词（未绑定/未预置 → 通用兜底）+ 指令 →
-        // 单次调用 → 产物 artifact-<时间>.md 落盘。LlmError 原样上抛
+        // 单次调用 → 产物写在本轮任务目录。LlmError 原样上抛
         // （外层 catch 状态回 idle；委托链日志 / 5172 日志页可见）。
         // 占位提示词（「【占位提示词」开头）不当 system —— 会污染模型输出
         //（实测模型跟着占位词走神，2026-10-06）。使用共享定义中的角色数据兜底。
@@ -179,7 +264,7 @@ export class AgentRuntime extends AgentRuntimeService {
         let system = (!placeholderBody && promptBody) ||
           `你是团队共享 Agent「${title}」。\n职责说明：${snap.descriptor.description?.trim() || '按收到的任务协助团队，并清楚说明结果与依据。'}\n请按职责完成任务，输出可直接供团队使用的 Markdown 内容。`
         const historyMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = []
-        progress('processing')
+        progress('assembling-context', undefined, undefined, undefined, { detail: '正在整理近期会话、Agent 记忆与知识库检索材料' })
         if (runContext.sessionId) {
           try {
             const assembled = await this.ctx.context.assemble(runContext.sessionId, {
@@ -190,6 +275,9 @@ export class AgentRuntime extends AgentRuntimeService {
               contextSources: snap.descriptor.contextSources,
               recentLimit: 30,
               memoryLimit: 8,
+            })
+            progress('assembling-context', undefined, undefined, undefined, {
+              detail: `上下文已整理：${assembled.history.length} 条会话记录、${assembled.memories.length} 条记忆、${assembled.retrieval.length} 条知识检索结果`,
             })
             system = assembled.system
             if (assembled.memories.length) {
@@ -221,10 +309,14 @@ export class AgentRuntime extends AgentRuntimeService {
                 })
               }))
           } catch (error) {
+            progress('assembling-context', undefined, undefined, undefined, {
+              detail: `会话上下文读取失败，已回退到 Agent 基础提示词：${safeProgressDetail((error as Error).message)}`,
+            })
             this.ctx.logger.warn('[agent-runtime] 会话上下文组装失败，使用 Agent 基本提示词（session=%s）：%s',
               runContext.sessionId, (error as Error).message)
           }
         }
+        system += '\n\n工作区文件规范：保持工作区根目录整洁，不把任务文件、源码、测试、临时脚本和交付物直接散放在根目录。复用已有项目目录；长期或多文件项目放在 projects/<项目名>/{src,tests,docs}，单次任务的补充材料与结果放在 tasks/<任务目录>/，临时执行脚本放在 scripts/，工作笔记放在 notes/。任务记录由系统写入 tasks/<本轮目录>/task.md，模型交付物写入该目录下的 artifacts/。目录名简短、稳定、可读；不要重复创建同一项目目录，不要把秘密或凭据写入工作区。'
         const configuredTools = (snap.descriptor.toolIds ?? [])
           .map((id) => this.ctx.tools.list().find((tool) => tool.id === id))
           .filter((tool) => tool !== undefined)
@@ -233,7 +325,19 @@ export class AgentRuntime extends AgentRuntimeService {
             `- ${tool.id} — ${tool.title}：${tool.description ?? tool.capabilities.join('、')}`,
           ).join('\n')}\n需要工具时只返回 {"toolCalls":[{"toolId":"...","args":{...}}]}；完成时返回普通 Markdown 答案。`
         }
-        system += '\n\n若最终建议需要团队负责人（DRI）作业务决定，请在最终回复中单独加入标记「【需要DRI决策】」，并明确列出待决定事项；不需要 DRI 决定时不要输出该标记。输出此标记会暂停本会话后续 Agent 工作，直到 DRI 使用固定决策命令处理。'
+        system += '\n\n若最终建议需要团队负责人（DRI）作业务决定，请在最终回复中单独加入标记「【需要DRI决策】」，并明确列出待决定事项；不需要 DRI 决定时不要输出该标记。输出此标记会暂停本会话后续 Agent 工作，直到 DRI 通过回复卡片上的操作完成处理。'
+        const actionTargets = runContext.sessionId
+          ? this.ctx.session.listMembers(runContext.sessionId, true).flatMap((member) => {
+          if (!member.principalId || member.principalId === agentId) return []
+          try {
+            const target = this.ctx.agents.get(member.principalId)
+            return [`${target.descriptor.id}（${target.descriptor.title}）`]
+          } catch { return [] }
+          })
+          : []
+        if (actionTargets.length) {
+          system += `\n\n交互式后续操作：当回复后确有必要交给另一位 Agent 继续处理时，可在最终 Markdown 回复中提供不超过 2 个操作链接。当前会话可调用的 Agent：${actionTargets.join('、')}。链接格式为 [按钮文案](#teamspace-agent?to=<AgentID>&task=<URL-encoded-task>)，例如 [请测试者验证](#teamspace-agent?to=a_tester&task=运行相关测试并反馈结果)。链接仅在用户主动点击后触发；会发送一条 @目标Agent 的任务消息。目标必须来自上方列表，任务应清楚具体；无必要时不要生成链接，不要把过程性推理放入链接。`
+        }
         const execution = await runAgentExecutionGraph({
           ctx: this.ctx,
           agentId,
@@ -242,9 +346,11 @@ export class AgentRuntime extends AgentRuntimeService {
           profileRef: llmProfileRef,
           allowedToolIds: snap.descriptor.toolIds ?? [],
           signal: controller.signal,
-          onProgress: (phase, toolId, ok, delta) => {
-            if (phase === 'text-delta') progress('text-delta', undefined, undefined, delta)
-            else progress(phase, toolId, ok)
+          onProgress: (phase, toolId, ok, delta, detail) => {
+            if (phase === 'text-delta') progress('text-delta', undefined, undefined, delta, {
+              detail: `回复草稿已生成 ${streamCharacterCount + Array.from(delta ?? '').length} 字符，尚未提交`,
+            })
+            else progress(phase, toolId, ok, undefined, detail)
           },
           messages: [
           { role: 'system', content: system },
@@ -255,10 +361,14 @@ export class AgentRuntime extends AgentRuntimeService {
         assertCurrent()
         finalAnswer = formatCitedAnswer(execution.answer, retrievalHits)
         usedTools = execution.toolResults
-        progress('finalizing')
-        const artifactName = `artifact-${stamp}.md`
+        progress('finalizing', undefined, undefined, undefined, {
+          detail: `模型已返回答复；正在保存产物，工具调用 ${usedTools.length} 次`,
+        })
+        const artifactName = `${taskDirectory}/artifacts/answer.md`
+        const artifactPath = this.ctx.workdir.resolve(agentId, artifactName)
+        await mkdir(dirname(artifactPath), { recursive: true })
         await writeFile(
-          this.ctx.workdir.resolve(agentId, artifactName),
+          artifactPath,
           [
             `# 产物（${title}）`,
             '',
@@ -324,7 +434,9 @@ export class AgentRuntime extends AgentRuntimeService {
       assertCurrent()
       this.ctx.agents.setStatus(agentId, 'done')
       this.ctx.agents.setStatus(agentId, 'idle')
-      progress('completed')
+      progress('completed', undefined, undefined, undefined, {
+        detail: `任务已完成；写入 ${files.length} 个文件，工具调用 ${usedTools.length} 次`,
+      })
 
       // ── 诚实标注（绝不冒充）：真模型=【真模型】+model；占位=【占位】──────
       // ⚠ LLM_SABOTAGE=1（verify-p8 红测探针，断言 ⑬）：真模型模式谎报【占位】
@@ -353,15 +465,24 @@ export class AgentRuntime extends AgentRuntimeService {
         model,
         toolResults: usedTools,
         sourceEventIds: [...sourceEventIds],
+        worklog,
       }
     } catch (e) {
-      progress(controller.signal.aborted ? 'cancelled' : 'failed')
+      const cancelled = controller.signal.aborted
+      progress(cancelled ? 'cancelled' : 'failed', undefined, undefined, undefined, {
+        ...(cancelled ? {} : { status: 'failed' as const }),
+        detail: cancelled
+          ? '任务已撤回，执行已停止，未提交最终答复'
+          : `失败原因：${safeProgressDetail(e instanceof Error ? e.message : String(e))}`,
+      })
       // 干活中途失败：状态回 idle（任务作废），错误原样上抛给调用方处置。
       try { this.ctx.agents.setStatus(agentId, 'idle') } catch { /* 已是 idle 则忽略 */ }
       if (controller.signal.aborted) throw new AgentRunCancelledError(sourceEventId ?? '(unknown)')
-      throw e
+      throw new AgentExecutionFailureError(e instanceof Error ? e.message : String(e), worklog, e)
     } finally {
+      if (progressHeartbeat) clearInterval(progressHeartbeat)
       unregister()
+      this.activeProgress.delete(runId)
       finish()
     }
   }

@@ -21,6 +21,7 @@ if [ ! -d "$REPO_ROOT/node_modules" ]; then
   printf '✗ 还没有安装依赖 —— 先执行一次：\n\n    cd %s && npm install\n\n' "$REPO_ROOT" >&2
   exit 1
 fi
+acquire_app_lock
 if command -v lsof >/dev/null 2>&1; then
   if lsof -nP -iTCP:"$APP_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     printf '✗ 端口 %s 已被占用 —— 先执行 ./scripts/stop.sh（或 --check 看是谁），\n  或改 .env 里的 APP_PORT 换端口。\n' "$APP_PORT" >&2

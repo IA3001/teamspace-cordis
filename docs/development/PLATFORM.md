@@ -13,7 +13,7 @@ GitHub 是项目的主仓库，Gitee 保留为历史备份。项目由一个人�
 ## 推送后
 
 - `.github/workflows/ci.yml` 在分支 push 和手动触发时运行。变更预算检查对比 push 事件的旧 SHA 与新 SHA；首次推送或手动运行时退回到可用的父提交。
-- 完整 CI 使用 Node.js 22.5+，先核对 `GITHUB_SHA` 与 checkout SHA，再安装依赖、安装 Playwright Chromium 并执行 `npm run gate`。
+- 完整 CI 使用 Node.js 22.18+，先核对 `GITHUB_SHA` 与 checkout SHA，再安装依赖、安装 Playwright Chromium 并执行 `npm run gate`。
 - 结果和 `data/ci` 收据作为 GitHub Actions artifact 保存 7 天，不上传数据库或 `.env`。CI 不调用 LLM 或付费模型 API。
 
 ## 边界与记录

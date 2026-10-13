@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22.5.0'
+          node-version: '22.18.0'
           cache: npm
       - run: npm ci
       - name: Change budgets and protected test changes
@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22.5.0'
+          node-version: '22.18.0'
           cache: npm
       - run: .ci/run.sh "$GITHUB_SHA"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

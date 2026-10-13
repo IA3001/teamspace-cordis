@@ -4,7 +4,7 @@ GitHub 是项目的主仓库，完整持续集成由 `.github/workflows/ci.yml` 
 
 ## 执行与隔离
 
-GitHub Actions 使用 Node.js 22.5 或更新版本。完整检查入口 `.ci/run.sh` 会核对 `GITHUB_SHA` 与 checkout 的 HEAD，再安装锁定依赖、安装 Playwright Chromium，并运行 `npm run gate`。本地手动运行时可显式传入目标 commit SHA：
+GitHub Actions 使用 Node.js 22.18 或更新版本。完整检查入口 `.ci/run.sh` 会核对 `GITHUB_SHA` 与 checkout 的 HEAD，再安装锁定依赖、安装 Playwright Chromium，并运行 `npm run gate`。本地手动运行时可显式传入目标 commit SHA：
 
 ```sh
 npm ci

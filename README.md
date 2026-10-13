@@ -58,7 +58,7 @@ profiles/*/cordis.patch.yml ────────┘                         
 
 ## 本地运行
 
-需要 Node.js **22.5 或更高版本**。在仓库目录执行：
+需要 Node.js **22.18 或更高版本**。在仓库目录执行：
 
 ```bash
 npm ci                     # 按 package-lock.json 安装锁定依赖
@@ -67,7 +67,7 @@ npm run migrate            # 首次运行或迁移变更后
 npm start
 ```
 
-修改依赖或 workspace 包清单后运行 `npm install` 并提交更新后的 lockfile；npm 会强制要求 Node.js ≥22.5.0。
+修改依赖或 workspace 包清单后运行 `npm install` 并提交更新后的 lockfile；npm 会强制要求 Node.js ≥22.18.0。
 
 使用 `npm start` 或 `npm run dev` 启动服务；支持 `flock` 的环境会阻止同一 `APP_PORT` 的多个实例并发启动。
 可先运行 `npm run stop -- --check` 查看服务与遗留 watcher，再用 `npm run stop` 清理本地进程。

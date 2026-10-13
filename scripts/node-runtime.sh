@@ -12,11 +12,11 @@ resolve_node_bin() {
   fi
 
   if [ -z "$candidate" ] || [ ! -x "$candidate" ]; then
-    printf '✗ 找不到可执行的 Node.js；请安装 Node ≥ 22.5 或设置 NODE_BIN_DIR\n' >&2
+    printf '✗ 找不到可执行的 Node.js；请安装 Node ≥ 22.18 或设置 NODE_BIN_DIR\n' >&2
     return 1
   fi
-  if ! "$candidate" -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 5)) process.exit(1)'; then
-    printf '✗ Node 版本过低：%s（需要 ≥ 22.5）\n' "$($candidate -v)" >&2
+  if ! "$candidate" -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 18)) process.exit(1)'; then
+    printf '✗ Node 版本过低：%s（需要 ≥ 22.18）\n' "$($candidate -v)" >&2
     return 1
   fi
 

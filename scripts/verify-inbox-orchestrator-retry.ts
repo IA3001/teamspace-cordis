@@ -69,7 +69,7 @@ db.close()
 const parentDb = new DatabaseSync(dbPath)
 parentDb.exec('PRAGMA busy_timeout = 5000')
 const ctx = new Context() as Context & Record<string, any>
-const work = new SqliteSessionWork(ctx, parentDb, { processId: 'retry-inbox', heartbeatMs: 15 })
+const work = new SqliteSessionWork(ctx, parentDb, { processId: 'retry-inbox', leaseMs: 120_000, heartbeatMs: 15 })
 new SqliteSessionStore(ctx, parentDb)
 new SqliteEventLog(ctx, parentDb)
 const memory = new SqliteMemoryStore(ctx, parentDb)
@@ -119,7 +119,7 @@ try {
   await waitFor(() => existsSync(join(signals, 'orchestrator-restore.ready')), 'recovery worker readiness')
   writeFileSync(join(signals, 'begin'), 'start')
   await waitFor(() => existsSync(join(signals, 'orchestrator-restore.waiting-for-shared-slot')),
-    'recovery worker to observe the active Inbox blocker')
+    'recovery worker to observe the active Inbox blocker', 30_000)
   work.leave('s_blocker', 'test-blocker')
 
   await waitFor(() => existsSync(join(signals, 'inbox-attempt-1')), 'first Inbox extraction attempt')

@@ -15,20 +15,12 @@
     host: !!js process.env.APP_HOST ?? '0.0.0.0'
     port: !!js Number(process.env.TEAMSPACE_PORT ?? 5174)
 
-# timer / webui 都要进 teamspace realm：isolate 只标 server 的话，它们提供的
-# 'timer' / 'webui' 会注册到 root 键上，与 5172 那套直接撞名（实测
-# `service "webui" has been registered at <NodeWebUI>`）。页面包消费 webui
-# 也要带同标签 —— 否则只会看见 5172 的那份。
-- id: teamspace-timer
-  name: '@cordisjs/plugin-timer'
-  isolate:
-    timer: teamspace
-
+# Cordis 的 timer 插件会向 Context 混入 timeout/interval 等访问器，不能在同一
+# 进程注册第二份；5174 与 5172 共用 space-base 提供的单例 timer。
 - id: teamspace-webui
   name: '@cordisjs/plugin-webui'
   isolate:
     server: teamspace
-    timer: teamspace
     webui: teamspace
   config:
     devMode: false

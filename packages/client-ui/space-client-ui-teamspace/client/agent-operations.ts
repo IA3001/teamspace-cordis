@@ -1,11 +1,13 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, resolveComponent } from 'vue'
 import type { VNodeChild } from 'vue'
-import { useRpc } from '@cordisjs/client'
+import { useRoute, useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
 import { ICONS } from 'space-client-ui-shared/client/console.ts'
+import { renderMarkdown } from 'space-client-ui-shared/client/md.ts'
+import { DEFAULT_AGENT_ICON, SvgIcon } from 'space-client-ui-shared/client/icon-library.ts'
 import 'space-client-ui-shared/client/im.css'
 
-type AgentRow = { id: string; title: string; status: string; workdirAvailable: boolean }
+type AgentRow = { id: string; title: string; status: string; iconId?: string; workdirAvailable: boolean }
 type MemoryRow = { id: string; scope: string; kind: string; folderPath: string; text: string; weight: number; authorId: string | null; sourceEventIds: string[]; invalidatedAt: string | null; createdAt: string }
 type MemoryFolderRow = { path: string; name: string; parentPath: string; itemCount: number }
 type MemoryFolderNode = { path: string; name: string; itemCount: number; children: MemoryFolderNode[] }
@@ -13,10 +15,29 @@ type MemoryResult = { total: number; items: MemoryRow[] }
 type FileRow = { name: string; path: string; kind: 'directory' | 'file'; size: number; modifiedAt: string; isLeaf?: boolean; virtual?: boolean }
 type WorklogRow = { label: string; at: string; kind?: 'phase' | 'tool'; status?: 'running' | 'success' | 'failed'; detail?: string; toolId?: string; inputSummary?: string; resultSummary?: string; durationMs?: number }
 type RunRow = { runId: string; sessionId: string; agentId: string; title: string; phase: string; toolTitle?: string; ok?: boolean; at: string; steps: WorklogRow[] }
-type InboxMessage = { id: string; seq: number; at: string; kind: string; author: string; authorKind: string; text: string }
-type InboxDetail = { sessionId: string; sessionTitle: string; total: number; page: number; pageSize: number; cursor: number; latestSeq: number; active: boolean; items: InboxMessage[] }
+type InboxExecution = {
+  id: string; at: string; author: string; text: string; failed: boolean; worklog: WorklogRow[];
+  modelTrace: Array<{
+    index: number; model: string | null; profileRef?: string | null; startedAt: string; completedAt?: string; status: 'completed' | 'failed';
+    request: Array<{ role: 'system' | 'user' | 'assistant'; source: string; content: string; sections?: Array<{ label: string; source: string; content: string }> }>;
+    response?: string; responseTruncated?: boolean; toolCalls: Array<{
+      toolId: string; args: string; status?: 'success' | 'failed'; result?: string; error?: string; durationMs?: number
+    }>; error?: string
+  }>;
+  sourceEventIds: string[]; sourceEvents: Array<{ id: string; seq: number | null; at: string; author: string; text: string }>;
+  citations: Array<{ source: string; id: string; title: string }>
+}
+type InboxTrace = {
+  agentId: string; agentTitle: string; status: 'success' | 'failed'; startedAt: string; completedAt: string;
+  steps: Array<{ label: string; detail: string; at: string; status: 'success' | 'failed' }>
+  modelTrace: InboxExecution['modelTrace']
+}
+type InboxLiveExecution = { runId: string; title: string; phase: string; at: string; step?: WorklogRow; steps: WorklogRow[]; currentText: string }
+type InboxMessage = { id: string; seq: number; at: string; kind: string; author: string; authorKind: string; text: string; mentions?: string[]; inboxTrace?: InboxTrace | null; executions?: InboxExecution[]; liveExecutions?: InboxLiveExecution[] }
+type InboxDetail = { sessionId: string; sessionTitle: string; total: number; scannedTotal?: number; page: number; pageSize: number; cursor: number; latestSeq: number; active: boolean; items: InboxMessage[] }
 type InboxSession = { sessionId: string; sessionTitle: string; count: number; processedCount: number; cursor: number; latestSeq: number; active: boolean }
-type InboxRow = { agentId: string; pending: InboxSession[] }
+type RecentMessage = { eventId: string; seq: number; sessionId: string; sessionTitle: string; text: string; at: string; status: string; result: string; historyPage: number }
+type InboxRow = { agentId: string; pending: InboxSession[]; recent?: RecentMessage[] }
 type ProcessingRow = { agentId: string; sessionId: string; seq: number; eventId: string; phase: string; detail: string; startedAt: string; updatedAt: string }
 type WorkspaceOverview = { agents: AgentRow[]; progress: RunRow[]; inboxes: InboxRow[]; processing: ProcessingRow[] }
 type AgentOperationsRpc = {
@@ -32,6 +53,8 @@ type AgentOperationsRpc = {
   agentWorkspaceRead(token: string, agentId: string, path: string): Promise<{ text?: string; error?: string } | null>
   sharedWorkspaceBrowse(token: string, path?: string): Promise<{ exists: boolean; entries?: FileRow[]; error?: string } | null>
   sharedWorkspaceRead(token: string, path: string): Promise<{ text?: string; error?: string } | null>
+  transferWorkspaceFile(token: string, sourceAgentId: string, path: string, targetAgentId?: string): Promise<{ ok: true } | { error: string } | null>
+  apiConfig(token: string): Promise<{ publicBaseUrl: string | null; port: number } | null>
 }
 
 const token = () => localStorage.getItem('space_token') ?? ''
@@ -58,20 +81,14 @@ const phaseText: Record<string, string> = {
 }
 const inboxPhaseText: Record<string, string> = {
   'reviewing-decision': '复核团队决策', 'extracting-memory': '提取长期记忆',
-  'onboarding-history': '分析加入前的历史消息', 'advancing-cursor': '保存处理进度', failed: '处理失败，等待重试',
+  'advancing-cursor': '保存处理进度', failed: '处理失败，等待重试',
 }
 
 function sharedPage(title: string, subtitle: string, content: VNodeChild, pageClass = '') {
   const KLayout = resolveComponent('k-layout') as unknown as string
   const ElText = resolveComponent('el-text') as unknown as string
-  const ElButton = resolveComponent('el-button') as unknown as string
-  const ElSpace = resolveComponent('el-space') as unknown as string
   const ElMain = resolveComponent('el-main') as unknown as string
-  return h(KLayout, { main: 'page-teamspace-agent-operations', class: 'sp-team-layout' }, {
-    header: () => h(ElSpace, { size: 16 }, { default: () => [
-      h(ElText, { tag: 'strong' }, { default: () => '团队空间' }),
-      h(ElButton, { text: true, onClick: () => window.location.assign('/teamspace') }, { default: () => '返回会话' }),
-    ] }),
+  return h(KLayout, { main: 'page-teamspace-agent-operations', class: 'sp-team-layout sp-compact-header-layout' }, {
     default: () => [
       h(ThemeStyle),
       h(ElMain, { class: ['sp-agent-page', pageClass] }, { default: () => h('div', { class: 'sp-agent-page-inner' }, [
@@ -93,6 +110,7 @@ export const AgentMemoryPage = defineComponent({
     const rpc = useRpc<AgentOperationsRpc>()
     const agents = ref([] as AgentRow[])
     const selectedId = ref('')
+    const showArchivedAgents = ref(false)
     const memories = ref({ total: 0, items: [] } as MemoryResult)
     const folders = ref([] as MemoryFolderRow[])
     const selectedFolderPath = ref('')
@@ -133,6 +151,16 @@ export const AgentMemoryPage = defineComponent({
       selectedId.value = id; selectedFolderPath.value = ''; offset.value = 0; selected.value = null; detailOpen.value = false
       await Promise.all([loadFolders(), loadMemories()])
     }
+    const toggleArchivedAgents = () => {
+      showArchivedAgents.value = !showArchivedAgents.value
+      if (!showArchivedAgents.value && agents.value.find((agent) => agent.id === selectedId.value)?.status === 'archived') {
+        const activeAgent = agents.value.find((agent) => agent.status !== 'archived')
+        if (activeAgent) void selectMemoryAgent(activeAgent.id)
+        else {
+          selectedId.value = ''; memories.value = { total: 0, items: [] }; folders.value = []; selected.value = null
+        }
+      }
+    }
     const createMemoryFolder = async () => {
       if (!selectedId.value || !folderName.value.trim()) return
       folderBusy.value = true
@@ -161,8 +189,8 @@ export const AgentMemoryPage = defineComponent({
     const loadAgents = async () => {
       const result = await rpc.value.agentMemoryCatalog(token())
       if (!result) { notice.value = '无法读取 Agent 目录，请重新登录后重试'; return }
-      agents.value = result.map((agent: any) => ({ id: agent.id, title: agent.title, status: agent.status, workdirAvailable: false }))
-      if (!selectedId.value && agents.value.length) selectedId.value = agents.value[0]!.id
+      agents.value = result.map((agent: any) => ({ id: agent.id, title: agent.title, status: agent.status, iconId: agent.iconId, workdirAvailable: false }))
+      if (!selectedId.value) selectedId.value = agents.value.find((agent) => agent.status !== 'archived')?.id ?? ''
       await Promise.all([loadFolders(), loadMemories()])
     }
     onMounted(() => void loadAgents())
@@ -189,9 +217,18 @@ export const AgentMemoryPage = defineComponent({
       const ElTree = resolveComponent('el-tree') as unknown as string
       const ElInput = resolveComponent('el-input') as unknown as string
       const ElDialog = resolveComponent('el-dialog') as unknown as string
-      const menu = h(ElMenu, { defaultActive: selectedId.value, onSelect: (id: string) => { void selectMemoryAgent(id) } }, { default: () => agents.value.map((agent) => h(ElMenuItem, { index: agent.id, key: agent.id }, {
-        default: () => h('span', agent.title),
+      const activeAgents = agents.value.filter((agent) => agent.status !== 'archived')
+      const archivedAgents = agents.value.filter((agent) => agent.status === 'archived')
+      const renderAgentMenu = (items: AgentRow[]) => h(ElMenu, { defaultActive: selectedId.value, onSelect: (id: string) => { void selectMemoryAgent(id) } }, { default: () => items.map((agent) => h(ElMenuItem, { index: agent.id, key: agent.id }, {
+        default: () => h('span', { class: 'sp-agent-menu-item' }, [h(SvgIcon, { name: agent.iconId ?? DEFAULT_AGENT_ICON }), h('span', agent.title)]),
       })) })
+      const menu = h('div', { class: 'sp-agent-list-groups' }, [
+        renderAgentMenu(activeAgents),
+        archivedAgents.length ? h(ElButton, { text: true, class: 'sp-agent-archive-toggle', onClick: toggleArchivedAgents }, {
+          default: () => `${showArchivedAgents.value ? '收起' : '展开'}已归档（${archivedAgents.length}）`,
+        }) : null,
+        showArchivedAgents.value && archivedAgents.length ? renderAgentMenu(archivedAgents) : null,
+      ])
       const folderNodes = computed(() => {
         const root: MemoryFolderNode = { path: '', name: '全部记忆', itemCount: 0, children: [] }
         const byPath = new Map<string, MemoryFolderNode>([['', root]])
@@ -210,22 +247,23 @@ export const AgentMemoryPage = defineComponent({
         },
         renderAfterExpand: false,
         renderContent: (_render: unknown, context: { data: MemoryFolderNode }) => h('span', { class: 'sp-explorer-tree-node' }, [
-          h('span', context.data.name), context.data.path ? h(ElText, { type: 'info', size: 'small' }, { default: () => String(context.data.itemCount) }) : null,
+          h('span', { class: 'sp-explorer-tree-name' }, [h(SvgIcon, { name: context.data.path ? 'Folder' : 'FolderOpened' }), h('span', context.data.name)]),
+          context.data.path ? h(ElText, { type: 'info', size: 'small' }, { default: () => String(context.data.itemCount) }) : null,
         ]),
       })
       const table = memories.value.items.length ? h(ElTable, {
         data: memories.value.items, rowKey: 'id', highlightCurrentRow: true, loading: loading.value, tableLayout: 'fixed',
-        height: 'calc(100vh - 390px)',
+        maxHeight: 'calc(100vh - 430px)',
         onRowClick: (row: MemoryRow) => { selected.value = row; moveTarget.value = row.folderPath; detailOpen.value = true },
       }, {
         default: () => [
-          h(ElTableColumn, { prop: 'kind', label: '类型', width: 190, showOverflowTooltip: true }),
-          h(ElTableColumn, { label: '记忆内容', minWidth: 360, showOverflowTooltip: true }, {
+          h(ElTableColumn, { prop: 'kind', label: '类型', width: 150, showOverflowTooltip: true }),
+          h(ElTableColumn, { label: '记忆内容', minWidth: 200, showOverflowTooltip: true }, {
             default: ({ row }: { row: MemoryRow }) => row.text,
           }),
-          h(ElTableColumn, { label: '重要性', width: 100 }, { default: ({ row }: { row: MemoryRow }) => `${Math.round(row.weight * 100)}%` }),
+          h(ElTableColumn, { label: '重要性', width: 90 }, { default: ({ row }: { row: MemoryRow }) => `${Math.round(row.weight * 100)}%` }),
           h(ElTableColumn, { label: '创建时间', width: 130 }, { default: ({ row }: { row: MemoryRow }) => tableDateText(row.createdAt) }),
-          includeInvalidated.value ? h(ElTableColumn, { label: '状态', width: 110 }, {
+          includeInvalidated.value ? h(ElTableColumn, { label: '状态', width: 90 }, {
             default: ({ row }: { row: MemoryRow }) => row.invalidatedAt
               ? h(ElTag, { type: 'warning' }, { default: () => '已失效' }) : h(ElTag, { type: 'success' }, { default: () => '有效' }),
           }) : null,
@@ -265,20 +303,22 @@ export const AgentMemoryPage = defineComponent({
           h(ElDrawer, { modelValue: detailOpen.value, title: '记忆详情', size: '480px', direction: 'rtl',
             'onUpdate:modelValue': (value: boolean) => { detailOpen.value = value } }, {
             default: () => selected.value ? [
-              h(ElScrollbar, { maxHeight: '52vh' }, { default: () => h('pre', { class: 'sp-memory-preview' }, selected.value!.text) }),
-              h(ElDescriptions, { column: 1, border: true, size: 'small' }, { default: () => [
-                h(ElDescriptionsItem, { label: '类型' }, { default: () => selected.value!.kind }),
-                h(ElDescriptionsItem, { label: '文件夹' }, { default: () => selected.value!.folderPath || '根目录' }),
-                h(ElDescriptionsItem, { label: '重要性' }, { default: () => `${Math.round(selected.value!.weight * 100)}%` }),
-                h(ElDescriptionsItem, { label: '创建时间' }, { default: () => dateText(selected.value!.createdAt) }),
-                h(ElDescriptionsItem, { label: '来源事件' }, { default: () => selected.value!.sourceEventIds.join(', ') || '无可追溯事件' }),
-                selected.value!.invalidatedAt ? h(ElDescriptionsItem, { label: '失效时间' }, { default: () => dateText(selected.value!.invalidatedAt!) }) : null,
-              ] }),
-              h(ElSpace, { class: 'sp-memory-move', alignment: 'center' }, { default: () => [
-                h(resolveComponent('el-select') as unknown as string, { modelValue: moveTarget.value, 'onUpdate:modelValue': (value: string) => { moveTarget.value = value }, placeholder: '移动到文件夹', clearable: true }, {
-                  default: () => folders.value.map((folder) => h(resolveComponent('el-option') as unknown as string, { key: folder.path, label: folder.path, value: folder.path })),
-                }),
-                h(ElButton, { type: 'primary', onClick: () => void moveSelectedMemory() }, { default: () => '移动' }),
+              h(ElScrollbar, { maxHeight: 'calc(100vh - 150px)' }, { default: () => [
+                h(ElInput, { type: 'textarea', modelValue: selected.value!.text, readonly: true, autosize: true, 'aria-label': '记忆内容' }),
+                h(ElDescriptions, { column: 1, border: true, size: 'small' }, { default: () => [
+                  h(ElDescriptionsItem, { label: '类型' }, { default: () => selected.value!.kind }),
+                  h(ElDescriptionsItem, { label: '文件夹' }, { default: () => selected.value!.folderPath || '根目录' }),
+                  h(ElDescriptionsItem, { label: '重要性' }, { default: () => `${Math.round(selected.value!.weight * 100)}%` }),
+                  h(ElDescriptionsItem, { label: '创建时间' }, { default: () => dateText(selected.value!.createdAt) }),
+                  h(ElDescriptionsItem, { label: '来源事件' }, { default: () => selected.value!.sourceEventIds.join(', ') || '无可追溯事件' }),
+                  selected.value!.invalidatedAt ? h(ElDescriptionsItem, { label: '失效时间' }, { default: () => dateText(selected.value!.invalidatedAt!) }) : null,
+                ] }),
+                h(ElSpace, { class: 'sp-memory-move', alignment: 'center' }, { default: () => [
+                  h(resolveComponent('el-select') as unknown as string, { modelValue: moveTarget.value, 'onUpdate:modelValue': (value: string) => { moveTarget.value = value }, placeholder: '移动到文件夹', clearable: true }, {
+                    default: () => folders.value.map((folder) => h(resolveComponent('el-option') as unknown as string, { key: folder.path, label: folder.path, value: folder.path })),
+                  }),
+                  h(ElButton, { type: 'primary', onClick: () => void moveSelectedMemory() }, { default: () => '移动' }),
+                ] }),
               ] }),
             ] : h(ElEmpty, { description: '选择一条记忆查看完整内容与来源' }),
           }),
@@ -305,8 +345,10 @@ export const AgentWorkspacePage = defineComponent({
   name: 'AgentWorkspacePage',
   setup() {
     const rpc = useRpc<AgentOperationsRpc>()
+    const route = useRoute()
     const agents = ref([] as AgentRow[])
     const selectedId = ref('')
+    const showArchivedAgents = ref(false)
     const scope = ref<'agent' | 'shared'>('agent')
     const inboxes = ref([] as InboxRow[])
     const inboxDialogOpen = ref(false)
@@ -316,12 +358,21 @@ export const AgentWorkspacePage = defineComponent({
     const inboxMode = ref<'pending' | 'history'>('pending')
     const inboxLoading = ref(false)
     const inboxError = ref('')
+    const inboxFocusId = ref('')
     const runs = ref([] as RunRow[])
     const processing = ref([] as ProcessingRow[])
     const files = ref([] as FileRow[])
     const selectedFile = ref(null as FileRow | null)
     const fileDrawerOpen = ref(false)
-    const activeTab = ref('files')
+    const transferDialogOpen = ref(false)
+    const transferTarget = ref('__shared__')
+    const transferBusy = ref(false)
+    const transferNotice = ref('')
+    const transferError = ref(false)
+    const fileActionNotice = ref('')
+    const fileActionError = ref(false)
+    const fileActionBusy = ref(false)
+    const activeTab = ref('overview')
     const currentPath = ref('')
     const treeRootData = computed(() => [{
       name: scope.value === 'shared' ? '公共工作区' : '个人工作区',
@@ -333,6 +384,76 @@ export const AgentWorkspacePage = defineComponent({
     const loading = ref(false)
     let poller: ReturnType<typeof setInterval> | undefined
     let overviewLoading = false
+    let initialAgentQueryApplied = false
+    let apiBase = ''
+
+    const resolveApiBase = async () => {
+      if (apiBase) return apiBase
+      const config = await rpc.value.apiConfig(token())
+      if (!config) throw new Error('无法读取 API 地址，请重新登录后重试')
+      apiBase = config.publicBaseUrl || `${window.location.protocol}//${window.location.hostname}:${config.port}`
+      return apiBase
+    }
+
+    const uploadFiles = async (picked: FileList | null) => {
+      if (!picked?.length || fileActionBusy.value) return
+      fileActionBusy.value = true
+      fileActionNotice.value = ''
+      let uploaded = 0
+      const failures: string[] = []
+      try {
+        const base = await resolveApiBase()
+        for (const file of Array.from(picked)) {
+          const path = [currentPath.value === legacyFilesPath ? '' : currentPath.value, file.name].filter(Boolean).join('/')
+          const query = new URLSearchParams({ scope: scope.value, path })
+          if (scope.value === 'agent') query.set('agentId', selectedId.value)
+          const response = await fetch(`${base}/api/workspace-files/upload?${query}`, {
+            method: 'POST', headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/octet-stream' }, body: file,
+          })
+          if (response.ok) uploaded++
+          else {
+            const result = await response.json().catch(() => ({})) as { error?: string }
+            failures.push(`${file.name}：${result.error ?? `HTTP ${response.status}`}`)
+          }
+        }
+        fileActionError.value = failures.length > 0
+        fileActionNotice.value = failures.length
+          ? `上传 ${uploaded} 个，失败 ${failures.length} 个：${failures.slice(0, 3).join('；')}`
+          : `已上传 ${uploaded} 个文件`
+        if (uploaded) await loadFiles()
+      } catch (error) {
+        fileActionError.value = true
+        fileActionNotice.value = (error as Error).message || '上传文件失败'
+      } finally { fileActionBusy.value = false }
+    }
+
+    const downloadSelectedFile = async () => {
+      const selected = selectedFile.value
+      if (!selected || fileActionBusy.value) return
+      fileActionBusy.value = true
+      fileActionNotice.value = ''
+      try {
+        const base = await resolveApiBase()
+        const query = new URLSearchParams({ scope: scope.value, path: selected.path })
+        if (scope.value === 'agent') query.set('agentId', selectedId.value)
+        const response = await fetch(`${base}/api/workspace-files/download?${query}`, { headers: { Authorization: `Bearer ${token()}` } })
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({})) as { error?: string }
+          throw new Error(result.error ?? `下载失败（HTTP ${response.status}）`)
+        }
+        const objectUrl = URL.createObjectURL(await response.blob())
+        const anchor = document.createElement('a')
+        anchor.href = objectUrl
+        anchor.download = selected.name
+        anchor.click()
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+        fileActionError.value = false
+        fileActionNotice.value = `已开始下载「${selected.name}」`
+      } catch (error) {
+        fileActionError.value = true
+        fileActionNotice.value = (error as Error).message || '下载文件失败'
+      } finally { fileActionBusy.value = false }
+    }
 
     const loadFiles = async () => {
       if (scope.value === 'agent' && !selectedId.value) return
@@ -362,8 +483,15 @@ export const AgentWorkspacePage = defineComponent({
         runs.value = result.progress
         inboxes.value = result.inboxes
         processing.value = result.processing ?? []
-        if (!selectedId.value && agents.value.length) selectedId.value = agents.value[0]!.id
-        if (selectedId.value && !agents.value.some((agent) => agent.id === selectedId.value)) selectedId.value = agents.value[0]?.id ?? ''
+        const requestedAgent = typeof route.query.agent === 'string' ? route.query.agent : ''
+        if (!initialAgentQueryApplied && requestedAgent && agents.value.some((agent) => agent.id === requestedAgent)) {
+          selectedId.value = requestedAgent
+          showArchivedAgents.value = agents.value.find((agent) => agent.id === requestedAgent)?.status === 'archived'
+          initialAgentQueryApplied = true
+        }
+        const firstActiveAgent = agents.value.find((agent) => agent.status !== 'archived')
+        if (!selectedId.value && firstActiveAgent) selectedId.value = firstActiveAgent.id
+        if (selectedId.value && !agents.value.some((agent) => agent.id === selectedId.value)) selectedId.value = firstActiveAgent?.id ?? ''
         if (loadWorkspace && selectedId.value) await loadFiles()
         if (inboxDialogOpen.value && inboxSession.value) void loadInboxPage(inboxPage.value)
       } catch (error) { notice.value = (error as Error).message }
@@ -383,17 +511,28 @@ export const AgentWorkspacePage = defineComponent({
       } catch (error) { inboxError.value = (error as Error).message || '读取待处理消息失败' }
       finally { inboxLoading.value = false }
     }
-    const openInbox = (item: InboxSession, mode: 'pending' | 'history') => {
+    const openInbox = (item: InboxSession, mode: 'pending' | 'history', page = 1, focusId = '') => {
       inboxSession.value = item
+      inboxFocusId.value = focusId
       inboxMode.value = mode
       inboxDetail.value = null
-      inboxPage.value = 1
+      inboxPage.value = page
       inboxDialogOpen.value = true
-      void loadInboxPage(1)
+      void loadInboxPage(page)
     }
     const selectAgent = (id: string) => { selectedId.value = id; currentPath.value = ''; void loadFiles() }
+    const toggleArchivedAgents = () => {
+      showArchivedAgents.value = !showArchivedAgents.value
+      if (!showArchivedAgents.value && agents.value.find((agent) => agent.id === selectedId.value)?.status === 'archived') {
+        const activeAgent = agents.value.find((agent) => agent.status !== 'archived')
+        selectedId.value = activeAgent?.id ?? ''
+        currentPath.value = ''
+        files.value = []; selectedFile.value = null; preview.value = ''; previewError.value = ''
+        if (activeAgent) void loadFiles()
+      }
+    }
     const selectScope = (value: 'agent' | 'shared') => {
-      scope.value = value; currentPath.value = ''; selectedFile.value = null; fileDrawerOpen.value = false; activeTab.value = 'files'; void loadFiles()
+      scope.value = value; currentPath.value = ''; selectedFile.value = null; fileDrawerOpen.value = false; activeTab.value = value === 'agent' ? 'overview' : 'files'; void loadFiles()
     }
     const openFile = async (row: FileRow) => {
       if (row.path === legacyFilesPath) { currentPath.value = legacyFilesPath; await loadFiles(); return }
@@ -407,6 +546,23 @@ export const AgentWorkspacePage = defineComponent({
         preview.value = result?.text ?? ''
         previewError.value = result?.error ?? (!result ? '无法读取文件预览' : '')
       } catch (error) { previewError.value = (error as Error).message }
+    }
+    const transferSelectedFile = async () => {
+      if (!selectedFile.value || (scope.value === 'agent' && !selectedId.value) || transferBusy.value) return
+      transferBusy.value = true
+      transferNotice.value = ''
+      try {
+        const targetAgentId = transferTarget.value === '__shared__' ? undefined : transferTarget.value
+        const sourceAgentId = scope.value === 'agent' ? selectedId.value : ''
+        const result = await rpc.value.transferWorkspaceFile(token(), sourceAgentId, selectedFile.value.path, targetAgentId)
+        if (!result) { transferError.value = true; transferNotice.value = '无法转发文件，请重新登录后重试'; return }
+        if ('error' in result) { transferError.value = true; transferNotice.value = result.error; return }
+        transferError.value = false
+        transferNotice.value = `已将「${selectedFile.value.name}」复制到${targetAgentId ? ` ${agents.value.find((agent) => agent.id === targetAgentId)?.title ?? '目标 Agent'} 工作区` : '公共工作区'}；源文件未更改`
+        transferDialogOpen.value = false
+        if (targetAgentId) void loadFiles()
+      } catch (error) { notice.value = (error as Error).message }
+      finally { transferBusy.value = false }
     }
     const parentPath = () => {
       currentPath.value = currentPath.value === legacyFilesPath ? '' : currentPath.value.split('/').slice(0, -1).join('/')
@@ -442,6 +598,43 @@ export const AgentWorkspacePage = defineComponent({
       const ElSpace = resolveComponent('el-space') as unknown as string
       const ElDialog = resolveComponent('el-dialog') as unknown as string
       const ElPagination = resolveComponent('el-pagination') as unknown as string
+      const ElCollapse = resolveComponent('el-collapse') as unknown as string
+      const ElCollapseItem = resolveComponent('el-collapse-item') as unknown as string
+      const ElSelect = resolveComponent('el-select') as unknown as string
+      const ElOption = resolveComponent('el-option') as unknown as string
+      const Markdown = resolveComponent('k-markdown') as unknown as string
+      const renderRichText = (text: string) => renderMarkdown(text, h, { Markdown, Button: ElButton })
+      const auditDisplayText = (raw: string) => {
+        const value = raw.trim()
+        try {
+          const parsed: unknown = JSON.parse(value)
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'toolCalls' in parsed && Array.isArray(parsed.toolCalls)) {
+            const calls = parsed.toolCalls as Array<{ toolId?: unknown; args?: unknown }>
+            return calls.map((call, index) => {
+              const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
+                ? Object.entries(call.args as Record<string, unknown>) : [['参数', call.args] as [string, unknown]]
+              return `### 工具调用 ${index + 1} · ${typeof call.toolId === 'string' ? call.toolId : '未知工具'}\n` + args.map(([key, item]) => {
+                const language = key === 'code' ? 'javascript' : key === 'content' || key === 'text' ? '' : 'json'
+                const body = typeof item === 'string' ? item : JSON.stringify(item, null, 2)
+                return `**${key}**\n\`\`\`${language}\n${body}\n\`\`\``
+              }).join('\n\n')
+            }).join('\n\n')
+          }
+          if (parsed && typeof parsed === 'object') return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
+          if (typeof parsed === 'string') return parsed
+        } catch { /* Plain text or partial stream: retain it as text. */ }
+        return raw.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"')
+      }
+      const renderAuditContent = (raw: string, id: string) => {
+        const text = auditDisplayText(raw)
+        if (text.length <= 1200) return renderRichText(text)
+        return h('div', { class: 'sp-workspace-long-audit' }, [
+          h(ElText, { type: 'info', size: 'small' }, { default: () => `长内容 · ${text.length.toLocaleString('zh-CN')} 字符` }),
+          h(ElCollapse, {}, { default: () => [h(ElCollapseItem, {
+            name: `full-${id}`, title: '展开完整内容',
+          }, { default: () => h('div', { class: 'sp-workspace-audit-content' }, renderRichText(text)) })] }),
+        ])
+      }
       const activeRuns = runs.value.filter((run) => run.agentId === selectedId.value)
       const inbox = inboxes.value.find((item) => item.agentId === selectedId.value)?.pending ?? []
       const activeProcessing = processing.value.filter((item) => item.agentId === selectedId.value)
@@ -450,19 +643,28 @@ export const AgentWorkspacePage = defineComponent({
       const failedInbox = activeProcessing.filter((item) => item.phase === 'failed')
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
       const file = selectedFile.value
-      const agentMenu = h(ElScrollbar, { class: 'sp-workspace-agent-scroll', always: true, height: '100%' }, { default: () => h(ElMenu, { defaultActive: selectedId.value, onSelect: selectAgent }, {
-        default: () => agents.value.map((agent) => {
+      const activeAgents = agents.value.filter((agent) => agent.status !== 'archived')
+      const archivedAgents = agents.value.filter((agent) => agent.status === 'archived')
+      const renderAgentMenu = (items: AgentRow[]) => h(ElMenu, { defaultActive: selectedId.value, onSelect: selectAgent }, {
+        default: () => items.map((agent) => {
           const run = runs.value.find((item) => item.agentId === agent.id)
           return h(ElMenuItem, { index: agent.id, key: agent.id }, {
             default: () => h('div', { class: 'sp-workspace-agent-row' }, [
-              h('span', agent.title),
-              h(ElTag, { size: 'small', type: run || agent.status === 'working' ? 'warning' : 'info', effect: 'plain' }, {
-                default: () => run ? phaseText[run.phase] ?? run.phase : agent.status === 'working' ? '处理中' : agent.status,
+              h('span', { class: 'sp-workspace-agent-title' }, [h(SvgIcon, { name: agent.iconId ?? DEFAULT_AGENT_ICON }), h('span', agent.title)]),
+              h(ElTag, { size: 'small', type: agent.status === 'archived' ? 'info' : run || agent.status === 'working' ? 'warning' : 'info', effect: 'plain' }, {
+                default: () => agent.status === 'archived' ? '已归档' : run ? phaseText[run.phase] ?? run.phase : agent.status === 'working' ? '处理中' : agent.status,
               }),
             ]),
           })
         }),
-      }) })
+      })
+      const agentMenu = h(ElScrollbar, { class: 'sp-workspace-agent-scroll', always: true, height: '100%' }, { default: () => h('div', { class: 'sp-agent-list-groups' }, [
+        renderAgentMenu(activeAgents),
+        archivedAgents.length ? h(ElButton, { text: true, class: 'sp-agent-archive-toggle', onClick: toggleArchivedAgents }, {
+          default: () => `${showArchivedAgents.value ? '收起' : '展开'}已归档（${archivedAgents.length}）`,
+        }) : null,
+        showArchivedAgents.value && archivedAgents.length ? renderAgentMenu(archivedAgents) : null,
+      ]) })
       const pathToolbar = h(ElSpace, { alignment: 'center', wrap: true, class: 'sp-workspace-path' }, { default: () => [
         h(ElButton, { text: true, disabled: !currentPath.value, onClick: parentPath }, { default: () => '上一级' }),
         h(ElBreadcrumb, {}, { default: () => [
@@ -475,6 +677,13 @@ export const AgentWorkspacePage = defineComponent({
             return h(ElBreadcrumbItem, {}, { default: () => h(ElButton, { text: true, onClick: () => { currentPath.value = path; void loadFiles() } }, { default: () => label }) })
           }),
         ] }),
+        h(ElButton, { type: 'primary', plain: true, loading: fileActionBusy.value, disabled: currentPath.value === legacyFilesPath, onClick: () => {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.multiple = true
+          input.onchange = () => { void uploadFiles(input.files); input.value = '' }
+          input.click()
+        } }, { default: () => '上传文件' }),
         h(ElButton, { text: true, loading: loading.value, onClick: () => void loadFiles() }, { default: () => '刷新' }),
       ] })
       const visibleFiles = currentPath.value === legacyFilesPath
@@ -490,7 +699,9 @@ export const AgentWorkspacePage = defineComponent({
         if (row.kind === 'file') fileDrawerOpen.value = true
       } }, {
         default: () => [
-          h(ElTableColumn, { label: '名称', minWidth: 280, showOverflowTooltip: true }, { default: ({ row }: { row: FileRow }) => `${row.kind === 'directory' ? '▸ ' : ''}${row.name}` }),
+          h(ElTableColumn, { label: '名称', minWidth: 280, showOverflowTooltip: true }, { default: ({ row }: { row: FileRow }) => h('span', { class: 'sp-workspace-file-name' }, [
+            h(SvgIcon, { name: row.kind === 'directory' ? 'Folder' : 'Document' }), h('span', row.name),
+          ]) }),
           h(ElTableColumn, { label: '修改时间', width: 150 }, { default: ({ row }: { row: FileRow }) => tableDateText(row.modifiedAt) }),
           h(ElTableColumn, { label: '大小', width: 110 }, { default: ({ row }: { row: FileRow }) => row.kind === 'directory' ? '—' : `${Math.max(1, Math.round(row.size / 1024))} KB` }),
         ],
@@ -542,25 +753,126 @@ export const AgentWorkspacePage = defineComponent({
           if (node.kind === 'directory') { currentPath.value = node.path === '__workspace_root__' ? '' : node.path; void loadFiles() }
         },
         renderContent: (_render: unknown, context: { data: FileRow }) => h('span', { class: 'sp-explorer-tree-node' }, [
-          h('span', { class: 'sp-explorer-tree-name' }, context.data.name),
+          h('span', { class: 'sp-explorer-tree-name' }, [h(SvgIcon, { name: context.data.kind === 'directory' ? 'Folder' : 'Document' }), h('span', context.data.name)]),
         ]),
       }) })
+      const renderModelInteraction = (parentId: string, call: InboxExecution['modelTrace'][number]) => h(ElCollapseItem, {
+        key: `${parentId}-model-${call.index}`, name: `model-${parentId}-${call.index}`,
+        title: `第 ${call.index} 次模型请求 · ${call.model ?? '模型未报告'}${call.profileRef ? ` · 配置 ${call.profileRef}` : ''} · ${call.status === 'completed' ? '已返回' : '失败'} · ${tableDateText(call.startedAt)}`,
+      }, { default: () => [
+        h('div', { class: 'sp-workspace-audit-label' }, '模型实际收到的内容 · 按发送顺序'),
+        ...call.request.map((message, messageIndex) => h('article', { class: ['sp-workspace-source-event', `is-${message.role}`], key: `${call.index}-${messageIndex}` }, [
+          h('div', { class: 'sp-workspace-audit-head' }, [h('strong', message.role.toUpperCase()), h(ElTag, { size: 'small', effect: 'plain' }, { default: () => message.source })]),
+          message.sections?.length ? h(ElCollapse, {}, { default: () => message.sections!.map((section, sectionIndex) => h(ElCollapseItem, {
+            key: `${call.index}-${messageIndex}-section-${sectionIndex}`,
+            name: `section-${parentId}-${call.index}-${messageIndex}-${sectionIndex}`,
+            title: `${section.label} · ${section.source}`,
+          }, { default: () => h('div', { class: 'sp-workspace-audit-content' }, renderAuditContent(section.content, `${parentId}-${call.index}-${messageIndex}-${sectionIndex}`)) })) })
+            : h('div', { class: 'sp-workspace-audit-content' }, renderAuditContent(message.content, `${parentId}-${call.index}-${messageIndex}`)),
+        ])),
+        h('div', { class: 'sp-workspace-audit-label' }, '模型原始响应'),
+        call.response ? h('div', { class: 'sp-workspace-audit-content is-response' }, renderAuditContent(call.response, `${parentId}-${call.index}-response`)) : h(ElText, { type: 'warning' }, { default: () => call.error ?? '该请求没有收到模型响应。' }),
+        call.responseTruncated ? h(ElText, { type: 'warning' }, { default: () => '响应超过审计记录上限，已截断；记录明确标记为不完整。' }) : null,
+        call.toolCalls.length ? h('section', {}, [
+          h('strong', '解析出的工具调用与执行结果'),
+          ...call.toolCalls.map((tool, toolIndex) => h('article', { class: 'sp-workspace-source-event', key: `${call.index}-tool-${toolIndex}` }, [
+            h('strong', `${tool.toolId} · ${tool.status === 'success' ? '成功' : tool.status === 'failed' ? '失败' : '未执行'}`),
+            h('div', { class: 'sp-workspace-audit-label' }, '参数'),
+            h('div', { class: 'sp-workspace-audit-content' }, renderAuditContent(tool.args, `${parentId}-${call.index}-tool-${toolIndex}-args`)),
+            tool.result ? h('div', {}, [h('div', { class: 'sp-workspace-audit-label' }, '结果'), h('div', { class: 'sp-workspace-audit-content' }, renderAuditContent(tool.result, `${parentId}-${call.index}-tool-${toolIndex}-result`))]) : null,
+            tool.error ? h('div', { class: 'sp-workspace-audit-content is-error' }, tool.error) : null,
+            tool.durationMs !== undefined ? h(ElText, { type: 'info' }, { default: () => `耗时 ${tool.durationMs} ms` }) : null,
+          ])),
+        ]) : null,
+      ] })
+
+      const renderExecution = (execution: InboxExecution, sourceEventId: string) => {
+        const isOwnMessage = execution.id === sourceEventId
+        return h(ElCollapseItem, {
+        name: execution.id, key: execution.id,
+        title: `${isOwnMessage ? '本条 Agent 消息的处理记录' : `Agent 答复 · ${execution.author}`} · ${execution.failed ? '失败' : '完成'} · ${execution.worklog.length} 步 · ${tableDateText(execution.at)}`,
+      }, { default: () => [
+        isOwnMessage ? h('div', { class: 'sp-workspace-audit-label' }, '上方消息就是本次 Agent 发言；此处只列处理记录') : null,
+        !isOwnMessage ? h('div', { class: 'sp-workspace-audit-label' }, '执行步骤') : null,
+        execution.worklog.length ? h(ElTimeline, {}, { default: () => execution.worklog.map((step, index) => h(ElTimelineItem, {
+          key: `${execution.id}-${index}`, timestamp: tableDateText(step.at), type: step.status === 'failed' ? 'danger' : 'primary',
+        }, { default: () => [h('strong', step.label), step.detail ? h('div', step.detail) : null,
+          step.inputSummary ? h('div', `工具输入摘要：${step.inputSummary}`) : null,
+          step.resultSummary ? h('div', `工具结果：${step.resultSummary}`) : null,
+          step.durationMs !== undefined ? h('div', `耗时 ${step.durationMs} ms`) : null] })) })
+          : h(ElText, { type: 'info' }, { default: () => '此答复没有保存阶段或工具记录。' }),
+        execution.modelTrace.length ? h(ElCollapse, { class: 'sp-workspace-model-trace' }, { default: () => execution.modelTrace.map((call) => renderModelInteraction(execution.id, call)) })
+          : h(ElText, { type: 'info' }, { default: () => '没有模型请求记录' }),
+        execution.citations.length || execution.sourceEventIds.length ? h('div', { class: 'sp-workspace-execution-sources' }, [
+          h('strong', '使用的来源'),
+          ...execution.citations.map((citation, index) => h(ElTag, { key: `${citation.source}-${citation.id}-${index}`, size: 'small', effect: 'plain' }, {
+            default: () => `${citation.source} · ${citation.title} (${citation.id})`,
+          })),
+          ...execution.sourceEventIds.filter((id) => !execution.citations.some((citation) => citation.id === id)).map((id) =>
+            h(ElTag, { key: `event-${id}`, size: 'small', effect: 'plain' }, { default: () => `上下文事件 · ${id}` })),
+          execution.sourceEvents.length ? h(ElCollapse, { class: 'sp-workspace-source-events' }, { default: () => [h(ElCollapseItem, {
+            name: `context-${execution.id}`, title: `展开 ${execution.sourceEvents.length} 条上下文消息`,
+          }, { default: () => execution.sourceEvents.map((source) => h('article', { class: 'sp-workspace-source-event', key: source.id }, [
+            h(ElText, { type: 'info' }, { default: () => `${source.author}${source.seq === null ? '' : ` · #${source.seq}`} · ${source.at ? tableDateText(source.at) : ''}` }),
+            source.text ? h('p', { class: 'sp-workspace-queue-event-text' }, source.text) : null,
+          ])) })] }) : null,
+        ]) : null,
+        !isOwnMessage ? h('div', { class: 'sp-workspace-audit-label' }, 'Agent 答复内容') : null,
+        !isOwnMessage ? h('div', { class: 'sp-workspace-audit-content is-response' }, renderAuditContent(execution.text, `reply-${execution.id}`)) : null,
+      ] })
+      }
       const filePane = h(ElRow, { gutter: 18, class: 'sp-workspace-file-pane' }, { default: () => [
         h(ElCol, { span: 6, class: 'sp-workspace-tree-column' }, h(ElCard, { shadow: 'never', class: 'sp-workspace-folder-card' }, {
           header: () => h('strong', '文件夹'),
           default: () => directoryTree,
         })),
         h(ElCol, { span: 18, class: 'sp-workspace-file-column' }, [pathToolbar, fileTable,
-          scope.value === 'agent' && !currentPath.value ? h(ElAlert, {
-            title: '工作区目录规范', type: 'info', showIcon: true, closable: false,
-            description: '任务记录按轮次归入 tasks/；项目按 projects/<名称>/src、tests、docs 组织；脚本放 scripts/，笔记放 notes/。公共工作区对 Agent 只读。',
-          }) : null,
+          fileActionNotice.value ? h(ElAlert, { type: fileActionError.value ? 'error' : 'success', title: fileActionNotice.value, closable: true, onClose: () => { fileActionNotice.value = '' } }) : null,
           notice.value ? h(ElText, { type: 'danger' }, { default: () => notice.value }) : null,
         ]),
+      ] })
+      const recent = inboxes.value.find((row) => row.agentId === selectedId.value)?.recent ?? []
+      const teamQueue = inboxes.value.flatMap((row) => row.pending.filter((session) => session.count > 0).map((session) => ({
+        ...session, agentId: row.agentId, agentTitle: agents.value.find((agent) => agent.id === row.agentId)?.title ?? row.agentId,
+        processing: processing.value.find((item) => item.agentId === row.agentId && item.sessionId === session.sessionId),
+      }))).sort((a, b) => Number(Boolean(b.processing)) - Number(Boolean(a.processing)) || b.count - a.count)
+      const statusLabels: Record<string, string> = { replied: '已答复', failed: '失败', blocked: '发言受限', scanned: '后台已扫描', legacy: '旧记录 · 详情缺失' }
+      const overviewPane = h(ElSpace, { direction: 'vertical', fill: true, class: 'sp-workspace-queue-sessions' }, { default: () => [
+        h(ElSpace, { wrap: true }, { default: () => [
+          h(ElTag, { type: teamQueue.length ? 'warning' : 'success' }, { default: () => `全队待处理 ${teamQueue.reduce((sum, item) => sum + item.count, 0)} 条` }),
+          h(ElTag, { effect: 'plain' }, { default: () => `当前 Agent 待处理 ${inbox.reduce((sum, item) => sum + item.count, 0)} 条` }),
+          h(ElButton, { text: true, onClick: () => void loadOverview() }, { default: () => '刷新状态' }),
+        ] }),
+        h('strong', '最近处理的消息 · 当前 Agent'),
+        h(ElText, { type: 'info', size: 'small' }, { default: () => '按记录时间倒序。后台扫描与实际答复分别标识；点击查看原消息、处理步骤、答复和工具结果。' }),
+        h(ElTable, { data: recent, size: 'small', emptyText: '暂无处理记录', rowKey: 'eventId' }, { default: () => [
+          h(ElTableColumn, { label: '时间', width: 110 }, { default: ({ row }: { row: RecentMessage }) => tableDateText(row.at) }),
+          h(ElTableColumn, { prop: 'sessionTitle', label: '会话', minWidth: 110, showOverflowTooltip: true }),
+          h(ElTableColumn, { prop: 'text', label: '原消息', minWidth: 180, showOverflowTooltip: true }),
+          h(ElTableColumn, { label: '结果', width: 145 }, { default: ({ row }: { row: RecentMessage }) => h(ElTag, { size: 'small', type: row.status === 'failed' ? 'danger' : row.status === 'replied' ? 'success' : 'info', effect: 'plain' }, { default: () => statusLabels[row.status] ?? row.status }) }),
+          h(ElTableColumn, { prop: 'result', label: '处理结果摘要', minWidth: 180, showOverflowTooltip: true }),
+          h(ElTableColumn, { label: '详情', width: 100 }, { default: ({ row }: { row: RecentMessage }) => h(ElButton, { text: true, type: 'primary', onClick: () => {
+            const session = inbox.find((item) => item.sessionId === row.sessionId)
+            if (session) openInbox(session, 'history', row.historyPage, row.eventId)
+          } }, { default: () => `查看 #${row.seq}` }) }),
+        ] }),
+        h('strong', '全队消息队列'),
+        h(ElText, { type: 'info', size: 'small' }, { default: () => '跨 Agent、跨会话汇总待处理投递。同一消息分给多个 Agent 时分别计数；零待处理会话不占用列表。' }),
+        h(ElTable, { data: teamQueue, size: 'small', emptyText: '全队已追上最新消息，没有待处理投递' }, { default: () => [
+          h(ElTableColumn, { prop: 'agentTitle', label: 'Agent', minWidth: 130 }),
+          h(ElTableColumn, { prop: 'sessionTitle', label: '会话', minWidth: 150, showOverflowTooltip: true }),
+          h(ElTableColumn, { prop: 'count', label: '待处理', width: 90 }),
+          h(ElTableColumn, { label: '状态 / 当前步骤', minWidth: 200 }, { default: ({ row }: { row: typeof teamQueue[number] }) => row.processing
+            ? `${inboxPhaseText[row.processing.phase] ?? row.processing.phase} · #${row.processing.seq}` : row.active ? '即将处理' : '等待处理' }),
+          h(ElTableColumn, { label: '操作', width: 110 }, { default: ({ row }: { row: typeof teamQueue[number] }) => h(ElButton, { text: true, type: 'primary', onClick: () => {
+            selectAgent(row.agentId); openInbox(row, 'pending')
+          } }, { default: () => '查看消息' }) }),
+        ] }),
       ] })
       const workspaceCard = h(ElCard, { shadow: 'never', loading: loading.value }, {
         header: () => h('strong', scope.value === 'shared' ? '团队公共工作区 · Agent 只读' : '个人工作区'),
         default: () => [currentWorkCard, h(ElTabs, { class: 'sp-workspace-tabs', modelValue: activeTab.value, 'onUpdate:modelValue': (value: string) => { activeTab.value = value } }, { default: () => [
+          scope.value === 'agent' ? h(ElTabPane, { label: '消息概览', name: 'overview' }, { default: () => overviewPane }) : null,
           h(ElTabPane, { label: '文件', name: 'files' }, { default: () => filePane }),
           scope.value === 'agent' ? h(ElTabPane, { label: '运行记录', name: 'runs' }, { default: () => activity.length ? h(ElTimeline, {}, { default: () => activity.map((step) => h(ElTimelineItem, {
             timestamp: dateText(step.at), placement: 'top', type: 'primary',
@@ -569,7 +881,7 @@ export const AgentWorkspacePage = defineComponent({
             step.resultSummary ? h('div', `工具结果：${step.resultSummary}`) : null,
             step.durationMs !== undefined ? h('div', `耗时 ${step.durationMs} ms`) : null] })) })
             : h(ElEmpty, { description: 'Agent 当前没有运行记录' }) }) : null,
-          scope.value === 'agent' ? h(ElTabPane, { label: `消息队列 (${inbox.reduce((sum, item) => sum + item.count, 0)})`, name: 'queue' }, { default: () => inbox.length ? h('div', { class: 'sp-workspace-queue-sessions' }, inbox.map((item) => {
+          scope.value === 'agent' ? h(ElTabPane, { label: `消息队列 (${inbox.reduce((sum, item) => sum + item.count, 0)})`, name: 'queue' }, { default: () => inbox.some((item) => item.count > 0) ? h('div', { class: 'sp-workspace-queue-sessions' }, inbox.filter((item) => item.count > 0).map((item) => {
             const sessionProcessing = activeProcessing.find((processingItem) => processingItem.sessionId === item.sessionId)
             const isProcessing = Boolean(sessionProcessing && sessionProcessing.phase !== 'failed')
             const isFailed = sessionProcessing?.phase === 'failed'
@@ -596,18 +908,47 @@ export const AgentWorkspacePage = defineComponent({
           ]))) : h(ElEmpty, { description: '还没有已处理的消息记录' }) }) : null,
         ] })],
       })
+      const codeFence = '`'.repeat(Math.max(3, ...[...preview.value.matchAll(/`+/g)].map((match) => match[0].length + 1)))
+      const fileLanguage = file?.name.match(/\.([^.]+)$/)?.[1]?.toLowerCase() ?? ''
+      const fileCode = `${codeFence}${fileLanguage}\n${preview.value}\n${codeFence}`
       const fileDrawer = h(ElDrawer, { modelValue: fileDrawerOpen.value, title: file?.name ?? '文件预览', size: 'min(720px, 60vw)', direction: 'rtl',
         'onUpdate:modelValue': (value: boolean) => { fileDrawerOpen.value = value } }, {
         default: () => file ? [
           h(ElText, { type: 'info' }, { default: () => `${file.path} · ${dateText(file.modifiedAt)}` }),
-          previewError.value ? h(ElEmpty, { description: previewError.value }) : h(ElScrollbar, { maxHeight: '75vh' }, { default: () => h('pre', { class: 'sp-workspace-preview' }, preview.value) }),
+          transferNotice.value ? h(ElAlert, { type: transferError.value ? 'error' : 'success', title: transferNotice.value, closable: true, onClose: () => { transferNotice.value = '' } }) : null,
+          fileActionNotice.value ? h(ElAlert, { type: fileActionError.value ? 'error' : 'success', title: fileActionNotice.value, closable: true, onClose: () => { fileActionNotice.value = '' } }) : null,
+          previewError.value ? h(ElEmpty, { description: previewError.value }) : h(ElScrollbar, { maxHeight: '75vh' }, { default: () => renderMarkdown(fileCode, h, { Markdown, Button: ElButton }) }),
+          h(ElButton, { type: 'primary', loading: fileActionBusy.value, onClick: () => void downloadSelectedFile() }, { default: () => '下载原文件' }),
+          h(ElButton, { plain: true, onClick: () => {
+            transferTarget.value = scope.value === 'agent' ? '__shared__' : (agents.value[0]?.id ?? '')
+            transferDialogOpen.value = true
+          } }, { default: () => '复制到其他工作区' }),
         ] : h(ElEmpty, { description: '选择文件查看受限文本预览' }),
+      })
+      const transferDialog = h(ElDialog, {
+        modelValue: transferDialogOpen.value,
+        'onUpdate:modelValue': (value: boolean) => { transferDialogOpen.value = value },
+        title: '复制文件到工作区', width: 'min(480px, 90vw)', appendToBody: true,
+      }, {
+        default: () => [
+          h(ElText, { type: 'info' }, { default: () => `复制「${file?.name ?? ''}」到选定工作区根目录。目标已存在同名文件时会拒绝覆盖，源文件保留。` }),
+          h(ElSelect, { modelValue: transferTarget.value, 'onUpdate:modelValue': (value: string) => { transferTarget.value = value }, placeholder: '选择目标工作区' }, {
+            default: () => [
+              ...(scope.value === 'agent' ? [h(ElOption, { label: '团队公共工作区', value: '__shared__' })] : []),
+              ...agents.value.filter((agent) => scope.value === 'shared' || agent.id !== selectedId.value).map((agent) => h(ElOption, { key: agent.id, label: `${agent.title} 的工作区`, value: agent.id })),
+            ],
+          }),
+        ],
+        footer: () => h(ElSpace, {}, { default: () => [
+          h(ElButton, { onClick: () => { transferDialogOpen.value = false } }, { default: () => '取消' }),
+          h(ElButton, { type: 'primary', loading: transferBusy.value, disabled: !file || !transferTarget.value, onClick: () => void transferSelectedFile() }, { default: () => '确认复制' }),
+        ] }),
       })
       const inboxDialog = h(ElDialog, {
         modelValue: inboxDialogOpen.value,
         'onUpdate:modelValue': (value: boolean) => { inboxDialogOpen.value = value },
         title: inboxSession.value ? `${inboxMode.value === 'history' ? '历史处理记录' : '待处理消息'} · ${inboxSession.value.sessionTitle}` : '消息记录',
-        width: 'min(680px, 72vw)', appendToBody: true,
+        width: 'min(1040px, 84vw)', appendToBody: true,
         class: inboxMode.value === 'history' ? 'sp-workspace-history-dialog' : 'sp-workspace-queue-dialog',
       }, {
         default: () => [
@@ -618,29 +959,71 @@ export const AgentWorkspacePage = defineComponent({
               h(ElTag, { type: inboxMode.value === 'history' ? 'success' : inboxDetail.value.active ? 'success' : 'warning', effect: 'plain' }, {
                 default: () => inboxMode.value === 'history' ? '已消化历史' : inboxDetail.value!.active ? 'Agent 正在处理该会话' : 'Agent 等待处理该会话',
               }),
-              h(ElText, { type: 'info' }, { default: () => `${inboxDetail.value!.total} 条${inboxMode.value === 'history' ? '历史记录' : '待消化消息'} · 已处理到序号 ${inboxDetail.value!.cursor} · 当前最新序号 ${inboxDetail.value!.latestSeq}` }),
+              h(ElText, { type: 'info' }, { default: () => `${inboxMode.value === 'history'
+                ? `${inboxDetail.value!.scannedTotal ?? inboxDetail.value!.total} 条已扫描 · ${inboxDetail.value!.total} 组触发消息`
+                : `${inboxDetail.value!.total} 条待消化消息`} · 后台游标 #${inboxDetail.value!.cursor} / 最新消息 #${inboxDetail.value!.latestSeq}` }),
               h(ElButton, { text: true, onClick: () => window.location.assign(`/teamspace?session=${encodeURIComponent(inboxDetail.value!.sessionId)}`) }, {
                 default: () => '打开原会话',
               }),
             ]),
-            inboxDetail.value.items.length ? h('div', { class: 'sp-workspace-queue-events sp-workspace-queue-events-scroll' }, inboxDetail.value.items.map((event) => h('article', { class: 'sp-workspace-queue-event', key: event.id }, [
+            inboxDetail.value.items.length ? h('div', { class: 'sp-workspace-queue-events sp-workspace-queue-events-scroll' }, inboxDetail.value.items.map((event) => h('article', {
+              class: ['sp-workspace-queue-event', event.authorKind === 'agent' ? 'is-agent-message' : 'is-trigger-message', event.id === inboxFocusId.value ? 'is-focused' : ''], key: event.id,
+            }, [
               h('div', { class: 'sp-workspace-queue-event-head' }, [
+                h(ElTag, { size: 'small', type: event.authorKind === 'agent' ? 'success' : 'primary', effect: 'plain' }, { default: () => event.authorKind === 'agent' ? 'Agent 发言' : '触发消息' }),
                 h('strong', event.author),
-                h(ElTag, { size: 'small', effect: 'plain' }, { default: () => event.kind === 'decision' ? '决策复核' : event.authorKind === 'agent' ? 'Agent 消息' : '团队消息' }),
-                h('span', `#${event.seq} · ${tableDateText(event.at)}`),
+                h('span', `消息 #${event.seq} · ${tableDateText(event.at)}`),
               ]),
-              h('p', { class: 'sp-workspace-queue-event-text' }, event.text),
+              h('div', { class: 'sp-workspace-audit-content' }, renderAuditContent(event.text, `event-${event.id}`)),
+              inboxMode.value === 'history' ? h(ElCollapse, { class: 'sp-workspace-inbox-trace-collapse' }, { default: () => [h(ElCollapseItem, {
+                name: `scan-${event.id}`,
+                title: `${event.inboxTrace?.status === 'failed' ? '后台扫描失败' : '后台扫描完成'} · ${event.inboxTrace?.agentTitle ?? 'Agent'} · ${event.inboxTrace?.steps.length ?? 0} 步`,
+              }, { default: () => h('section', { class: 'sp-workspace-inbox-trace' }, [
+                event.inboxTrace ? [
+                  h(ElText, { type: 'info', size: 'small' }, { default: () => `${tableDateText(event.inboxTrace!.startedAt)} → ${tableDateText(event.inboxTrace!.completedAt)}` }),
+                  event.inboxTrace.steps.length ? h(ElTimeline, { class: 'sp-workspace-audit-timeline' }, { default: () => event.inboxTrace!.steps.map((step, index) => h(ElTimelineItem, {
+                    key: `${event.id}-inbox-${index}`, timestamp: tableDateText(step.at), type: step.status === 'failed' ? 'danger' : 'primary',
+                  }, { default: () => [h('strong', step.label), h('div', step.detail)] })) }) : null,
+                  event.inboxTrace.modelTrace.length ? h(ElCollapse, { class: 'sp-workspace-model-trace' }, { default: () => event.inboxTrace!.modelTrace.map((call) => renderModelInteraction(`${event.id}-inbox`, call)) })
+                    : h(ElText, { type: 'info', size: 'small' }, { default: () => '无模型请求记录' }),
+                ] : h(ElText, { type: 'info', size: 'small' }, { default: () => '旧记录：当时未保存扫描步骤' }),
+              ]) })] }) : null,
+              ...(event.liveExecutions ?? []).map((execution) => h('section', { class: 'sp-workspace-queue-live', key: execution.runId }, [
+                h('strong', `${execution.title} · ${phaseText[execution.phase] ?? execution.phase}（实时）`),
+                execution.step?.detail ? h('p', execution.step.detail) : null,
+                execution.currentText ? h('p', { class: 'sp-workspace-queue-event-text' }, execution.currentText) : null,
+                execution.steps.length ? h(ElTimeline, {}, { default: () => execution.steps.map((step, index) => h(ElTimelineItem, {
+                  key: `${execution.runId}-${index}`, timestamp: tableDateText(step.at), type: step.status === 'failed' ? 'danger' : 'primary',
+                }, { default: () => [h('strong', step.label), step.detail ? h('div', step.detail) : null,
+                  step.inputSummary ? h('div', `工具输入摘要：${step.inputSummary}`) : null,
+                  step.resultSummary ? h('div', `工具结果：${step.resultSummary}`) : null,
+                  step.durationMs !== undefined ? h('div', `耗时 ${step.durationMs} ms`) : null] })) }) : null,
+              ])),
+              event.executions?.length ? h(ElCollapse, { class: 'sp-workspace-event-executions' }, { default: () => event.executions!.map((execution) => renderExecution(execution, event.id)) })
+                : h(ElText, { type: 'info', class: 'sp-workspace-no-execution' }, { default: () => inboxMode.value === 'history'
+                ? event.mentions?.length
+                  ? '没有找到关联的 Agent 答复'
+                  : '本条没有 Agent 答复'
+                : '该消息尚无关联的 Agent 答复记录。' }),
             ]))) : h(ElEmpty, { description: inboxMode.value === 'history' ? '还没有已完成的历史处理记录' : '该 Agent 已追上最新消息，队列刚刚处理完成。' }),
             inboxDetail.value.total > inboxDetail.value.pageSize ? h(ElPagination, {
               currentPage: inboxDetail.value.page, pageSize: inboxDetail.value.pageSize,
               total: inboxDetail.value.total, layout: 'prev, pager, next, total',
-              onCurrentChange: (page: number) => { inboxPage.value = page; void loadInboxPage(page) },
+              disabled: inboxLoading.value,
+              onCurrentChange: (page: number) => {
+                inboxFocusId.value = ''
+                inboxPage.value = page
+                void loadInboxPage(page).then(() => {
+                  const dialogClass = inboxMode.value === 'history' ? 'sp-workspace-history-dialog' : 'sp-workspace-queue-dialog'
+                  document.querySelector<HTMLElement>(`.${dialogClass} .sp-workspace-queue-events-scroll`)?.scrollTo({ top: 0 })
+                })
+              },
             }) : null,
           ]) : null,
         ],
         footer: () => h(ElButton, { onClick: () => { inboxDialogOpen.value = false } }, { default: () => '关闭' }),
       })
-      const scopeToggle = h(ElRadioGroup, { modelValue: scope.value, onChange: selectScope, size: 'large' }, { default: () => [
+      const scopeToggle = h(ElRadioGroup, { modelValue: scope.value, onChange: selectScope }, { default: () => [
         h(ElRadioButton, { label: 'agent' }, { default: () => 'Agent 工作区' }),
         h(ElRadioButton, { label: 'shared' }, { default: () => '公共工作区' }),
       ] })
@@ -650,10 +1033,10 @@ export const AgentWorkspacePage = defineComponent({
           scope.value === 'agent' ? h(ElCol, { span: 5, class: 'sp-workspace-agent-column' }, h(ElCard, { class: 'sp-workspace-agent-card', shadow: 'never' }, {
             header: () => h('strong', '团队 Agent'), default: () => agentMenu,
           })) : null,
-          h(ElCol, { span: scope.value === 'agent' ? 19 : 24, class: 'sp-workspace-content-column' }, [workspaceCard, fileDrawer, inboxDialog]),
+        h(ElCol, { span: scope.value === 'agent' ? 19 : 24, class: 'sp-workspace-content-column' }, [workspaceCard, fileDrawer, transferDialog, inboxDialog]),
         ] }),
       ])
-      return sharedPage('Agent 工作区', '实时查看共享 Agent 的工作阶段、待处理消息、工具执行与个人工作区文件。只显示可审计执行记录，不展示隐藏思维链。', content, 'sp-workspace-page')
+      return sharedPage('Agent 工作区', '查看 Agent 当前阶段、消息处理记录与工作区文件。', content, 'sp-workspace-page')
     }
   },
 })

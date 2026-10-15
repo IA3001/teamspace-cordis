@@ -11,6 +11,10 @@ const db = new DatabaseSync('data/database.db')
 try {
   const agents = db.prepare("SELECT * FROM agent_definitions WHERE status='active'").all()
   assert(agents.length, 'seed must provide shared Agents')
+  const insertMemory = db.prepare(`INSERT OR REPLACE INTO memories (id, scope, kind, text, weight, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+  const longMemory = `记忆详情长文本换行验收：${'这是一段连续内容，用来确认正文会自然折行并且来源信息仍可查看。'.repeat(120)}\n记忆来源和移动操作应与正文处在同一抽屉内部滚动区域。`
+  for (const agent of agents) insertMemory.run(`ui-verify-memory-detail-${agent.id}`, `agent:${agent.id}`, 'ui_verify_long_text', longMemory, 0.8, new Date().toISOString())
   const columns = Object.keys(agents[0])
   const insert = db.prepare(`INSERT INTO agent_definitions (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`)
   for (let index = 0; index < 16; index++) {

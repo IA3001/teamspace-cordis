@@ -67,7 +67,7 @@
     "verify:upload-access": "tsx scripts/verify-upload-access.ts && node scripts/record-action.mjs verify-upload-access",
     "verify:session-work": "tsx scripts/verify-session-work.ts && node scripts/record-action.mjs verify-session-work",
     "verify:agent-speech": "tsx scripts/verify-agent-speech.ts && node scripts/record-action.mjs verify-agent-speech",
-    "verify:rag": "tsx scripts/verify-rag.ts && node scripts/record-action.mjs verify-rag",
+    "verify:rag": "tsx scripts/verify-rag.ts && npm run verify:context-cache && node scripts/record-action.mjs verify-rag",
     "verify:embedding-index": "tsx scripts/verify-embedding-index.ts && node scripts/record-action.mjs verify-embedding-index",
     "verify:agent-teamspace": "tsx scripts/verify-agent-teamspace.ts && node scripts/record-action.mjs verify-agent-teamspace",
     "verify:agent-inbox": "tsx scripts/verify-agent-inbox.ts && node scripts/record-action.mjs verify-agent-inbox",
@@ -96,7 +96,8 @@
     "verify:engineering-consumers": "tsx scripts/verify-engineering-consumers.ts",
     "verify:compatibility": "node scripts/dev/compatibility.mjs",
     "verify:quality": "node scripts/dev/quality.mjs",
-    "verify:upgrade-fixtures": "tsx scripts/verify-upgrade-fixtures.ts"
+    "verify:upgrade-fixtures": "tsx scripts/verify-upgrade-fixtures.ts",
+    "verify:context-cache": "tsx scripts/verify-context-cache.ts && node scripts/record-action.mjs verify-context-cache"
   },
   "dependencies": {
     "@cordisjs/client": "^0.8.2",

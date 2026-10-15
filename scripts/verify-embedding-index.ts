@@ -33,6 +33,24 @@ const thirdIdentity = adapter.identity
 config.baseURL = 'https://other.invalid/v1'
 assert.notEqual(adapter.identity, thirdIdentity, 'endpoint changes invalidate vectors')
 const originalFetch = globalThis.fetch
+const probeValues = new Map<string, unknown>([
+  ['embed.profiles', [{ id: 'probe' }]], ['embed.profile.probe.baseURL', 'https://probe.invalid/v1'],
+  ['embed.profile.probe.model', 'probe-model'], ['embed.profile.probe.apiKey', 'probe-secret'],
+])
+const probeSettings = { get: (key: string, fallback: unknown) => probeValues.get(key) ?? fallback } as SqliteSettingsStore
+const probeAdapter = new OpenAiEmbedding(new Context(), config, probeSettings)
+const probeIdentity = probeAdapter.identity
+try {
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), 'https://probe.invalid/v1/embeddings')
+    assert.equal(JSON.parse(String(init?.body)).model, 'probe-model')
+    return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }))
+  }
+  assert.deepEqual(await probeAdapter.embed(['ping'], { profileRef: 'probe' }), [[1, 0]])
+  assert.equal(probeAdapter.identity, probeIdentity, 'testing another profile never changes the active embedding identity')
+  await assert.rejects(() => probeAdapter.embed(['ping'], { profileRef: 'missing' }), /供应商配置不存在/u)
+} finally { globalThis.fetch = originalFetch }
+
 try {
   globalThis.fetch = async () => new Response(JSON.stringify({ error: {
     code: 'insufficient_quota', message: 'Free quota exhausted. sensitive-provider-detail',

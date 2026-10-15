@@ -3,8 +3,8 @@
 // 策略不实现能力，只包裹能力（MODULE-PLAN 第 3.4 节）：本包回答三件事，
 // 全部承旧 domain/coordinator.go + project_memory 业务硬约束：
 //   1. 谁被授权 —— 授权名单（三个目标 agent，**协调者不在名单**）
-//   2. NLP 判定的口径 —— @ 提及只是提示（mentionHints），授权与否由大脑读
-//      人类原话判断；本包**不做**字符串路由（那正是待定 5 禁止的）
+//   2. 授权口径 —— 唯一明确 Agent @ 由 orchestrator 直接路由；其余协调请求
+//      由大脑读人类原话判断。本包只负责授权名单与委托校验，不做路由。
 //   3. 三级兜底 —— 大脑原始输出 → CoordinatorDecision 的解析：
 //        0 层  合法 JSON（reply/reason/delegate）→ 直接采用
 //        1 层  纯文本无委托标志 → 整段只当协调者回复（不委托）

@@ -10,6 +10,7 @@ import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { MessageServiceImpl } from '../plugins/space-message/index.ts'
 import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
+import { progressRunHasOutcome } from '../packages/client-ui/space-client-ui-teamspace/client/progress.ts'
 
 const event = (id: string, seq: number, authorId: string | null, authorKind: SessionEvent['authorKind'],
   mentions: string[] = [], sourceEventId: string | null = null): SessionEvent => ({
@@ -86,11 +87,18 @@ async function main() {
     const trigger = eventLog.append({ id, sessionId: session.id, authorId: 'u_human', phaseId: null,
       authorKind: 'human', kind: 'message', text: '继续处理', mentions: [], toolCalls: [], replyMode: '' })
     engine.beginExternalDelegate(session.id, trigger.id, 'Speaker', '后台委托')
-    const result = engine.reportAgentResult(session.id, 'Speaker', `处理结果 ${id}`)
+    const result = engine.reportAgentResult(session.id, 'Speaker', `处理结果 ${id}`, [], privateWorklog)
     if (id === 'trigger-2') assert.equal(result.authorKind, 'agent', 'one proactive reply is allowed after passive speech')
     else {
       assert.equal(result.authorKind, 'system', 'the next proactive reply is intercepted')
       assert.match(result.text, /Speaker：尝试主动发言，但是被拦截/)
+      assert.equal(result.sourceEventId, trigger.id, 'a rejected result retains its task trigger')
+      assert(progressRunHasOutcome({ sessionId: session.id, agentId: 'a_speaker', sourceEventId: trigger.id }, [result]),
+        'a persisted speech rejection settles the live draft instead of leaving it at the bottom')
+      assert(!progressRunHasOutcome({ sessionId: session.id, agentId: 'another-agent', sourceEventId: trigger.id }, [result]),
+        'a rejection cannot dismiss another Agent streaming the same trigger')
+      assert.deepEqual(JSON.parse(result.toolCalls.find((call) => call.name === 'agent.worklog')!.args), privateWorklog,
+        'rejected drafts keep their execution log for human review')
     }
   }
 

@@ -16,7 +16,7 @@ export function apply(ctx: Context) {
       sessionId: payload.sessionId, sourceEventId: payload.eventId,
     })
       .then((result) => ctx.orchestrator.reportAgentResult(
-        payload.sessionId, payload.target, result.receipt, result.sourceEventIds, result.worklog,
+        payload.sessionId, payload.target, result.receipt, result.sourceEventIds, result.worklog, result.citations, result.modelTrace,
       ))
       .catch((error: unknown) => {
         if (error instanceof AgentRunCancelledError) {
@@ -33,6 +33,8 @@ export function apply(ctx: Context) {
             `【执行失败】${definition.title} 未能完成任务：${(error as Error).message}`,
             [],
             worklog,
+            undefined,
+            error instanceof AgentExecutionFailureError ? error.modelTrace : undefined,
           )
         } catch (reportError) {
           ctx.logger.error('[agent-runtime-dispatcher] 失败状态无法回报（%s）：%s',

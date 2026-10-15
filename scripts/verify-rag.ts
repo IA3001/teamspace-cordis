@@ -9,7 +9,7 @@ import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.t
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { ContextAssemblyServiceImpl } from '../plugins/space-context/index.ts'
 import { vectorRerank } from '../packages/seam/space-kb/src/index.ts'
-import { formatCitedAnswer } from '../packages/seam/space-retrieval/src/index.ts'
+import { extractCitedAnswer, formatCitedAnswer } from '../packages/seam/space-retrieval/src/index.ts'
 import { RetrievalServiceImpl } from '../plugins/space-retrieval/index.ts'
 
 const db = new DatabaseSync(':memory:')
@@ -149,11 +149,53 @@ assert.equal(kbContext.memories.length, 0, 'team-KB-only source excludes durable
 assert(kbContext.retrieval.length > 0 && kbContext.retrieval.every((hit: { source: string }) => hit.source === 'kb'),
   'team-KB-only retrieval includes KB and excludes events and memories')
 
+// Live panel todos must not depend on a matching query or the generic memory limit.
+ctx.session.createSession({ id: 's_todos', title: 'Team todo context verification' })
+const todoContext = (contextSources: string[] = ['session']) => ctx.context.assemble('s_todos', {
+  contextSources, recentLimit: 0, memoryLimit: 0,
+})
+assert((await todoContext()).system.includes('当前没有团队待办。'), 'empty todo state is explicit')
+const todo = await ctx.memory.remember('session:s_todos', 'todo', JSON.stringify({ done: false, text: '吃饭' }), { weight: 0.8 })
+for (let i = 0; i < 12; i++) await ctx.memory.remember('session:s_todos', 'note', `高权重普通记忆 ${i}`, { weight: 1 })
+await ctx.memory.remember('session:s_rag', 'todo', JSON.stringify({ done: false, text: '其他会话的私有待办' }))
+await ctx.memory.remember('session:s_todos', 'todo', '损坏的待办载荷')
+const liveTodoContext = await todoContext()
+assert(liveTodoContext.system.includes('[未完成] "吃饭"'), 'the Agent sees panel todos even with memory recall disabled')
+assert(!liveTodoContext.system.includes('其他会话的私有待办'), 'todo context never leaks another session')
+assert(!liveTodoContext.system.includes('损坏的待办载荷'), 'invalid todo rows do not corrupt the readable snapshot')
+assert(!(await todoContext(['agent-memory'])).system.includes('吃饭'), 'session context opt-out also excludes its todos')
+await ctx.memory.forget(todo.id)
+const doneTodo = await ctx.memory.remember('session:s_todos', 'todo', JSON.stringify({ done: true, text: '吃饭' }), { weight: 0.8 })
+const doneContext = await todoContext()
+assert(doneContext.system.includes('[已完成] "吃饭"') && !doneContext.system.includes('[未完成] "吃饭"'),
+  'the next call reads the updated status instead of stale recalled state')
+await ctx.memory.forget(doneTodo.id)
+assert((await todoContext()).system.includes('当前没有团队待办。'), 'deleted todos disappear on the next call')
+const originalRecall = ctx.memory.recall.bind(ctx.memory)
+ctx.memory.recall = async (scope: string, options: { kind?: string } = {}) => {
+  if (options.kind === 'todo') throw new Error('simulated todo read failure')
+  return originalRecall(scope, options)
+}
+try {
+  const unavailable = await todoContext()
+  assert(unavailable.system.includes('本次读取失败，待办状态未知') && !unavailable.system.includes('当前没有团队待办。'),
+    'a failed todo read must not be reported to the Agent as an empty todo list')
+} finally { ctx.memory.recall = originalRecall }
+
 const kbHit = hits.find((hit) => hit.source === 'kb')!
-const cited = formatCitedAnswer(`方案依据文档。 【来源:kb:${kbHit.id}】 【来源:kb:invented】`, [kbHit])
-assert.match(cited, new RegExp(`【来源:kb:${kbHit.id}】`), 'valid source citations are retained')
-assert.match(cited, /引用未通过来源核验/, 'citations not in retrieved evidence are marked unverified')
-assert.match(cited, /Bluebird 部署手册/, 'answer includes a readable source list')
+const cited = extractCitedAnswer(`方案依据文档。 【来源:kb:${kbHit.id}】 【来源:kb:invented】`, [kbHit])
+assert.equal(cited.text, '方案依据文档。', 'citation markers are removed from the Markdown answer body')
+assert.equal(formatCitedAnswer(`方案依据文档。 【来源:kb:${kbHit.id}】`, [kbHit]), cited.text,
+  'deprecated string API remains callable and returns the clean answer body')
+assert.deepEqual(cited.citations.map(({ source, id, title }) => ({ source, id, title })), [
+  { source: 'kb', id: kbHit.id, title: 'Bluebird 部署手册' },
+], 'only validated references are returned as structured UI metadata')
+const citedEvent = ctx.eventLog.append({
+  id: 'evt_cited_answer', sessionId: 's_rag', authorId: 'a_rag', phaseId: null,
+  authorKind: 'agent', kind: 'message', text: cited.text, citations: cited.citations,
+  mentions: [], toolCalls: [], replyMode: '',
+})
+assert.deepEqual(citedEvent.citations, cited.citations, 'structured citations survive event persistence and reload')
 
 const hybrid = await vectorRerank('semantic query', [
   { docId: 'd1', docTitle: 'Keyword doc', chunkId: 'c_keyword', text: 'lexical match', score: 1 },

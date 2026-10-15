@@ -13,7 +13,7 @@
 import type { Context } from 'cordis'
 import z from 'schemastery'
 import { LlmError, LlmService } from 'space-llm'
-import type { ChatMessage, ChatOptions } from 'space-llm'
+import type { ChatMessage, ChatOptions, ChatUsage } from 'space-llm'
 import { LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV } from 'space-llm'
 import { SettingsService } from 'space-settings'
 
@@ -30,11 +30,14 @@ export const Config = z.intersect([
     baseURL: z.string().description('OpenAI 兼容 Base URL（留空回退 LLM_BASE_URL）').default(''),
     model: z.string().description('模型名（留空回退 LLM_MODEL）').default(''),
     timeoutMs: z.number().description('单次调用超时 ms').default(60000),
+    streamUsage: z.boolean().description('请求流式 Token 与缓存用量；不兼容供应商可关闭').default(true),
   }),
 ])
 
 /** 运行时取值形状（面板/cordis 传来的 config 可能缺字段，全部按可选处理）。 */
 export interface ConfigInput {
+  /** Disable only for a provider that rejects OpenAI stream usage requests. */
+  streamUsage?: boolean
   apiKey?: string
   baseURL?: string
   model?: string
@@ -43,6 +46,29 @@ export interface ConfigInput {
 
 const positiveTokenLimit = (value: number | undefined): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 200_000 ? value : undefined
+
+function networkFailure(error: Error): string {
+  const cause = error.cause && typeof error.cause === 'object'
+    ? error.cause as { code?: unknown; message?: unknown }
+    : undefined
+  const code = typeof cause?.code === 'string' && /^[A-Z0-9_]{2,48}$/u.test(cause.code) ? cause.code : undefined
+  const reasons: Record<string, string> = {
+    EAI_AGAIN: 'DNS 临时解析失败',
+    ECONNREFUSED: '连接被拒绝',
+    ECONNRESET: '连接被对端重置',
+    ENOTFOUND: '域名无法解析',
+    ETIMEDOUT: '连接超时',
+    UND_ERR_CONNECT_TIMEOUT: '连接超时',
+    UND_ERR_HEADERS_TIMEOUT: '等待响应头超时',
+  }
+  if (code && reasons[code]) return `LLM 网络连接失败（${code}：${reasons[code]}）`
+  const detail = typeof cause?.message === 'string' ? cause.message
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[已隐藏]')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})\b/g, '[已隐藏凭据]')
+    .replace(/((?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[=:]\s*)["']?[^\s,"'&}]+/gi, '$1[已隐藏]')
+    : ''
+  return `LLM 请求失败：${error.message}${detail && detail !== error.message ? `（底层原因：${detail.slice(0, 180)}）` : '（未收到 HTTP 响应）'}`
+}
 
 export class OpenAiChatLlm extends LlmService {
   private readonly cfg: ConfigInput
@@ -117,6 +143,19 @@ export class OpenAiChatLlm extends LlmService {
         `LLM 未配置：需要面板配置（apiKey/baseURL/model）或 ${LLM_BASE_URL_ENV} / ${LLM_API_KEY_ENV} / ${LLM_MODEL_ENV} 三件套（key 不落日志）`,
       )
     }
+    const started = Date.now()
+    let firstTokenMs: number | undefined
+    let providerUsage: Record<string, unknown> | undefined
+    const recordUsage = (value: unknown) => {
+      if (value && typeof value === 'object') providerUsage = value as Record<string, unknown>
+    }
+    const finishUsage = () => {
+      const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+      const details = providerUsage?.prompt_tokens_details as Record<string, unknown> | undefined
+      const usage: ChatUsage = { inputTokens: number(providerUsage?.prompt_tokens), outputTokens: number(providerUsage?.completion_tokens),
+        cachedInputTokens: number(details?.cached_tokens ?? providerUsage?.prompt_cache_hit_tokens), firstTokenMs, durationMs: Date.now() - started }
+      try { options?.onUsage?.(usage) } catch { /* Telemetry must not fail successful model work. */ }
+    }
     const url = `${base.replace(/\/+$/, '')}/chat/completions`
     // 超时优先级：调用方 options > 面板配置 > 缺省 60s。
     const timeoutMs = options?.timeoutMs ?? this.cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS
@@ -133,7 +172,7 @@ export class OpenAiChatLlm extends LlmService {
           model,
           messages,
           ...(maxTokens ? { max_tokens: maxTokens } : {}),
-          ...(options?.onToken ? { stream: true } : {}),
+          ...(options?.onToken ? { stream: true, ...(this.cfg.streamUsage !== false ? { stream_options: { include_usage: true } } : {}) } : {}),
         }),
         signal: options?.signal
           ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal])
@@ -147,10 +186,13 @@ export class OpenAiChatLlm extends LlmService {
       if (err.name === 'TimeoutError' || err.name === 'AbortError' || /timeout|aborted/i.test(err.message)) {
         throw new LlmError('timeout', `LLM 调用超时（${timeoutMs}ms，单次不重试）`)
       }
-      throw new LlmError('http_error', `LLM 请求失败：${err.message}`)
+      throw new LlmError('http_error', networkFailure(err))
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '')
+      if (res.status === 400 && /supported API model names|unsupported.*model|model.*not found|invalid.*model/i.test(text)) {
+        throw new LlmError('http_error', `模型「${model}」不被当前供应商接受。请检查 Agent 的“供应商内模型 ID 覆盖”；清空覆盖可使用供应商配置的默认模型。供应商信息：${text.slice(0, 160)}`)
+      }
       throw new LlmError('http_error', `LLM 返回 ${res.status}（单次不重试）：${text.slice(0, 200)}`)
     }
     if (options?.onToken && res.headers.get('content-type')?.includes('text/event-stream')) {
@@ -164,14 +206,16 @@ export class OpenAiChatLlm extends LlmService {
         if (!trimmed.startsWith('data:')) return
         const data = trimmed.slice(5).trim()
         if (!data || data === '[DONE]') return
-        let parsed: { choices?: Array<{ delta?: { content?: unknown } }> }
+        let parsed: { choices?: Array<{ delta?: { content?: unknown } }>; usage?: unknown }
         try {
           parsed = JSON.parse(data) as typeof parsed
         } catch {
           throw new LlmError('http_error', 'LLM 流式响应包含无效事件')
         }
+        recordUsage(parsed.usage)
         const delta = parsed.choices?.[0]?.delta?.content
         if (typeof delta !== 'string' || !delta) return
+        firstTokenMs ??= Date.now() - started
         content += delta
         try { options.onToken?.(delta) } catch { /* UI progress is best effort. */ }
       }
@@ -197,21 +241,32 @@ export class OpenAiChatLlm extends LlmService {
         reader.releaseLock()
       }
       if (!content) throw new LlmError('empty_response', 'LLM 流式响应没有文本内容')
+      finishUsage()
       return content
     }
-    let payload: { choices?: { message?: { content?: unknown } }[] }
+    let payload: { choices?: { message?: { content?: unknown } }[]; usage?: unknown }
     try {
       payload = (await res.json()) as typeof payload
     } catch (e) {
-      throw new LlmError('http_error', `LLM 响应不是 JSON：${(e as Error).message}`)
+      const err = e as Error
+      if (options?.signal?.aborted) {
+        throw new LlmError('cancelled', 'LLM 调用因 Agent 任务已撤回而取消')
+      }
+      if (err.name === 'TimeoutError' || err.name === 'AbortError' || /timeout|aborted/i.test(err.message)) {
+        throw new LlmError('timeout', `LLM 响应读取超时（${timeoutMs}ms，单次不重试）`)
+      }
+      throw new LlmError('http_error', `LLM 响应不是有效 JSON：${err.message}`)
     }
     const content = payload?.choices?.[0]?.message?.content
     if (typeof content !== 'string') {
       throw new LlmError('empty_response', 'LLM 响应缺 choices[0].message.content')
     }
+    recordUsage(payload.usage)
+    if (content) firstTokenMs = Date.now() - started
     if (content && options?.onToken) {
       try { options.onToken(content) } catch { /* UI progress is best effort. */ }
     }
+    finishUsage()
     return content
   }
 }

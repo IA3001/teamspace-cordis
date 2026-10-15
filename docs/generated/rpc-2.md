@@ -1,5 +1,11 @@
 # rpc（续）
 
+- [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`deleteAgent`
+  `token: string, id: string`
+- [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`inviteAgent`
+  `token: string, sessionId: string, agentId: string`
+- [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`agentHistory`
+  `token: string, sessionId: string, agentId: string`
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`sessions`
   `token: string`
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`decide`

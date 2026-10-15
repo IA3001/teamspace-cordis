@@ -30,7 +30,7 @@ import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
 import { SqliteSettingsStore } from '../packages/impl/space-store-sqlite/src/settings.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
-import { InboxPauseNoticeGate, OrchestratorEngine } from '../plugins/orchestrator/index.ts'
+import { InboxPauseNoticeGate, latestUnansweredBareMention, latestUnansweredExplicitMention, OrchestratorEngine } from '../plugins/orchestrator/index.ts'
 import { SessionWork } from '../plugins/session-work/index.ts'
 
 // ── 断言器（与 本地 verifier 同款）────────────────────────────────────────
@@ -580,11 +580,11 @@ async function partA(): Promise<void> {
   // ── 四：NLP 判定口径（@ 只是提示，人类原话逐字透传）─────────────────────
   section('四：NLP 判定口径（不是字符串识别）')
   rawOut = '这个问题我先记下来，稍后给你边界分析。'
-  await engine.onPlan(humanCommit(ctx, 's_a', '让需求分析师看看这段日志', ['a_analyst']))
+  await engine.onPlan(humanCommit(ctx, 's_a', '让需求分析师看看这段日志'))
   check('A4a 人类原话逐字透传给大脑（NLP 判定的输入）', lastReq?.humanText === '让需求分析师看看这段日志', JSON.stringify(lastReq?.humanText))
-  check('A4b @ 提示透传（mentionHints）', JSON.stringify(lastReq?.mentionHints) === JSON.stringify(['a_analyst']))
+  check('A4b 没有显式 @ 时 mentionHints 为空', JSON.stringify(lastReq?.mentionHints) === JSON.stringify([]))
   check('A4c 名单透传（三目标，不含协调者）', lastReq?.targets.length === 3 && !lastReq!.targets.includes('协调者' as never), JSON.stringify(lastReq?.targets))
-  check('A4d 只有 @ 提及、大脑未判授权 → 仅商议后自然完成', engine.turn('s_a').state === 'static' && engine.turn('s_a').stopReason === 'completed')
+  check('A4d 自然语言请求仍由协调者判断是否委托', engine.turn('s_a').state === 'static' && engine.turn('s_a').stopReason === 'completed')
   check('A4e 协调者的商议回复落了事件', lastEvent(ctx, 's_a')?.text === rawOut)
 
   // ── 五：合法委托与反馈暂停（回合状态机主干）─────────────────────────────
@@ -684,6 +684,24 @@ async function partA(): Promise<void> {
   const r7d = await engine.onPlan(humanCommit(ctx, 's_a', '会议记录官，把刚才的结论记下来'))
   check('A7d 3 层兜底在引擎里真委托', r7d?.case === 'delegated' && r7d.delegation?.instruction === '会议记录官，把刚才的结论记下来', JSON.stringify(r7d))
   check('A7e 每个新回合 decisionCalls 重开（恰好一次/回合）', engine.turn('s_a').decisionCalls === 1)
+}
+
+async function verifyExplicitMentionRouting(): Promise<void> {
+  section('明确 @ 路由：带正文的指令直接进入唯一 Agent')
+  const { ctx, db, engine } = openInMemory()
+  Object.assign(ctx, { agents: { list: () => [{ descriptor: { id: 'a_analyst', title: '需求分析师' } }] } })
+  const delegated: Array<{ sessionId: string; eventId: string; target: string; instruction: string }> = []
+  ctx.on('orchestrator/delegate', (payload) => { delegated.push(payload) })
+  const payload = humanCommit(ctx, 's_a', '@a_analyst 让你看看这段日志', ['a_analyst'])
+  check('显式 @ 正文可由启动恢复扫描发现',
+    latestUnansweredExplicitMention(ctx, 's_a')?.event.id === payload.event.id)
+  await engine.onPlan(payload)
+  const route = delegated.at(-1)
+  check('唯一 Agent 的 @ 指令原文直达目标且不调用协调模型',
+    route?.eventId === payload.event.id && route.target === '需求分析师' &&
+      route.instruction === '让你看看这段日志' && engine.turn('s_a').decisionCalls === 0,
+    JSON.stringify({ route, turn: engine.turn('s_a') }))
+  db.close()
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -842,6 +860,7 @@ async function main(): Promise<void> {
   const coreOnly = process.argv.includes('--core-only')
   console.log(`verify-orchestrator：P3 协作大脑端到端验收（APP_PORT=${PORT}）`)
   await partA()
+  await verifyExplicitMentionRouting()
   await verifyDecisionPause()
   await verifyCancelledDelegationLedger()
   await verifyDurableRecovery()

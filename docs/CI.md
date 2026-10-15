@@ -36,7 +36,7 @@ TypeScript 启用 `noUnusedLocals`；未使用导入和局部变量直接判红�
 
 检查清单兼容旧字符串列表；当前节点有 id、script、needs、resources、paths、timeoutMs。循环、缺依赖或缺脚本在执行前失败。静态并发最多 2 项；有 database 资源的检查互斥，runtime 串行。旧行为检查的影响范围尚未精确登记时使用 `*`，保守全选，不以猜测漏跑换速度。
 
-`npm run gate:related -- <base>` 选择关联检查并补依赖闭包，规则、依赖和未知范围保守扩展；它不能替代完整 CI。`npm run gate:docs` 仅跑隔离文档检查，不迁移数据库。`npm run docs:generate` 显式更新目录，`verify:docs` 检查模式不改已维护文件，编译暂存放 `data`。
+`npm run gate:related -- <base>` 按 `.ci/checks.json` 的目录映射选择关联检查并补依赖闭包；`*` 表示每次都执行的基础检查。任一变更路径没有映射时，自动回退到完整检查图。检查映射首次从全选改成目录范围后，门禁禁止进一步缩小既有覆盖；`verify:development` 覆盖已知路径选择、依赖闭包和未知路径回退。相关检查不能替代完整 CI。`npm run gate:docs` 仅跑隔离文档检查，不迁移数据库。`npm run docs:generate` 显式更新目录，`verify:docs` 检查模式不改已维护文件，编译暂存放 `data`。
 
 每次生成 `receipt.json`，包含 HEAD、完整源码文件指纹（含未跟踪文件与软链接目标）、选定检查、可信 base 来源和结果状态。复制前后与结束核对指纹，源码中途变化判红。源/依赖逃逸软链接拒绝，HOME 使用临时目录，浏览器缓存路径单独允许。Loader 的 `.cordis` 缓存、生成构建和 `data` 不进入源码身份；本地 `.env`/`.npmrc` 也不进入。
 

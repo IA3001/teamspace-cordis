@@ -45,6 +45,8 @@ export interface WorkdirListing {
   entries: WorkdirEntry[]
 }
 
+export type WorkdirTransferTarget = { kind: 'agent'; agentId: string } | { kind: 'shared' }
+
 // ── 错误分类法（规律 3：实现与策略不得自造错误串，只能抛这里的错误码）──────
 
 export type WorkdirErrorCode =
@@ -105,4 +107,13 @@ export abstract class WorkdirService extends Service {
 
   /** Read a small UTF-8 text file from the shared workspace using the same redaction and path rules. */
   abstract readSharedText(relativePath: string): Promise<string>
+
+  /** Copy one safe, bounded file to another workspace without overwriting an existing file. */
+  abstract copyFile(source: WorkdirTransferTarget, relativePath: string, target: WorkdirTransferTarget): Promise<void>
+
+  /** Add one safe, bounded file without overwriting an existing workspace file. */
+  abstract writeFile(target: WorkdirTransferTarget, relativePath: string, content: Uint8Array): Promise<void>
+
+  /** Read one safe, bounded file as bytes for download; implementations must reject secrets and symlinks. */
+  abstract readFile(source: WorkdirTransferTarget, relativePath: string): Promise<Uint8Array>
 }

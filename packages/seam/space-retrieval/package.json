@@ -5,6 +5,9 @@
   "type": "module",
   "description": "seam：检索层词汇（RetrievalService + 命中形状 + 错误分类法），零 IO；实现由 plugins/space-retrieval 提供（统一事件 FTS 与记忆两个数据源）",
   "main": "src/index.ts",
+  "dependencies": {
+    "space-event": "*"
+  },
   "peerDependencies": {
     "cordis": "^4.0.0-rc.10"
   }

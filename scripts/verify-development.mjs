@@ -9,6 +9,7 @@ import { declaration, linkErrors, generate } from './dev/documents.mjs'
 import { assertSurfaceEvidence, bindSurface, transformedAsset } from './dev/browser-surface.mjs'
 import { protectedChanges } from './dev/protection.mjs'
 import { compatibilityErrors } from './dev/compatibility.mjs'
+const projectRoot = process.cwd()
 const root = mkdtempSync(join(tmpdir(), 'space-development-'))
 try {
   writeFileSync(join(root, 'source.ts'), 'export const value = 1')
@@ -59,7 +60,12 @@ try {
   assert.throws(() => validateGraph([{ ...graph[0], needs: ['a'] }], { a: 'a' }), /cycle/)
   assert.throws(() => validateGraph([graph[0], graph[0]], { a: 'a' }), /Duplicate/)
   assert.throws(() => validateGraph([{ ...graph[0], timeoutMs: 0 }], { a: 'a' }), /Invalid/)
-  assert(protectedChanges({ checks: { static: graph } }, { checks: { static: graph.map((n) => ({...n, paths:['never']})) } }).length > 0)
+  const firstScoping = protectedChanges({ checks: { static: [{ ...graph[0], paths: ['*'] }] } }, { checks: { static: [{ ...graph[0], paths: ['src/'] }] } })
+  assert.deepEqual(firstScoping, [], 'safe first path mapping is allowed while the full graph remains intact')
+  const narrowedScope = protectedChanges({ checks: { static: [{ ...graph[0], paths: ['src/'] }] } }, { checks: { static: [{ ...graph[0], paths: ['src/app/'] }] } })
+  assert(narrowedScope.some((error) => error.includes('paths narrowed')), 'later scope narrowing must be blocked')
+  const unknownFallback = relatedChecks(graph, ['unmapped/unknown.ts'])
+  assert.deepEqual(unknownFallback.map((n) => n.id), graph.map((n) => n.id), 'unknown changes run the entire graph')
   assert(protectedChanges({ docs: { examples: { equivalence: ['required'] } } }, { docs: { examples: { equivalence: [] } } }).length > 0)
   const executed = []
   const failed = await schedule(graph, async (n) => { executed.push(n.id); return { status: n.id === 'a' ? 'failed' : 'passed' } })
@@ -101,6 +107,12 @@ try {
   await assert.rejects(() => fakePage.goto('http://127.0.0.1:5172/teamspace'), /differs/)
   assert.equal(secondFetch, false, 'acceptance must inspect actual loaded response, never a replacement fetch')
   if (!process.argv.includes('--coverage-child')) {
+    const projectGraph = normalizeGraph(JSON.parse(readFileSync(join(projectRoot, '.ci/checks.json'), 'utf8')))
+    const kbRelated = relatedChecks(projectGraph, ['packages/client-ui/space-client-ui-kb/client/index.ts', 'scripts/ui-verify.mjs'])
+    const kbRelatedScripts = new Set(kbRelated.map((node) => node.script))
+    assert(kbRelatedScripts.has('verify:ui') && kbRelatedScripts.has('check:web'), 'KB UI changes run browser and build consumers')
+    assert(!kbRelatedScripts.has('verify:inbox-orchestrator-retry'), 'KB UI changes avoid unrelated inbox database checks')
+    assert.equal(relatedChecks(projectGraph, ['new-unmapped-area/file.ts']).length, projectGraph.length, 'unmapped project paths conservatively run the complete graph')
     const cold = spawnSync(process.execPath, ['--input-type=module', '-e', `import {transformedAsset} from ${JSON.stringify(new URL('./dev/browser-surface.mjs', import.meta.url).href)}; await transformedAsset('import {ref} from "vue";', '/tmp/probe.js', ${JSON.stringify(process.cwd())})`], { cwd: process.cwd(), encoding: 'utf8' })
     assert.equal(cold.status, 0, cold.stderr)
     writeFileSync(join(root, '.gitignore'), 'data/\n')

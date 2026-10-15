@@ -12,6 +12,7 @@ import type { AgentDefinition, AgentDefinitionInput } from 'space-agent-catalog'
 import { AGENT_TEMPLATES } from 'space-agent-catalog'
 import { AgentError } from 'space-agent'
 import { AgentExecutionFailureError } from 'space-agent-runtime'
+import { eventCitations, visibleAgentReply } from '../packages/client-ui/space-client-ui-shared/client/md.ts'
 import { AgentRegistry, apply as applyAgentRegistry } from '../plugins/agent-registry/index.ts'
 import { AgentRuntime } from '../packages/impl/space-agent-runtime/src/index.ts'
 import { apply as applyAgentDispatcher } from '../plugins/agent-runtime-dispatcher/index.ts'
@@ -27,6 +28,18 @@ import {
 import { apply as applySessions, createGroupSession, removeSessionMember } from '../packages/client-ui/space-client-ui-sessions/src/index.ts'
 
 const definitions = new Map<string, AgentDefinition>()
+const legacyAnswer = '## 最终回复\n\n已完成。\n\n参考来源（本轮检索命中）：\n- 【来源:kb:legacy-doc】旧版知识库资料\n- 【来源:event:legacy-event】会话消息 #6'
+assert.equal(visibleAgentReply(legacyAnswer), '已完成。', 'legacy citation Markdown is removed from displayed answer content')
+assert.equal(visibleAgentReply('<|DSML |> calls> <|DSML |> invoke name="tool.code.execute">secret code</|DSML |> </|DSML |>'),
+  '（检测到工具调用内容，已收起；请查看工作记录）', 'raw DSML tool calls never render as a user-facing Agent answer')
+assert.equal(visibleAgentReply('<| | DSML | | calls><| | DSML | | invoke name="toolCalls">[{"toolId":"tool.code.execute","args":{"code":"secret"}}]</| | DSML | |>'),
+  '（检测到工具调用内容，已收起；请查看工作记录）', 'provider-specific malformed DSML envelopes are hidden after persistence')
+assert.equal(visibleAgentReply('<| | DSML |'),
+  '（正在处理工具调用，请查看工作记录）', 'partial DSML prefixes are hidden in live progress bubbles')
+assert.equal(visibleAgentReply('{"toolCalls":[{"toolId":"tool.code.execute","args":{"code":"secret"}}]}'),
+  '（检测到工具调用内容，已收起；请查看工作记录）', 'raw JSON tool envelopes never render as a user-facing Agent answer')
+assert.deepEqual(eventCitations({ text: legacyAnswer }).map(({ source, id }) => `${source}:${id}`),
+  ['kb:legacy-doc', 'event:legacy-event'], 'legacy citations are lifted into the system citation module')
 const teamTemplates = new Map<string, Array<{ id: string; version: number; title: string; summary: string; input: AgentDefinitionInput; teamOwned: true; status: 'active' | 'archived' }>>()
 const promptTemplates = new Map<string, { ref: string; title: string; body: string; updatedAt: string }>()
 const memberships: Array<{ sessionId: string; principalId: string; role: string; duty?: string }> = []
@@ -67,6 +80,11 @@ const catalog = {
   archive(id: string) {
     const value = { ...this.get(id), status: 'archived' as const }
     definitions.set(id, value)
+    return value
+  },
+  delete(id: string) {
+    const value = this.get(id)
+    definitions.delete(id)
     return value
   },
   listTemplates(includeArchived = false) {
@@ -130,6 +148,11 @@ const ctx = Object.assign(new Context(), {
     get: (id: string) => ({ descriptor: { id, title: id } }),
     refreshCatalog() { refreshCount++; liveRegistry?.refreshCatalog() },
   },
+  agentCatalog: catalog,
+  agentInbox: { async cursor() { return 33 }, processing: () => [], activeSessionId: () => null },
+  agentRuntime: { listActiveProgress: () => [] },
+  workdir: { async browse() { return { exists: false, entries: [] } } },
+  sessionWork: { state: () => ({ activeSessionId: null, queue: [] }) },
   tools: { list: () => [
     { id: 'web.search', title: '网页搜索', capabilities: ['web-search'], handler: async () => '' },
     { id: 'tool.workspace.read', title: '工作区读取', capabilities: ['workdir'], handler: async () => '' },
@@ -186,7 +209,7 @@ async function main() {
   await new Promise((resolve) => setImmediate(resolve))
   const input: AgentDefinitionInput = {
     title: '研究助手', description: '检索并汇总资料', promptRef: 'prompt.research',
-    modelRef: 'model.reasoning', llmProfileRef: 'ark-coding', toolIds: ['kb.search'],
+    llmProfileRef: 'ark-coding', toolIds: ['kb.search'],
     templateOrigin: { id: 'research', version: 1 },
     contextSources: ['session', 'agent-memory', 'team-kb'],
     memoryPolicy: 'agent', speechPolicy: 'passive',
@@ -283,6 +306,8 @@ async function main() {
   assert.equal(invited.ok, true)
   assert.equal(memberships.length, initialMembershipCount + 1)
   assert.equal((events.at(-1)?.text as string).includes('完整历史'), true)
+  assert.equal((events.at(-1)?.text as string).includes('按顺序进入处理队列'), true,
+    'invited Agent history is presented as ordered inbox work')
   assert.equal((events.at(-1)?.text as string).startsWith('【Agent 历史同步】'), true,
     'Agent invitations carry a private inbox bootstrap marker')
   assert.deepEqual(events.at(-1)?.mentions, [created.id], 'the onboarding trigger targets only the invited Agent')
@@ -292,6 +317,71 @@ async function main() {
   const duplicateInvite = await rpc.inviteAgent('team-b', 's_open', created.id)
   assert.equal(duplicateInvite.joined, false)
   assert.equal(events.length, 31, 'repeat invitation does not duplicate membership event')
+  ctx.eventLog.append({ id: 'trace-source', sessionId: 's_open', seq: 32, ts: new Date().toISOString(),
+    authorId: 'u_b', authorKind: 'human', kind: 'message', text: '请检查这个任务', mentions: [], toolCalls: [],
+    replyMode: '', sourceEventId: null, sourceEventIds: [], voided: false })
+  ctx.eventLog.append({ id: 'trace-answer', sessionId: 's_open', seq: 33, ts: new Date().toISOString(),
+    authorId: created.id, authorKind: 'agent', kind: 'message', text: '检查完成。', mentions: [], replyMode: '',
+    toolCalls: [{ name: 'agent.worklog', args: JSON.stringify([
+      { label: '整理上下文', at: new Date().toISOString(), kind: 'phase', detail: '读取相关消息' },
+      { label: '调用工具：网页搜索', at: new Date().toISOString(), kind: 'tool', status: 'success',
+        inputSummary: 'query=安全 API', resultSummary: 'Authorization: Bearer abcdefghijklmnop' },
+    ]) }], sourceEventId: 'trace-source', sourceEventIds: ['trace-source'], voided: false })
+  ctx.eventLog.append({ id: 'trace-inbox', sessionId: 's_open', seq: 34, ts: new Date().toISOString(),
+    authorId: null, authorKind: 'system', kind: 'system', text: 'Agent 后台处理记录', mentions: [], replyMode: '',
+    toolCalls: [{ name: 'agent.inbox.trace', args: JSON.stringify({ agentId: created.id, sourceEventId: 'trace-source',
+      sourceSeq: 32, status: 'success', startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+      steps: [{ label: '长期记忆处理', at: new Date().toISOString(), status: 'success', detail: '模型分析完成，无记忆写入。' }] }) }],
+    sourceEventId: 'trace-source', sourceEventIds: ['trace-source'], voided: false })
+  const workspaceOverview = await rpc.agentWorkspaceOverview('team-b')
+  const overviewInbox = workspaceOverview.inboxes.find((item: { agentId: string }) => item.agentId === created.id)
+  const recentSource = overviewInbox.recent.find((item: { eventId: string }) => item.eventId === 'trace-source')
+  assert.equal(recentSource.status, 'replied', 'recent summary shows this Agent actual answer, not just cursor completion')
+  assert.equal(recentSource.result, '检查完成。')
+  assert.equal(overviewInbox.recent.length <= 8, true, 'overview payload stays bounded per Agent')
+  assert.equal(overviewInbox.recent.every((item: { status: string }) => item.status !== 'replied' || item.eventId === 'trace-source'), true,
+    'unrelated scanned messages are never reported as answered')
+  assert.equal(await rpc.agentWorkspaceOverview('agent-token'), null, 'Agent token cannot read team workspace overview')
+  const savedEventCount = events.length
+  const savedCursor = ctx.agentInbox.cursor
+  ctx.agentInbox.cursor = async () => 100
+  for (let index = 0; index < 9; index++) ctx.eventLog.append({ id: `recent-new-${index}`, sessionId: 's_open', seq: 35 + index,
+    ts: '2026-01-01T00:00:00.000Z', authorId: 'u_b', authorKind: 'human', kind: 'message', text: `new-${index}`,
+    mentions: [], toolCalls: [], replyMode: '', sourceEventId: null, sourceEventIds: [], voided: false })
+  ctx.eventLog.append({ id: 'other-agent-answer', sessionId: 's_open', seq: 44, ts: new Date().toISOString(),
+    authorId: 'a_other', authorKind: 'agent', kind: 'message', text: '别的 Agent 的回答', mentions: [], toolCalls: [],
+    replyMode: '', sourceEventId: 'recent-new-0', sourceEventIds: [], voided: false })
+  const delayedOverview = await rpc.agentWorkspaceOverview('team-b')
+  const delayedRecent = delayedOverview.inboxes.find((item: { agentId: string }) => item.agentId === created.id).recent
+  assert.equal(delayedRecent.length, 8)
+  assert.equal(delayedRecent.some((item: { eventId: string }) => item.eventId === 'trace-source'), true,
+    'older source with a recent answer remains visible after nine newer messages')
+  assert.equal(delayedRecent.some((item: { result: string }) => item.result.includes('别的 Agent')), false,
+    'another Agent answer is not attributed to selected Agent')
+  const crossAgentHistory = await rpc.agentWorkspaceHistory('team-b', created.id, 's_open', 1, 50)
+  const crossAgentSource = crossAgentHistory.items.find((item: { id: string }) => item.id === 'recent-new-0')
+  assert.deepEqual(crossAgentSource.executions, [],
+    'an Agent workspace history never displays another Agent reply as the selected Agent execution')
+  ctx.agentInbox.cursor = savedCursor
+  events.splice(savedEventCount)
+
+  assert.doesNotThrow(() => catalog.get(created.id))
+  assert.equal(ctx.session.listMembers('s_open', true).some((member) => member.principalId === created.id), true)
+  const tracedHistory = await rpc.agentWorkspaceHistory('team-b', created.id, 's_open', 1, 50)
+  const tracedMessage = tracedHistory.items.find((event: { id: string }) => event.id === 'trace-source')
+  assert.equal(tracedMessage.executions[0].text, '检查完成。', 'workspace history links an Agent answer to its source message')
+  assert.equal(tracedMessage.executions[0].worklog.length, 2, 'workspace history exposes saved execution and tool steps')
+  assert.equal(tracedHistory.items.some((event: { id: string }) => event.id === 'trace-answer'), false,
+    'an Agent answer linked to a visible trigger is nested once, not repeated as a second history row')
+  assert.equal(tracedHistory.scannedTotal, tracedHistory.total + 1,
+    'history distinguishes scanned event count from grouped trigger rows')
+  assert.match(tracedMessage.executions[0].worklog[1].resultSummary, /Bearer \[REDACTED\]/,
+    'workspace execution details redact credentials before returning them')
+  assert.equal(tracedMessage.inboxTrace.steps[0].label, '长期记忆处理',
+    'workspace history returns the durable inbox processing chronology linked to its source message')
+  const visibleTrace = (await rpc.events('team-b', 's_open')).find((event: { id: string }) => event.id === 'trace-inbox')
+  assert.match(visibleTrace.text, new RegExp(`${created.title} \\(${created.id}\\).*#32`),
+    'chat history names the exact Agent and source message for a background trace')
   ctx.eventLog.append({
     id: 'private-tool-trace', sessionId: 's_open', authorId: null, authorKind: 'system', kind: 'system',
     text: 'human-only tool activity', toolCalls: [{ name: 'web.search', args: 'query', result: 'trace' }],
@@ -310,7 +400,7 @@ async function main() {
   assert.equal(liveRegistry.get(legacyId).descriptor.title, '旧 Agent', 'legacy migration refreshes the live runtime registry')
   assert.equal(settings.has('agent.custom'), false, 'legacy settings are retired after successful import')
   assert.equal(joined.has(`s_open:${legacyId}`), false, 'legacy auto-joined Agent is returned to explicit invitation semantics')
-  assert.equal(agentHistoryForSession(ctx, 's_open', created.id).length, 31)
+  assert.equal(agentHistoryForSession(ctx, 's_open', created.id).length, 33)
 
   const removed = await removeSessionMember(ctx, 's_open', created.id, 'u_a', 'Member A')
   assert.equal(removed.some((m: { principalId: string }) => m.principalId === created.id), false)
@@ -333,19 +423,18 @@ async function main() {
 
   const registry = liveRegistry!
   const hydrated = registry.get(created.id).descriptor as unknown as {
-    title: string; promptRef?: string; toolIds: string[]; contextSources: string[]; modelRef: string; description?: string; capabilities: readonly string[]
+    title: string; promptRef?: string; toolIds: string[]; contextSources: string[]; description?: string; capabilities: readonly string[]
   }
   assert.equal(hydrated.title, '研究助手', 'startup hydration preserves the shared title')
   assert.equal(hydrated.promptRef, 'prompt.research', 'startup hydration preserves the prompt reference')
   assert.deepEqual(hydrated.toolIds, ['kb.search'], 'startup hydration retains tool metadata')
   assert.deepEqual(hydrated.contextSources, ['session', 'agent-memory', 'team-kb'])
-  assert.equal(hydrated.modelRef, 'model.reasoning')
   assert.equal(hydrated.llmProfileRef, 'ark-coding')
   assert.ok(hydrated.capabilities.includes('kb.search'))
 
   const workdirRoot = mkdtempSync(join(tmpdir(), 'agent-runtime-verify-'))
   let llmMessages: Array<{ role: string; content: string }> = []
-  let llmOptions: { model?: string; profileRef?: string } | undefined
+  let llmOptions: { model?: string; profileRef?: string; onUsage?: (usage: { inputTokens?: number; cachedInputTokens?: number; durationMs: number }) => void } | undefined
   let toolInvocations = 0
   let toolGraphMode = false
   let toolGraphStep = 0
@@ -365,7 +454,8 @@ async function main() {
           return JSON.stringify({ toolCalls: [{ toolId: 'kb.search', args: { query: 'design' } }] })
         }
         if (toolGraphMode) { toolGraphMode = false; return JSON.stringify({ final: 'Graph answer with a cited result.' }) }
-        return 'generic-agent-result'
+        options?.onUsage?.({ inputTokens: 2000, cachedInputTokens: 1024, durationMs: 5 })
+        return 'generic-agent-result 【来源:kb:kb-1】 【来源:event:evt_retrieved】'
       },
     },
     tools: {
@@ -401,33 +491,38 @@ async function main() {
   const receipt = await runtime.perform(created.id, '研究现有方案')
   assert.equal(receipt.promptRef, 'prompt.research')
   assert.equal(receipt.promptTitle, 'placeholder:prompt.research')
-  assert.equal(receipt.model, 'model.reasoning')
-  assert.equal(llmOptions?.model, 'model.reasoning', 'modelRef overrides the shared default per call')
+  assert.equal(receipt.model, 'global-model', 'Agents report the model configured on their selected provider')
+  assert.equal(llmOptions?.model, undefined, 'Agent calls never override the selected provider model')
   assert.match(llmMessages[0]?.content ?? '', /研究助手/)
   assert.match(llmMessages[0]?.content ?? '', /检索、比较并汇总资料/)
   const citedReceipt = await runtime.perform(created.id, '根据讨论给出方案', { sessionId: 's_open' })
-  assert.match(llmMessages[0]?.content ?? '', /来源事件/)
+  const liveContext = llmMessages.at(-2)?.content ?? ''
+  assert.match(liveContext, /来源事件/)
+  assert.doesNotMatch(llmMessages[0]?.content ?? '', /e12|kb:kb-1/, 'volatile source IDs must not enter the stable prefix')
   assert.match(llmMessages[0]?.content ?? '', /引用规则/)
-  assert.match(llmMessages[0]?.content ?? '', /e12/)
-  assert.match(llmMessages[0]?.content ?? '', /kb:kb-1/)
+  assert.match(liveContext, /e12/)
+  assert.match(liveContext, /kb:kb-1/)
   assert.ok(llmMessages.some((message) => message.content.includes('历史决策：采用 SQLite')))
   assert.deepEqual(new Set(citedReceipt.sourceEventIds), new Set(['evt_history', 'evt_retrieved', 'e12']),
     'runtime provenance includes history, retrieved events, and source events for recalled memory')
   assert.match(citedReceipt.receipt, /generic-agent-result/,
     'the final model answer is delivered in the chat receipt, not only saved as a workspace artifact')
-  assert.match(citedReceipt.receipt, /参考来源（本轮检索命中）/,
-    'the delivered final answer retains its verified citations')
+  assert.doesNotMatch(citedReceipt.receipt, /参考来源（本轮检索命中）/,
+    'verified sources stay outside the delivered Markdown body')
+  assert.deepEqual(citedReceipt.citations?.map(({ source, id }) => `${source}:${id}`),
+    ['kb:kb-1', 'event:evt_retrieved'], 'verified source markers become structured citations')
+  assert(citedReceipt.worklog?.some(step => step.label === '模型缓存与用量' && step.detail?.includes('缓存命中 1024')), 'cache telemetry survives into the durable execution receipt')
   assert.ok((citedReceipt.worklog?.length ?? 0) > 0, 'the runtime receipt retains work milestones')
   assert.doesNotMatch(citedReceipt.receipt, /【工作记录】/,
     'human-only work milestones stay out of the Agent-visible receipt text')
   const citedArtifact = readFileSync(join(citedReceipt.root, citedReceipt.files.at(-1)!), 'utf8')
-  assert.match(citedArtifact, /参考来源（本轮检索命中）/)
-  assert.match(citedArtifact, /部署指南/)
-  let delivered: { sessionId: string; target: string; text: string; worklog?: Array<{ label: string; at: string }> } | null = null
+  assert.doesNotMatch(citedArtifact, /参考来源（本轮检索命中）/,
+    'workspace Markdown artifacts contain the answer body, not UI citation scaffolding')
+  let delivered: { sessionId: string; target: string; text: string; worklog?: Array<{ label: string; at: string }>; citations?: Array<{ source: string; id: string }> } | null = null
   Object.assign(runtimeCtx, {
     orchestrator: {
-      reportAgentResult(sessionId: string, target: string, text: string, _sourceEventIds: string[], worklog?: Array<{ label: string; at: string }>) {
-        delivered = { sessionId, target, text, worklog }
+      reportAgentResult(sessionId: string, target: string, text: string, _sourceEventIds: string[], worklog?: Array<{ label: string; at: string }>, citations?: Array<{ source: string; id: string }>) {
+        delivered = { sessionId, target, text, worklog, citations }
       },
     },
   })
@@ -439,6 +534,8 @@ async function main() {
   assert.equal(delivered?.sessionId, 's_open')
   assert.equal(delivered?.target, created.title)
   assert.match(delivered?.text ?? '', /【工作区】/)
+  assert.deepEqual(delivered?.citations?.map(({ source, id }) => `${source}:${id}`),
+    ['kb:kb-1', 'event:evt_retrieved'], 'dispatcher forwards citations with the Agent result')
   assert.ok(llmMessages.some((message) => message.content.includes('分析本会话的决策背景')))
   delivered = null
   failNextLlmCall = true
@@ -486,7 +583,7 @@ async function main() {
     }
     const llm = new OpenAiChatLlm(new Context(), { apiKey: 'test-key', baseURL: 'https://example.invalid', model: 'global-default' })
     await llm.chat([{ role: 'user', content: 'test' }], { model: 'model.reasoning' })
-    assert.equal(requestedModel, 'model.reasoning', 'OpenAI-compatible adapter sends the per-Agent modelRef')
+    assert.equal(requestedModel, 'model.reasoning', 'the low-level adapter still supports explicit internal model selection')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -494,6 +591,15 @@ async function main() {
   await rpc.archiveAgent('team-a', created.id)
   assert.equal(refreshCount, 5, 'creating from a shared template and archiving refresh the live registry')
   assert.throws(() => registry.get(created.id), (error) => error instanceof AgentError && error.code === 'not_found', 'reconciliation removes archived catalog entries')
+  const deletable = await rpc.createAgent('team-a', { ...input, title: '临时删除验证助手' })
+  joined.add(`s_open:${deletable.id}`)
+  memberships.push({ sessionId: 's_open', principalId: deletable.id, role: 'Agent', duty: '' })
+  assert.equal(await rpc.deleteAgent('agent-token', deletable.id), null, 'Agent identities cannot delete shared definitions')
+  const deletion = await rpc.deleteAgent('team-a', deletable.id)
+  assert.equal(deletion.ok, true, 'Team humans can permanently delete shared Agent configuration')
+  assert.equal(definitions.has(deletable.id), false, 'deleted Agent configuration is removed from the catalog')
+  assert.equal(joined.has(`s_open:${deletable.id}`), false, 'deleting removes the Agent from every session')
+  assert.equal(refreshCount, 7, 'creating and deleting the Agent refreshes the live registry')
   console.log(`✓ Teamspace Agent API, explicit invite, full history, and legacy migration passed (${appCount} panels registered)`)
 }
 

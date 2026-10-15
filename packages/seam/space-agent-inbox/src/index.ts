@@ -15,7 +15,7 @@ export abstract class AgentInboxService extends Service {
     super(ctx, 'agentInbox')
   }
 
-  /** Ensure all eligible events through seq have been ingested before an @ reply. */
+  /** Wait until background ingestion has durably advanced through seq when a caller needs it. */
   abstract waitThrough(agentId: string, sessionId: string, seq: number): Promise<void>
 
   /** Return the durable per-Agent cursor for a session (0 means no history consumed). */
@@ -36,7 +36,7 @@ export interface AgentInboxProcessing {
   sessionId: string
   seq: number
   eventId: string
-  phase: 'reviewing-decision' | 'extracting-memory' | 'onboarding-history' | 'advancing-cursor' | 'failed'
+  phase: 'reviewing-decision' | 'extracting-memory' | 'advancing-cursor' | 'failed'
   detail: string
   startedAt: string
   updatedAt: string

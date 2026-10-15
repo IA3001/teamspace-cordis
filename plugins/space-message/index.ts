@@ -79,7 +79,8 @@ export class MessageServiceImpl extends MessageService {
           id: randomUUID(), sessionId, authorId: null, phaseId: null,
           authorKind: 'system', kind: 'system',
           text: blockedSpeechNotice(descriptor?.title ?? authorId, decision.reason!),
-          mentions: [], toolCalls: [], replyMode: '',
+          sourceEventId: metadata.sourceEventId,
+          mentions: [], toolCalls: [{ name: 'agent.reply.outcome', args: JSON.stringify({ agentId: authorId, status: 'blocked', reason: decision.reason }) }], replyMode: '',
         })
       }
     }

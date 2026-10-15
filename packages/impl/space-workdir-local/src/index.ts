@@ -19,13 +19,14 @@
 // 依赖方向（lint:deps 断言①）：impl 只准依赖 seams —— 本包依赖
 // space-workdir（契约）+ space-agent（入驻名单校验）。
 import { mkdirSync, rmSync } from 'node:fs'
-import { mkdir, lstat, readdir, readFile } from 'node:fs/promises'
-import { join, normalize, resolve, sep } from 'node:path'
+import { mkdir, lstat, readdir, readFile, copyFile, writeFile as writeFileAsync } from 'node:fs/promises'
+import { basename, dirname, join, normalize, resolve, sep } from 'node:path'
+import { constants as fsConstants } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { Context } from 'cordis'
 import { WorkdirError, WorkdirService } from 'space-workdir'
-import type { WorkdirEntry, WorkdirHandle, WorkdirListing } from 'space-workdir'
+import type { WorkdirEntry, WorkdirHandle, WorkdirListing, WorkdirTransferTarget } from 'space-workdir'
 
 const execFileAsync = promisify(execFile)
 export interface WorkdirQuotaOptions {
@@ -257,6 +258,79 @@ export class LocalWorkdirService extends WorkdirService {
 
   async readSharedText(relativePath: string): Promise<string> {
     return this.readTextFromRoot(this.sharedRoot(), relativePath)
+  }
+
+  private workspaceFilePath(relativePath: string): void {
+    const hidden = /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.ssh|\.aws|\.gnupg|id_(?:rsa|ed25519)|credentials?(?:\..*)?|.*(?:secret|token|credential|private[-_]?key).*)$/i
+    const parts = relativePath.split('/')
+    if (!relativePath || relativePath.includes('\\') || parts.some((part) => !part || part === '.' || part === '..' || hidden.test(part))) {
+      throw new Error('该文件不能访问，或工作区路径无效')
+    }
+  }
+
+  private async workspaceRoot(location: WorkdirTransferTarget, create = false): Promise<string> {
+    if (location.kind === 'shared') {
+      const root = this.sharedRoot()
+      if (create) await mkdir(root, { recursive: true })
+      return root
+    }
+    try { this.ctx.agents.get(location.agentId) } catch { throw new WorkdirError('not_found', `Agent "${location.agentId}" 未入驻`) }
+    return create ? (await this.claim(location.agentId)).root : this.rootOf(location.agentId)
+  }
+
+  async readFile(source: WorkdirTransferTarget, relativePath: string): Promise<Uint8Array> {
+    this.workspaceFilePath(relativePath)
+    const root = await this.workspaceRoot(source)
+    const path = await this.safeTargetIn(root, relativePath)
+    const info = await lstat(path)
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('只能下载普通文件')
+    if (info.size > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，不能通过工作区下载')
+    return await readFile(path)
+  }
+
+  async writeFile(target: WorkdirTransferTarget, relativePath: string, content: Uint8Array): Promise<void> {
+    this.workspaceFilePath(relativePath)
+    if (content.byteLength > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，不能上传到工作区')
+    const root = await this.workspaceRoot(target, true)
+    let destination = await this.safeTargetIn(root, relativePath)
+    await mkdir(dirname(destination), { recursive: true })
+    destination = await this.safeTargetIn(root, relativePath)
+    try {
+      await writeFileAsync(destination, Buffer.from(content), { flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('目标工作区已存在同名文件；原文件未覆盖')
+      throw error
+    }
+  }
+
+  async copyFile(sourceLocation: WorkdirTransferTarget, relativePath: string, target: WorkdirTransferTarget): Promise<void> {
+    this.workspaceFilePath(relativePath)
+    let sourceRoot: string
+    if (sourceLocation.kind === 'shared') sourceRoot = this.sharedRoot()
+    else {
+      try { this.ctx.agents.get(sourceLocation.agentId) } catch { throw new WorkdirError('not_found', `Agent "${sourceLocation.agentId}" 未入驻`) }
+      sourceRoot = this.rootOf(sourceLocation.agentId)
+    }
+    const source = await this.safeTargetIn(sourceRoot, relativePath)
+    const sourceInfo = await lstat(source)
+    if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink()) throw new Error('只能转发普通文件')
+    if (sourceInfo.size > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，不能通过工作区互传')
+
+    let targetRoot: string
+    if (target.kind === 'shared') {
+      targetRoot = this.sharedRoot()
+      await mkdir(targetRoot, { recursive: true })
+    } else {
+      try { this.ctx.agents.get(target.agentId) } catch { throw new WorkdirError('not_found', `目标 Agent "${target.agentId}" 未入驻`) }
+      targetRoot = (await this.claim(target.agentId)).root
+    }
+    const destination = await this.safeTargetIn(targetRoot, basename(source))
+    try {
+      await copyFile(source, destination, fsConstants.COPYFILE_EXCL)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('目标工作区已存在同名文件；原文件未覆盖')
+      throw error
+    }
   }
 }
 

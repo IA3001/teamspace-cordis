@@ -10,7 +10,14 @@ export function protectedChanges(before, after) {
   for (const [suite, nodes] of Object.entries(before.checks ?? {})) for (const old of nodes.filter((n) => typeof n !== 'string')) {
     const current = (after.checks?.[suite] ?? []).find((n) => n.id === old.id)
     if (!current) { errors.push(`Check identity/suite changed: ${old.id}`); continue }
-    for (const field of ['script', 'paths', 'needs', 'resources']) if (JSON.stringify(current[field] ?? []) !== JSON.stringify(old[field] ?? [])) errors.push(`Protected check ${field} changed: ${old.id}`)
+    for (const field of ['script', 'needs', 'resources']) if (JSON.stringify(current[field] ?? []) !== JSON.stringify(old[field] ?? [])) errors.push(`Protected check ${field} changed: ${old.id}`)
+    const oldPaths = old.paths ?? ['*'], nextPaths = current.paths ?? ['*']
+    if (JSON.stringify(nextPaths) !== JSON.stringify(oldPaths)) {
+      const initialScoping = oldPaths.includes('*') && nextPaths.length > 0 && !nextPaths.includes('*')
+      const preservesExistingCoverage = oldPaths.every((oldPath) => nextPaths.some((nextPath) =>
+        nextPath === '*' || oldPath === nextPath || oldPath.startsWith(nextPath)))
+      if (!initialScoping && !preservesExistingCoverage) errors.push(`Protected check paths narrowed: ${old.id}`)
+    }
   }
   if (before.docs?.examples && JSON.stringify(before.docs.examples) !== JSON.stringify(after.docs?.examples)) errors.push('Protected public example/equivalence manifest changed')
   if (before.quality?.scope && before.quality.scope !== after.quality?.scope) errors.push('Protected coverage/duplication scope changed')

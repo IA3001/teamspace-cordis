@@ -22,7 +22,12 @@ export function validateGraph(nodes, scripts) {
   nodes.forEach(visit)
 }
 export function relatedChecks(nodes, paths) {
-  const selected = new Set(nodes.filter((n) => n.paths.some((scope) => scope === '*' || paths.some((p) => p === scope || p.startsWith(scope)))).map((n) => n.id))
+  const scoped = nodes.flatMap((n) => n.paths.filter((scope) => scope !== '*'))
+  const matches = (path, scope) => path === scope || path.startsWith(scope)
+  // A path outside the declared map means the impact is unknown. Fall back to
+  // the full graph instead of silently running only universal checks.
+  if (!paths.length || paths.some((path) => !scoped.some((scope) => matches(path, scope)))) return [...nodes]
+  const selected = new Set(nodes.filter((n) => n.paths.some((scope) => scope === '*' || paths.some((p) => matches(p, scope)))).map((n) => n.id))
   const byId = new Map(nodes.map((n) => [n.id, n]))
   function add(id) { for (const dep of byId.get(id).needs) if (!selected.has(dep)) { selected.add(dep); add(dep) } }
   ;[...selected].forEach(add)

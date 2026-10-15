@@ -40,6 +40,11 @@ seed.session.createSession({ id: 's_mixed', title: '跨进程 Inbox 与 Orchestr
 seed.session.join({ sessionId: 's_mixed', principalId: 'u_mixed_dri', role: 'DRI' })
 seed.session.join({ sessionId: 's_mixed', principalId: 'a_mixed_worker', role: '成员' })
 seed.session.join({ sessionId: 's_mixed', principalId: 'a_mixed_coordinator', role: '协调者' })
+eventLog.append({
+  id: 'event_prior', sessionId: 's_mixed', authorId: 'u_mixed_dri', phaseId: null,
+  authorKind: 'human', kind: 'message', text: '以前的讨论：发布窗口已确认周五。',
+  mentions: [], toolCalls: [], replyMode: '',
+})
 const event = eventLog.append({
   id: 'event_mixed', sessionId: 's_mixed', authorId: 'u_mixed_dri', phaseId: null,
   authorKind: 'human', kind: 'message', text: '@研究员 请基于已确认的发布窗口给出结论。',
@@ -100,38 +105,31 @@ try {
   }
 
   await waitForChildSignal('orchestrator-ready', 'Orchestrator process to start')
-  await new Promise((resolve) => setTimeout(resolve, 250))
-  assert.equal(existsSync(join(signalDir, 'history-barrier-passed')), false,
-    'cross-process Agent mention waits while the Inbox memory cursor is behind')
-  assert.equal(existsSync(join(signalDir, 'brain-started')), false,
-    'Orchestrator brain cannot run before Inbox memory extraction completes')
+  await waitForChildSignal('direct-task-started', 'the explicit @ task to dispatch while Inbox history is still pending')
+  const dispatched = JSON.parse(readFileSync(join(signalDir, 'direct-task-started'), 'utf8')) as { eventId: string; target: string }
+  assert.equal(dispatched.eventId, event.id, 'the immediate task keeps the triggering message as its source')
+  assert.equal(dispatched.target, '研究员', 'the task is routed to the explicitly mentioned Agent')
+  assert.equal(await parentMemory.recall('agent:a_mixed_worker', { kind: 'conversation_fact:0' }).then((items) => items.length), 0,
+    'direct task dispatch does not wait for background memory extraction')
 
   writeFileSync(join(signalDir, 'release-inbox'), 'release')
   await inboxWait
-  await waitForChildSignal('history-barrier-passed', 'the Agent history barrier to pass')
-  await waitForChildSignal('brain-started', 'Orchestrator brain after the Inbox barrier')
-  const brainStart = JSON.parse(readFileSync(join(signalDir, 'brain-started'), 'utf8')) as { cursor: number; memory: string | null }
-  assert.equal(brainStart.cursor, event.seq, 'Orchestrator observes the durable Agent cursor at the triggering event')
-  assert.equal(brainStart.memory, '已确认发布窗口为周五。', 'Orchestrator starts only after the extracted memory is durable')
-  writeFileSync(join(signalDir, 'release-brain'), 'release')
+  await waitForChildSignal('task-dispatched', 'the explicit @ task handoff to finish')
 
   const exitCode = await Promise.race([
     closed,
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`worker timeout: ${output}\n${errors}`)), 12_000)),
   ])
   assert.equal(exitCode, 0, `mixed worker failed: ${errors || output}`)
-  const result = JSON.parse(readFileSync(join(signalDir, 'orchestrator-finished'), 'utf8')) as { brainCalls: number }
-  assert.equal(result.brainCalls, 1, 'one explicit @ event produces exactly one coordinator decision')
+  const result = JSON.parse(readFileSync(join(signalDir, 'orchestrator-finished'), 'utf8')) as { dispatched: boolean }
+  assert.equal(result.dispatched, true, 'the direct @ task is dispatched while inbox history continues independently')
   const verifyDb = new DatabaseSync(dbPath, { readOnly: true })
   const cursorRows = await parentMemory.recall('agent:a_mixed_worker', { kind: 'cursor:s_mixed', limit: 10 })
   assert(Math.max(0, ...cursorRows.map((row) => Number(row.text) || 0)) >= event.seq,
-    'the durable Agent cursor remains at or beyond the triggering event')
-  const replies = verifyDb.prepare(`SELECT count(*) AS n FROM events
-    WHERE session_id = ? AND author_id = ? AND source_event_id = ? AND kind = 'message'`)
-    .get('s_mixed', 'a_mixed_coordinator', event.id) as { n: number }
-  assert.equal(replies.n, 1, 'the coordinator writes one causal reply after the memory barrier')
+    'the durable Agent inbox cursor still catches up after the direct task dispatch')
   const semanticMemory = await parentMemory.recall('agent:a_mixed_worker', { kind: 'conversation_fact:0', limit: 10 })
-  assert.equal(semanticMemory.length, 1, 'the triggering event produces one durable memory record')
+  assert.equal(semanticMemory.length, 1, 'the prior unmentioned message still produces one durable memory record')
+  assert.equal(semanticMemory[0]?.sourceEventId, 'event_prior', 'background memory remains tied to its own source')
   verifyDb.close()
 
   // Recover a new mentioned message after the process that would have drained
@@ -169,32 +167,23 @@ try {
   }
 
   await waitForRecoverySignal('orchestrator-ready', 'recovery Orchestrator to start')
+  await waitForRecoverySignal('direct-task-started', 'the recovered @ task to dispatch before inbox lease recovery')
+  const recoveredDispatch = JSON.parse(readFileSync(join(recoverySignals, 'direct-task-started'), 'utf8')) as { eventId: string; target: string }
+  assert.equal(recoveredDispatch.eventId, recoveryEvent.id, 'recovery immediately dispatches the unhandled @ message')
   await waitFor(() => Number((parentDb.prepare(`SELECT count(*) AS n FROM session_work_queue
     WHERE process_id = 'mixed-orchestrator' AND session_id = 's_mixed' AND owner = 'agent-inbox'`).get() as { n: number }).n) === 1,
   'recovery Inbox to queue behind the stale process lease')
-  assert.equal(existsSync(join(recoverySignals, 'brain-started')), false,
-    'a stale Inbox lease keeps the recovery Orchestrator behind the history barrier')
   parentDb.prepare('UPDATE session_work_owners SET expires_at = ? WHERE process_id = ? AND owner = ?')
     .run(Date.now() - 1, 'crashed-inbox', 'agent-inbox')
-  await waitForRecoverySignal('history-barrier-passed', 'the recovery history barrier to pass')
-  await waitForRecoverySignal('brain-started', 'the recovery Orchestrator brain to start')
-  const recoveredBrain = JSON.parse(readFileSync(join(recoverySignals, 'brain-started'), 'utf8')) as { cursor: number; memory: string | null }
-  assert.equal(recoveredBrain.cursor, recoveryEvent.seq, 'recovery replays the event through the durable Agent cursor')
-  assert.equal(recoveredBrain.memory, '恢复进程已处理新消息。', 'recovery persists the message memory before coordinator work')
-  writeFileSync(join(recoverySignals, 'release-brain'), 'release')
   const recoveryExitCode = await Promise.race([
     recoveryClosed,
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`recovery worker timeout: ${recoveryOutput}\n${recoveryErrors}`)), 12_000)),
   ])
   assert.equal(recoveryExitCode, 0, `recovery worker failed: ${recoveryErrors || recoveryOutput}`)
-  const recoveredReply = parentDb.prepare(`SELECT count(*) AS n FROM events
-    WHERE session_id = ? AND author_id = ? AND source_event_id = ? AND kind = 'message'`)
-    .get('s_mixed', 'a_mixed_coordinator', recoveryEvent.id) as { n: number }
-  assert.equal(recoveredReply.n, 1, 'lease recovery produces one causal Orchestrator reply')
-  const recoveredMemory = (await parentMemory.recall('agent:a_mixed_worker', { kind: 'conversation_fact:0', limit: 10 }))
-    .find((item) => item.sourceEventId === recoveryEvent.id)
-  assert.equal(recoveredMemory?.text, '恢复进程已处理新消息。', 'the recovered Inbox memory is durable and source-linked')
-  console.log('✓ Cross-process Inbox barrier and stale-lease recovery precede unique Orchestrator decisions')
+  const recoveredCursor = await parentMemory.recall('agent:a_mixed_worker', { kind: 'cursor:s_mixed', limit: 10 })
+  assert(Math.max(0, ...recoveredCursor.map((item) => Number(item.text) || 0)) >= recoveryEvent.seq,
+    'the background inbox catches up after direct task dispatch and lease recovery')
+  console.log('✓ Direct @ tasks dispatch without waiting for background Inbox history; cursor recovery remains durable')
 } finally {
   if (childProcess?.exitCode === null) childProcess.kill('SIGKILL')
   sessionWork.dispose()

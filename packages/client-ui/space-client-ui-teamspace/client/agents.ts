@@ -6,18 +6,20 @@ import { useRpc } from '@cordisjs/client'
 import { ICONS } from 'space-client-ui-shared/client/console.ts'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
 import { userFacingFailure } from 'space-client-ui-shared/client/errors.ts'
+import { DEFAULT_AGENT_ICON, SvgIcon, SvgIconPicker } from 'space-client-ui-shared/client/icon-library.ts'
+import 'space-client-ui-shared/client/im.css'
 
 interface AgentDefinition {
   id: string
   title: string
   description: string
   promptRef: string
-  modelRef: string
   llmProfileRef: string
   toolIds: string[]
   contextSources: string[]
   memoryPolicy: string
   speechPolicy: string
+  iconId: string
   templateOrigin: { id: string; version: number } | null
   status: 'active' | 'archived'
   createdAt: string
@@ -27,12 +29,12 @@ interface AgentInput {
   title: string
   description: string
   promptRef: string
-  modelRef: string
   llmProfileRef: string
   toolIds: string[]
   contextSources: string[]
   memoryPolicy: string
   speechPolicy: string
+  iconId: string
 }
 interface SessionOption { id: string; title: string; status: string }
 interface PromptTemplate { ref: string; title: string; body: string; updatedAt: string }
@@ -67,6 +69,7 @@ export const AgentManagementPage = defineComponent({
       createAgent(token: string, input: AgentInput & { templateOrigin?: { id: string; version: number } }): Promise<AgentDefinition | ApiError | null>
       updateAgent(token: string, id: string, patch: Partial<AgentInput>): Promise<AgentDefinition | ApiError | null>
       archiveAgent(token: string, id: string): Promise<{ ok: true; definition: AgentDefinition } | ApiError | null>
+      deleteAgent(token: string, id: string): Promise<{ ok: true; definition: AgentDefinition } | ApiError | null>
       inviteAgent(token: string, sessionId: string, agentId: string): Promise<{ ok: true; joined: boolean; detail: string } | ApiError | null>
     }>()
     const token = () => localStorage.getItem('space_token') ?? ''
@@ -91,6 +94,7 @@ export const AgentManagementPage = defineComponent({
     const menuVersion = ref(0)
     const loading = ref(false)
     const archivingId = ref('')
+    const deletingId = ref('')
     const invitingId = ref('')
     const definitionsLoaded = ref(false)
     const loadFailed = ref(false)
@@ -107,9 +111,9 @@ export const AgentManagementPage = defineComponent({
     const promptSaved = ref({ ref: '', title: '', body: '' })
     const promptVersion = ref(0)
     const form = ref<AgentInput>({
-      title: '', description: '', promptRef: '', modelRef: '', llmProfileRef: '', toolIds: [],
+      title: '', description: '', promptRef: '', llmProfileRef: '', toolIds: [],
       contextSources: ['session', 'agent-memory', 'team-kb'],
-      memoryPolicy: 'agent', speechPolicy: 'passive',
+      memoryPolicy: 'agent', speechPolicy: 'passive', iconId: DEFAULT_AGENT_ICON,
     })
 
     const flash = (message: string, failed = false) => {
@@ -118,13 +122,13 @@ export const AgentManagementPage = defineComponent({
     }
     const agentInputReady = () => Boolean(form.value.title.trim() && form.value.description.trim())
     const blankAgentInput = (): AgentInput => ({
-      title: '', description: '', promptRef: '', modelRef: '', llmProfileRef: '', toolIds: [],
-      contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive',
+      title: '', description: '', promptRef: '', llmProfileRef: '', toolIds: [],
+      contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive', iconId: DEFAULT_AGENT_ICON,
     })
     const definitionInput = (def: AgentDefinition): AgentInput => ({
-      title: def.title, description: def.description, promptRef: def.promptRef, modelRef: def.modelRef,
+      title: def.title, description: def.description, promptRef: def.promptRef,
       llmProfileRef: def.llmProfileRef || '', toolIds: [...def.toolIds], contextSources: [...def.contextSources],
-      memoryPolicy: def.memoryPolicy, speechPolicy: def.speechPolicy,
+      memoryPolicy: def.memoryPolicy, speechPolicy: def.speechPolicy, iconId: def.iconId || DEFAULT_AGENT_ICON,
     })
     const isDirty = () => {
       if (editingId.value) {
@@ -174,9 +178,9 @@ export const AgentManagementPage = defineComponent({
       templateMeta.value = { title: '', summary: '' }
       templateMetaOpen.value = false
       form.value = {
-        title: '', description: '', promptRef: '', modelRef: '', llmProfileRef: '', toolIds: [],
+        title: '', description: '', promptRef: '', llmProfileRef: '', toolIds: [],
         contextSources: ['session', 'agent-memory', 'team-kb'],
-        memoryPolicy: 'agent', speechPolicy: 'passive',
+        memoryPolicy: 'agent', speechPolicy: 'passive', iconId: DEFAULT_AGENT_ICON,
       }
     }
     async function refresh() {
@@ -317,6 +321,19 @@ export const AgentManagementPage = defineComponent({
       } catch { flash(userFacingFailure('归档 Agent'), true) }
       finally { archivingId.value = '' }
     }
+    async function deleteAgent(def: AgentDefinition) {
+      if (deletingId.value || archivingId.value || invitingId.value || saving.value || templateSaving.value) return
+      deletingId.value = def.id
+      try {
+        const result = await rpc.value.deleteAgent(token(), def.id)
+        if (!result) { window.location.assign('/login'); return }
+        if (isError(result)) { flash(result.detail || result.error, true); return }
+        flash(`已删除「${def.title}」配置；历史消息、记忆和工作区文件已保留`)
+        if (editingId.value === def.id) reset()
+        await refresh()
+      } catch { flash(userFacingFailure('删除 Agent'), true) }
+      finally { deletingId.value = '' }
+    }
     async function invite(def: AgentDefinition) {
       if (!sessionId.value || invitingId.value || archivingId.value) return
       invitingId.value = def.id
@@ -413,6 +430,16 @@ export const AgentManagementPage = defineComponent({
           disabled: Boolean(archivingId.value || invitingId.value || saving.value || templateSaving.value),
         }, { default: () => '归档' }),
       })
+      const deleteAction = (def: AgentDefinition) => h(ElPopconfirm, {
+        title: `永久删除「${def.title}」的共享配置，并从所有会议移除。历史消息、记忆和工作区文件会保留，配置无法恢复。`,
+        confirmButtonText: '永久删除', cancelButtonText: '取消', confirmButtonType: 'danger',
+        onConfirm: () => void deleteAgent(def),
+      }, {
+        reference: () => h(ElButton, {
+          text: true, type: 'danger', size: 'small', loading: deletingId.value === def.id,
+          disabled: Boolean(deletingId.value || archivingId.value || invitingId.value || saving.value || templateSaving.value),
+        }, { default: () => '删除 Agent' }),
+      })
       const saveAction = () => editingId.value && !isDirty()
         ? h(ElTag, { size: 'small', type: 'success', effect: 'plain' }, { default: () => '已保存' })
         : h(ElButton, {
@@ -436,6 +463,8 @@ export const AgentManagementPage = defineComponent({
             h(ElSpace, { wrap: true, size: 6, class: 'sp-agent-form-header-actions' }, { default: () => [
               editingId.value && definitions.value.find((item) => item.id === editingId.value)
                 ? archiveAction(definitions.value.find((item) => item.id === editingId.value)!) : null,
+              editingId.value && definitions.value.find((item) => item.id === editingId.value)
+                ? deleteAction(definitions.value.find((item) => item.id === editingId.value)!) : null,
               isDirty() ? h(ElButton, { text: true, size: 'small', disabled: saving.value || templateSaving.value, onClick: cancelChanges }, { default: () => '撤销修改' }) : null,
               saveAction(),
               editingId.value ? inviteAction() : null,
@@ -464,6 +493,10 @@ export const AgentManagementPage = defineComponent({
             ] })) : null,
             field('Agent 名称（必填）', h(ElInput, { modelValue: form.value.title, maxlength: 80, showWordLimit: true,
               'onUpdate:modelValue': (v: string) => { form.value.title = v }, placeholder: '例如：需求分析助手' })),
+            field('Agent 图标', h('div', { class: 'sp-agent-icon-setting' }, [
+              h('span', { class: 'sp-agent-icon-preview' }, h(SvgIcon, { name: form.value.iconId })),
+              h(SvgIconPicker, { modelValue: form.value.iconId, 'onUpdate:modelValue': (v: string) => { form.value.iconId = v } }),
+            ])),
             field('职责说明（必填）', h(ElInput, { modelValue: form.value.description, type: 'textarea', rows: 3,
               'onUpdate:modelValue': (v: string) => { form.value.description = v }, placeholder: '说明 Agent 的目标、工作方式和输出要求' })),
             groupBreak('模型与提示词'),
@@ -476,8 +509,6 @@ export const AgentManagementPage = defineComponent({
               default: () => llmProfiles.value.map((item) => h(ElOption, { key: item.id,
                 label: `${item.name}（${item.id} · ${item.model}）`, value: item.id })),
             })),
-            field('供应商内模型 ID 覆盖（可选）', h(ElInput, { modelValue: form.value.modelRef,
-              'onUpdate:modelValue': (v: string) => { form.value.modelRef = v }, placeholder: '留空使用所选供应商配置中的模型 ID' }), 'sp-agent-field--wide'),
             groupBreak('工具与上下文'),
             field('可用工具', h(ElSelect, { modelValue: form.value.toolIds, multiple: true, filterable: true,
               'onUpdate:modelValue': (v: string[]) => { form.value.toolIds = v }, placeholder: '选择已注册的工具' }, {
@@ -540,6 +571,7 @@ export const AgentManagementPage = defineComponent({
               key: def.id, index: def.id, disabled: saving.value || templateSaving.value,
             }, { default: () => [
               h('div', { class: 'sp-agent-menu-item' }, [
+                h('span', { class: 'sp-agent-menu-icon' }, h(SvgIcon, { name: def.iconId })),
                 h('div', { class: 'sp-agent-menu-copy' }, [
                   h(ElText, { tag: 'strong', truncated: true }, { default: () => def.title }),
                   h(ElText, { type: 'info', size: 'small', truncated: true, title: def.description }, {
@@ -621,7 +653,7 @@ export const AgentManagementPage = defineComponent({
       })
       const promptPane = h(ElTabPane, { label: '共享提示词', name: 'prompts' }, {
         default: () => h(ElRow, { gutter: 20, class: 'sp-agent-prompt-layout' }, [
-          h(ElCol, { span: 5, class: 'sp-agent-prompt-directory' }, [
+          h(ElCol, { span: 8, class: 'sp-agent-prompt-directory' }, [
             h(ElRow, { justify: 'space-between', align: 'middle', class: 'sp-agent-prompt-directory-head' }, [
               h(ElText, { tag: 'strong' }, { default: () => `共享提示词 · ${prompts.value.length}` }),
               h(ElButton, { text: true, type: 'primary', disabled: promptSaving.value, onClick: () => { void requestPromptSelection('') } }, {
@@ -630,7 +662,7 @@ export const AgentManagementPage = defineComponent({
             ]),
             promptTemplateMenu,
           ]),
-          h(ElCol, { span: 19, class: 'sp-agent-prompt-main' }, [
+          h(ElCol, { span: 16, class: 'sp-agent-prompt-main' }, [
             h('div', { class: 'sp-agent-section-head' }, [
               h('div', {}, [
                 h('div', { class: 'sp-agent-prompt-title' }, [
@@ -645,20 +677,15 @@ export const AgentManagementPage = defineComponent({
         ]),
       })
 
-      return h(KLayout, { main: 'page-teamspace-agents', class: 'sp-team-layout' }, {
-        header: () => h(ElRow, { justify: 'space-between', align: 'middle' }, [
-          h(ElText, { tag: 'strong' }, { default: () => '团队空间' }),
-          h(ElButton, { text: true, onClick: () => window.location.assign('/teamspace') }, { default: () => '返回会话' }),
-        ]),
+      return h(KLayout, { main: 'page-teamspace-agents', class: 'sp-team-layout sp-compact-header-layout' }, {
         default: () => [
           h(ThemeStyle),
           h(ElMain, { class: ['sp-agent-page', 'sp-agent-directory-page'] }, { default: () => h(ElScrollbar, {}, { default: () => h('div', { class: 'sp-agent-page-inner' }, [
             h('header', { class: 'sp-agent-page-head' }, [
               h('div', {}, [
                 h(ElText, { tag: 'h1' }, { default: () => '团队共享 Agent' }),
-                h(ElText, { class: 'sp-agent-page-description', type: 'info' }, { default: () => '统一配置团队 Agent 的职责、模型、工具、记忆与发言方式。创建后再邀请加入会话。' }),
+                h(ElText, { class: 'sp-agent-page-description', type: 'info' }, { default: () => '管理团队 Agent 配置与共享提示词。' }),
               ]),
-              h(ElTag, { class: 'sp-agent-page-badge', type: 'info', effect: 'plain' }, { default: () => '团队共享资源' }),
             ]),
             h(ElTabs, {
               class: 'sp-agent-tabs', modelValue: activePane.value,

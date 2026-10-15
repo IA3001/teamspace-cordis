@@ -11,7 +11,7 @@
 // 铁律 1：只用外壳全局注册的 el-* / k-*（resolveComponent），零 import
 // element-plus、零手写样式、零内联样式。
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, resolveComponent } from 'vue'
-import type { Component } from 'vue'
+import type { Component, VNodeChild } from 'vue'
 import { useRoute, useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
 import { ICONS, pageHead, section, actionsRow } from 'space-client-ui-shared/client/console.ts'
@@ -107,8 +107,8 @@ const AdminPage = defineComponent({
       saveEmbeddingApi(token: string, cfg: { baseURL?: string; model?: string; apiKey?: string }): Promise<WriteResult | null>
       saveWebSearchApi(token: string, cfg: { baseURL?: string; apiKey?: string }): Promise<WriteResult | null>
       testTextApi(token: string): Promise<WriteResult | null>
-      testEmbeddingApi(token: string): Promise<WriteResult | null>
-      testWebSearchApi(token: string): Promise<WriteResult | null>
+      testEmbeddingApi(token: string, profileId?: string): Promise<WriteResult | null>
+      testWebSearchApi(token: string, profileId?: string): Promise<WriteResult | null>
       sandboxApprovals(token: string): Promise<SandboxApprovalRow[] | null>
       decideSandboxApproval(token: string, id: string, decision: 'approved' | 'rejected', note?: string): Promise<(WriteResult & { request?: SandboxApprovalRow }) | null>
     }>()
@@ -371,16 +371,17 @@ const AdminPage = defineComponent({
         }
       } finally { apiBusy.value = '' }
     }
-    async function testApi(kind: 'text' | 'embedding' | 'webSearch') {
+    async function testApi(kind: 'text' | 'embedding' | 'webSearch', profileId?: string) {
       if (apiBusy.value) return
       apiBusy.value = `test-${kind}`
+      apiNotice.value = ''
       apiSectionFeedback.value = { kind, message: '', type: 'info' }
       try {
         const result = kind === 'text'
           ? await rpc.value.testTextApi(getToken())
           : kind === 'embedding'
-            ? await rpc.value.testEmbeddingApi(getToken())
-            : await rpc.value.testWebSearchApi(getToken())
+            ? await rpc.value.testEmbeddingApi(getToken(), profileId)
+            : await rpc.value.testWebSearchApi(getToken(), profileId)
         apiSectionFeedback.value = {
           kind, message: result?.detail ?? result?.error ?? '测试失败',
           type: result?.ok ? 'success' : 'error',
@@ -459,19 +460,21 @@ const AdminPage = defineComponent({
     async function testTextProfile(id: string) {
       if (apiBusy.value) return
       apiBusy.value = `test-profile-${id}`
+      apiNotice.value = ''; apiSectionFeedback.value = { kind: '', message: '', type: 'info' }
       try {
         const result = await rpc.value.testTextProfile(getToken(), id)
-        apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '测试失败'}`
-      } catch { apiNotice.value = userFacingFailure(`测试 ${id} 连接`) }
+        apiSectionFeedback.value = { kind: 'text', message: `${id || '当前默认配置'}：${result?.detail ?? result?.error ?? '测试失败'}`, type: result?.ok ? 'success' : 'error' }
+      } catch { apiSectionFeedback.value = { kind: 'text', type: 'error', message: userFacingFailure(`测试 ${id} 连接`) } }
       finally { apiBusy.value = '' }
     }
     async function testTextProfileStream(id: string) {
       if (apiBusy.value) return
       apiBusy.value = `test-profile-stream-${id}`
+      apiNotice.value = ''; apiSectionFeedback.value = { kind: '', message: '', type: 'info' }
       try {
         const result = await rpc.value.testTextProfileStream(getToken(), id)
-        apiNotice.value = `${id}：${result?.detail ?? result?.error ?? '流式测试失败'}`
-      } catch { apiNotice.value = userFacingFailure(`测试 ${id} 流式连接`) }
+        apiSectionFeedback.value = { kind: 'text', message: `${id || '当前默认配置'}：${result?.detail ?? result?.error ?? '流式测试失败'}`, type: result?.ok ? 'success' : 'error' }
+      } catch { apiSectionFeedback.value = { kind: 'text', type: 'error', message: userFacingFailure(`测试 ${id || '默认配置'} 流式连接`) } }
       finally { apiBusy.value = '' }
     }
     async function removeTextProfile(id: string) {
@@ -479,8 +482,14 @@ const AdminPage = defineComponent({
       apiBusy.value = `remove-profile-${id}`
       try {
         const result = await rpc.value.removeTextProfile(getToken(), id)
-        await handleResult(result)
-      } catch { error.value = userFacingFailure('删除文字模型配置') }
+        if (await handleResult(result)) {
+          invalidateModelCatalog('profile')
+          selectedModelProvider.value = 'default'
+          profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null }
+          apiNotice.value = ''
+          apiSectionFeedback.value = { kind: 'text', message: '供应商配置已删除。', type: 'success' }
+        } else apiSectionFeedback.value = { kind: 'text', message: result?.detail ?? result?.error ?? '删除供应商配置失败。', type: 'error' }
+      } catch { apiSectionFeedback.value = { kind: 'text', message: userFacingFailure('删除文字模型配置'), type: 'error' } }
       finally { apiBusy.value = '' }
     }
     async function setDefaultTextProfile(id: string) {
@@ -492,7 +501,12 @@ const AdminPage = defineComponent({
       } catch { error.value = userFacingFailure('设置默认文字模型') }
       finally { apiBusy.value = '' }
     }
+    function clearApiFeedback() {
+      apiNotice.value = ''; apiSectionFeedback.value = { kind: '', message: '', type: 'info' }
+    }
+
     function editTextProfile(profile: NonNullable<ApiConfig['textProfiles']>[number]) {
+      apiNotice.value = ''; apiSectionFeedback.value = { kind: '', message: '', type: 'info' }
       profileDraft.value = {
         id: profile.id, name: profile.name, baseURL: profile.baseURL, model: profile.model,
         apiKey: '', maxOutputTokens: profile.maxOutputTokens,
@@ -500,6 +514,7 @@ const AdminPage = defineComponent({
     }
 
     function editServiceProfile(profile: NonNullable<ApiConfig['embeddingProfiles']>[number] | NonNullable<ApiConfig['webSearchProfiles']>[number]) {
+      apiNotice.value = ''; apiSectionFeedback.value = { kind: '', message: '', type: 'info' }
       serviceDraft.value = {
         id: profile.id, name: profile.name, baseURL: profile.baseURL,
         model: 'model' in profile ? profile.model : '', apiKey: '',
@@ -645,8 +660,6 @@ const AdminPage = defineComponent({
       const ElDescriptionsItem = resolveComponent('el-descriptions-item') as unknown as string
       const ElTabs = resolveComponent('el-tabs') as unknown as string
       const ElTabPane = resolveComponent('el-tab-pane') as unknown as string
-      const ElDropdown = resolveComponent('el-dropdown') as unknown as string
-      const ElDropdownItem = resolveComponent('el-dropdown-item') as unknown as string
       const renderModelPicker = (
         target: 'text' | 'embedding' | 'profile',
         currentModel: string,
@@ -659,7 +672,7 @@ const AdminPage = defineComponent({
         const rows = catalog.models
           .filter((model) => !search || model.toLocaleLowerCase().includes(search))
           .map((model) => ({ modelId: model }))
-        return h('div', [
+        return h(ElSpace, { direction: 'vertical', fill: true, size: 12, class: 'sp-admin-model-picker' }, { default: () => [
           catalog.message ? h(ElAlert, { title: catalog.message, type: catalog.type, showIcon: true, closable: true, onClose: () => { catalog.message = '' } }) : null,
           ...(catalog.models.length ? [
           h(ElRow, { justify: 'space-between', align: 'middle' }, [
@@ -686,38 +699,17 @@ const AdminPage = defineComponent({
             onRowClick: (row: { modelId: string }) => onSelect(row.modelId),
           }, { default: () => [h(ElTableColumn, { prop: 'modelId', label: '模型 ID', minWidth: 240, showOverflowTooltip: true })] }),
           ] : []),
-        ])
+        ] })
       }
-      const profileActionButtons = (profile: ApiConfig['textProfiles'][number]) => [
-        h(ElButton, { size: 'small', disabled: Boolean(apiBusy.value), onClick: () => editTextProfile(profile) }, { default: () => '编辑' }),
-        h(ElDropdown, {
-          trigger: 'click',
-          onCommand: (command: string) => {
-            if (command === 'test') return void testTextProfile(profile.id)
-            if (command === 'stream') return void testTextProfileStream(profile.id)
-            if (command === 'default') return void setDefaultTextProfile(profile.id)
-            if (command === 'remove') return void removeTextProfile(profile.id)
-          },
-        }, {
-          default: () => h(ElButton, { size: 'small' }, { default: () => '更多' }),
-          dropdown: () => [
-            h(ElDropdownItem, {
-              command: 'test', disabled: Boolean(apiBusy.value && apiBusy.value !== `test-profile-${profile.id}`),
-            }, { default: () => apiBusy.value === `test-profile-${profile.id}` ? '测试中…' : '连通测试' }),
-            h(ElDropdownItem, {
-              command: 'stream', disabled: Boolean(apiBusy.value && apiBusy.value !== `test-profile-stream-${profile.id}`),
-            }, { default: () => apiBusy.value === `test-profile-stream-${profile.id}` ? '流式测试中…' : '流式测试' }),
-            h(ElDropdownItem, {
-              command: 'default', divided: true,
-              disabled: Boolean(apiBusy.value && apiBusy.value !== `default-profile-${profile.id}`) || apiConfig.value?.activeTextProfileRef === profile.id,
-            }, { default: () => apiConfig.value?.activeTextProfileRef === profile.id ? '当前默认' : '设为默认' }),
-            h(ElDropdownItem, {
-              command: 'remove', divided: true,
-              disabled: Boolean(apiBusy.value && apiBusy.value !== `remove-profile-${profile.id}`),
-            }, { default: () => '删除' }),
-          ],
-        }),
-      ]
+      const apiFooter = (kind: 'text' | 'embedding' | 'webSearch', actions: VNodeChild[], danger?: VNodeChild, hint = '测试使用已保存配置；修改后请先保存。') =>
+        h(ElSpace, { direction: 'vertical', fill: true, size: 12, class: 'sp-admin-api-footer' }, { default: () => [
+          h(ElRow, { gutter: 12, justify: 'space-between', align: 'middle', class: 'sp-admin-api-action-row' }, { default: () => [
+            h(ElCol, { xs: 24, sm: danger ? 20 : 24 }, { default: () => h(ElSpace, { wrap: true, size: 8 }, { default: () => actions }) }),
+            danger ? h(ElCol, { xs: 24, sm: 4 }, { default: () => h(ElRow, { justify: 'end' }, { default: () => danger }) }) : null,
+          ] }),
+          h(ElText, { size: 'small', type: 'info' }, { default: () => hint }),
+          apiFeedback(kind, ElAlert),
+        ] })
 
       // ── 操作列（Team 登录账号）──
       const actions = (row: UserRow) => {
@@ -795,7 +787,7 @@ const AdminPage = defineComponent({
               h('button', {
                 type: 'button',
                 class: `sp-admin-model-provider-item${selectedModelProvider.value === 'default' ? ' is-active' : ''}`,
-                onClick: () => { if (!apiBusy.value) selectedModelProvider.value = 'default' },
+                onClick: () => { if (!apiBusy.value) { clearApiFeedback(); selectedModelProvider.value = 'default' } },
               }, [h('strong', '系统默认对话'), h('span', apiConfig.value?.text.model || '尚未选择模型')]),
               ...textProfiles.map((profile) => h('button', {
                 key: profile.id,
@@ -811,7 +803,7 @@ const AdminPage = defineComponent({
               h(ElButton, {
                 class: 'sp-admin-model-provider-add',
                 disabled: Boolean(apiBusy.value),
-                onClick: () => { selectedModelProvider.value = 'new'; profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null } },
+                onClick: () => { clearApiFeedback(); selectedModelProvider.value = 'new'; profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null } },
               }, { default: () => '新增对话供应商' }),
             ]
             : (() => {
@@ -822,7 +814,7 @@ const AdminPage = defineComponent({
                 h('button', {
                   type: 'button',
                   class: `sp-admin-model-provider-item${selectedModelProvider.value === 'default' ? ' is-active' : ''}`,
-                  onClick: () => { if (!apiBusy.value) selectedModelProvider.value = 'default' },
+                  onClick: () => { if (!apiBusy.value) { clearApiFeedback(); selectedModelProvider.value = 'default' } },
                 }, [h('strong', '系统默认供应商'), h('span', '兼容现有服务配置'), activeId ? null : h(ElTag, { size: 'small', type: 'success' }, { default: () => '当前使用' })]),
                 ...profiles.filter((profile) => profile.id !== 'default').map((profile) => h('button', {
                   key: profile.id,
@@ -1057,6 +1049,7 @@ const AdminPage = defineComponent({
             class: 'sp-admin-model-category-tabs',
             modelValue: activeModelCategory.value,
             'onUpdate:modelValue': (value: 'text' | 'embedding' | 'webSearch') => {
+              clearApiFeedback()
               activeModelCategory.value = value
               if (value === 'embedding') void refreshEmbeddingIndex()
               if (value === 'text') selectedModelProvider.value = 'default'
@@ -1157,7 +1150,7 @@ const AdminPage = defineComponent({
                     : null,
                 ],
               }),
-              h(ElSpace, null, { default: () => [
+              apiFooter(kind, [
                 h(ElButton, {
                   type: 'primary', loading: apiBusy.value === kind,
                   disabled: Boolean(apiBusy.value && apiBusy.value !== kind), onClick: () => void saveApi(kind),
@@ -1167,10 +1160,10 @@ const AdminPage = defineComponent({
                 }, { default: () => '设为当前服务' }) : null,
                 h(ElButton, {
                   loading: apiBusy.value === `test-${kind}`,
-                  disabled: Boolean(apiBusy.value && apiBusy.value !== `test-${kind}`) || (kind === 'embedding' ? Boolean(apiConfig.value?.activeEmbeddingProfileRef) : kind === 'webSearch' ? Boolean(apiConfig.value?.activeWebSearchProfileRef) : false), onClick: () => void testApi(kind),
+                  disabled: Boolean(apiBusy.value && apiBusy.value !== `test-${kind}`), onClick: () => void testApi(kind, kind === 'text' ? undefined : 'default'),
                 }, { default: () => '连通测试' }),
-              ] }),
-              apiFeedback(kind, ElAlert),
+                kind === 'text' ? h(ElButton, { disabled: Boolean(apiBusy.value), loading: apiBusy.value === 'test-profile-stream-', onClick: () => void testTextProfileStream('') }, { default: () => '流式测试' }) : null,
+              ]),
             ])
           })]) : null,
         activeModelCategory.value === 'text' && selectedModelProvider.value !== 'default' ? h('div', { class: 'sp-admin-profile-workspace' }, [
@@ -1194,17 +1187,17 @@ const AdminPage = defineComponent({
           h('div', { class: 'sp-admin-profile-editor-shell' }, [
               h(ElRow, { justify: 'space-between', align: 'middle' }, [
                 h(ElText, { tag: 'strong' }, { default: () => editingProfile ? `编辑供应商 · ${editingProfile.name}` : '新增供应商配置' }),
-                editingProfile ? h(ElSpace, { size: 6 }, { default: () => profileActionButtons(editingProfile).slice(1) }) : null,
+                editingProfile ? h(ElButton, { size: 'small', disabled: Boolean(apiBusy.value) || apiConfig.value?.activeTextProfileRef === editingProfile.id, onClick: () => void setDefaultTextProfile(editingProfile.id) }, { default: () => apiConfig.value?.activeTextProfileRef === editingProfile.id ? '当前默认' : '设为默认' }) : null,
               ]),
               h(ElForm, { class: 'sp-admin-profile-editor', labelPosition: 'top', disabled: Boolean(apiBusy.value) }, {
             default: () => [
               h(ElRow, { gutter: 20 }, { default: () => [
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '配置 ID（供 Agent 引用）' }, { default: () => h(ElInput, {
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '配置 ID（供 Agent 引用）' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.id,
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.id = v },
                 placeholder: 'qwen-prod', clearable: true,
               }) })),
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.name,
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.name = v },
                 placeholder: '阿里云 Qwen', clearable: true,
@@ -1215,7 +1208,7 @@ const AdminPage = defineComponent({
                 type: 'textarea', autosize: { minRows: 1, maxRows: 3 }, resize: 'none',
                 placeholder: 'https://provider.example/v1', clearable: true,
               }) })),
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '模型 ID' }, { default: () => h('div', [
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '模型 ID' }, { default: () => h('div', [
                 h(ElSpace, { alignment: 'start', fill: true }, { default: () => [
                   h(ElInput, {
                     modelValue: profileDraft.value.model,
@@ -1229,30 +1222,40 @@ const AdminPage = defineComponent({
                     onClick: () => void fetchModels('profile'),
                   }, { default: () => '获取模型列表' }),
                 ] }),
-                renderModelPicker('profile', profileDraft.value.model, (model) => { profileDraft.value.model = model }),
               ]) })),
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '最大输出 Token（留空使用供应商默认）' }, { default: () => h(ElInputNumber, {
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '最大输出 Token（留空使用供应商默认）' }, { default: () => h(ElInputNumber, {
                 modelValue: profileDraft.value.maxOutputTokens,
                 'onUpdate:modelValue': (v: number | null) => { profileDraft.value.maxOutputTokens = v ? Math.floor(v) : null },
                 min: 1, max: 200000, step: 512, controlsPosition: 'right', clearable: true,
               }) })),
+              h(ElCol, { span: 24 }, { default: () => renderModelPicker('profile', profileDraft.value.model, (model) => { profileDraft.value.model = model }) }),
               h(ElCol, { span: 24 }, h(ElFormItem, { label: 'API Key（编辑时留空保留现值；输入 - 清除）' }, { default: () => h(ElInput, {
                 modelValue: profileDraft.value.apiKey,
                 'onUpdate:modelValue': (v: string) => { profileDraft.value.apiKey = v; invalidateModelCatalog('profile') },
                 type: 'password', showPassword: true, autocomplete: 'new-password', placeholder: '仅写入，不回显',
               }) })),
               ] }),
-              h(ElSpace, null, { default: () => [
+              apiFooter('text', [
                 h(ElButton, {
                   type: 'primary', loading: apiBusy.value === 'save-profile',
                   disabled: Boolean(apiBusy.value && apiBusy.value !== 'save-profile'), onClick: () => void saveTextProfile(),
                 }, { default: () => '保存供应商配置' }),
+                editingProfile ? h(ElButton, { loading: apiBusy.value === `test-profile-${editingProfile.id}`, disabled: Boolean(apiBusy.value),
+                  onClick: () => void testTextProfile(editingProfile.id) }, { default: () => '连通测试' }) : null,
+                editingProfile ? h(ElButton, { loading: apiBusy.value === `test-profile-stream-${editingProfile.id}`, disabled: Boolean(apiBusy.value),
+                  onClick: () => void testTextProfileStream(editingProfile.id) }, { default: () => '流式测试' }) : null,
                 h(ElButton, { disabled: Boolean(apiBusy.value), onClick: () => { profileDraft.value = { id: '', name: '', baseURL: '', model: '', apiKey: '', maxOutputTokens: null } } }, { default: () => '清空表单' }),
-              ] }),
+              ], editingProfile ? h(ElPopconfirm, {
+                  title: `确定删除供应商“${editingProfile.name}”吗？`,
+                  confirmButtonText: '删除', cancelButtonText: '取消',
+                  onConfirm: () => void removeTextProfile(editingProfile.id),
+                }, { reference: () => h(ElButton, {
+                  type: 'danger', loading: apiBusy.value === `remove-profile-${editingProfile.id}`,
+                  disabled: Boolean(apiBusy.value),
+                }, { default: () => '删除配置' }) }) : null, editingProfile ? undefined : '保存配置后可进行连通测试。'),
             ],
           }),
           ]),
-          apiFeedback('text', ElAlert),
           ]) : null,
           activeModelCategory.value !== 'text' && selectedModelProvider.value !== 'default' ? h('div', { class: 'sp-admin-profile-workspace' }, [
             h(ElRow, { justify: 'space-between', align: 'middle' }, [
@@ -1270,13 +1273,13 @@ const AdminPage = defineComponent({
             h(ElForm, { labelPosition: 'top', disabled: Boolean(apiBusy.value) }, {
               default: () => [
                 h(ElRow, { gutter: 20 }, { default: () => [
-                  h(ElCol, { span: 12 }, h(ElFormItem, { label: '配置 ID' }, { default: () => h(ElInput, {
+                  h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '配置 ID' }, { default: () => h(ElInput, {
                     modelValue: serviceDraft.value.id,
                     'onUpdate:modelValue': (value: string) => { serviceDraft.value.id = value },
                     disabled: selectedModelProvider.value !== 'new',
                     placeholder: '例如 ark-embedding-prod',
                   }) })),
-                  h(ElCol, { span: 12 }, h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
+                  h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '显示名称' }, { default: () => h(ElInput, {
                     modelValue: serviceDraft.value.name,
                     'onUpdate:modelValue': (value: string) => { serviceDraft.value.name = value },
                     placeholder: activeModelCategory.value === 'embedding' ? '例如 Ark Embedding' : '例如 Tavily 搜索',
@@ -1300,9 +1303,9 @@ const AdminPage = defineComponent({
                         onClick: () => void fetchModels('embedding', serviceDraft.value),
                       }, { default: () => '获取模型列表' }),
                     ] }),
-                    renderModelPicker('embedding', serviceDraft.value.model, (model) => { serviceDraft.value.model = model }, serviceDraft.value),
                     h(ElText, { size: 'small', type: 'info' }, { default: () => '只列出识别为 Embedding 的模型；特殊模型 ID 也可以手动填写。' }),
                   ]) })) : null,
+                  activeModelCategory.value === 'embedding' ? h(ElCol, { span: 24 }, { default: () => renderModelPicker('embedding', serviceDraft.value.model, (model) => { serviceDraft.value.model = model }, serviceDraft.value) }) : null,
                   h(ElCol, { span: 24 }, h(ElFormItem, { label: serviceDraft.value.hasKey ? `API Key（已配置 · 尾号 ${serviceDraft.value.keyTail}；留空保留，输入 - 清除）` : 'API Key' }, { default: () => h(ElInput, {
                     modelValue: serviceDraft.value.apiKey,
                     'onUpdate:modelValue': (value: string) => { serviceDraft.value.apiKey = value; if (activeModelCategory.value === 'embedding') invalidateModelCatalog('embedding', serviceDraft.value) },
@@ -1310,7 +1313,7 @@ const AdminPage = defineComponent({
                     placeholder: serviceDraft.value.hasKey ? '留空保留现有密钥' : '输入 API Key',
                   }) })),
                 ] }),
-                h(ElSpace, null, { default: () => [
+                apiFooter(activeModelCategory.value as 'embedding' | 'webSearch', [
                   h(ElButton, { type: 'primary', loading: apiBusy.value === `save-service-profile-${activeModelCategory.value}`, onClick: () => void saveServiceProfile() }, { default: () => '保存配置' }),
                   selectedModelProvider.value !== 'new' ? h(ElButton, {
                     disabled: (activeModelCategory.value === 'embedding'
@@ -1318,12 +1321,15 @@ const AdminPage = defineComponent({
                       : apiConfig.value?.activeWebSearchProfileRef) === serviceDraft.value.id || Boolean(apiBusy.value),
                     onClick: () => void activateServiceProfile(serviceDraft.value.id),
                   }, { default: () => '设为当前服务' }) : null,
-                  selectedModelProvider.value !== 'new' ? h(ElPopconfirm, {
+                  selectedModelProvider.value !== 'new' ? h(ElButton, {
+                    loading: apiBusy.value === `test-${activeModelCategory.value}`, disabled: Boolean(apiBusy.value),
+                    onClick: () => void testApi(activeModelCategory.value as 'embedding' | 'webSearch', serviceDraft.value.id),
+                  }, { default: () => '连通测试' }) : null,
+                ], selectedModelProvider.value !== 'new' ? h(ElPopconfirm, {
                     title: `确定删除供应商“${serviceDraft.value.name}”吗？`,
                     confirmButtonText: '删除', cancelButtonText: '取消',
                     onConfirm: () => void removeServiceProfile(serviceDraft.value.id),
-                  }, { reference: () => h(ElButton, { type: 'danger', disabled: Boolean(apiBusy.value) }, { default: () => '删除配置' }) }) : null,
-                ] }),
+                  }, { reference: () => h(ElButton, { type: 'danger', disabled: Boolean(apiBusy.value) }, { default: () => '删除配置' }) }) : null, selectedModelProvider.value === 'new' ? '保存配置后可进行连通测试。' : undefined),
               ],
             }),
           ]) : null,
@@ -1387,22 +1393,22 @@ const AdminPage = defineComponent({
             }) : null,
             h(ElForm, { labelPosition: 'top', disabled: createBusy.value }, {
               default: () => h(ElRow, { gutter: 20 }, [
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '用户名' }, { default: () => h(ElInput, {
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '用户名' }, { default: () => h(ElInput, {
                 modelValue: newUsername.value,
                 'onUpdate:modelValue': (v: string) => { newUsername.value = v },
                 autocomplete: 'off',
               }) })),
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '显示名' }, { default: () => h(ElInput, {
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '显示名' }, { default: () => h(ElInput, {
                 modelValue: newDisplayName.value,
                 'onUpdate:modelValue': (v: string) => { newDisplayName.value = v },
                 autocomplete: 'off',
               }) })),
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '初始密码' }, { default: () => h(ElInput, {
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '初始密码' }, { default: () => h(ElInput, {
                 modelValue: newPassword.value,
                 'onUpdate:modelValue': (v: string) => { newPassword.value = v },
                 type: 'password', showPassword: true, autocomplete: 'new-password',
               }) })),
-              h(ElCol, { span: 12 }, h(ElFormItem, { label: '团队角色' }, {
+              h(ElCol, { xs: 24, sm: 12 }, h(ElFormItem, { label: '团队角色' }, {
                 default: () => h(ElSelect, {
                   modelValue: newTeamRole.value,
                   'onUpdate:modelValue': (v: 'dri' | 'member') => { newTeamRole.value = v },

@@ -62,12 +62,111 @@ function inboxConsumesEvent(event: { kind: string; text: string; voided: boolean
   return event.kind === 'decision' && event.text.startsWith(DECISION_REVIEW_REQUEST_MARKER) && event.mentions.includes(agentId)
 }
 
+/** Render private inbox audit events with the Agent identity encoded in their payload. */
+function presentInboxTraceEvent(ctx: Context, event: SessionEvent): SessionEvent {
+  const record = event.toolCalls?.find((call) => call.name === 'agent.inbox.trace')
+  if (!record) return event
+  try {
+    const value = JSON.parse(record.args) as { agentId?: unknown; agentTitle?: unknown; sourceSeq?: unknown }
+    if (typeof value.agentId !== 'string' || !value.agentId) return event
+    let title = typeof value.agentTitle === 'string' && value.agentTitle ? value.agentTitle : value.agentId
+    try { title = ctx.agents.get(value.agentId).descriptor.title || title } catch { /* stable ID remains available */ }
+    if (title === value.agentId) try { title = ctx.agentCatalog.get(value.agentId).title || title } catch { /* built-in Agent lookup above */ }
+    const seq = typeof value.sourceSeq === 'number' ? value.sourceSeq : null
+    return { ...event, text: `Agent 后台处理记录 · ${title} (${value.agentId})${seq === null ? '' : ` · 来源消息 #${seq}`}` }
+  } catch { return event }
+}
+
 function redactInboxText(value: string): string {
   return value
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[REDACTED]')
     .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_KEY]')
     .replace(/((?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[=:]\s*)["']?[^\s,"'&}]+/gi, '$1[REDACTED]')
+}
+
+function safeWorkspaceWorklog(value: unknown): Array<{
+  label: string; at: string; kind?: 'phase' | 'tool'; status?: 'running' | 'success' | 'failed';
+  detail?: string; toolId?: string; inputSummary?: string; resultSummary?: string; durationMs?: number
+}> {
+  if (!Array.isArray(value)) return []
+  const safeText = (candidate: unknown) => typeof candidate === 'string' ? redactInboxText(candidate).slice(0, 500) : undefined
+  return value.filter((step) => Boolean(step) && typeof step === 'object').map((step) => {
+    const row = step as Record<string, unknown>
+    return {
+      label: safeText(row.label) ?? '执行阶段', at: safeText(row.at) ?? '',
+      ...(row.kind === 'phase' || row.kind === 'tool' ? { kind: row.kind } : {}),
+      ...(row.status === 'running' || row.status === 'success' || row.status === 'failed' ? { status: row.status } : {}),
+      ...(['detail', 'toolId', 'inputSummary', 'resultSummary'].reduce((fields, key) => {
+        const text = safeText(row[key])
+        return text ? { ...fields, [key]: text } : fields
+      }, {} as Record<string, string>)),
+      ...(typeof row.durationMs === 'number' && Number.isFinite(row.durationMs) ? { durationMs: row.durationMs } : {}),
+    }
+  })
+}
+
+function safeWorkspaceModelTrace(value: unknown) {
+  if (!Array.isArray(value)) return [] as Array<Record<string, unknown>>
+  const safe = (item: unknown) => typeof item === 'string' ? redactInboxText(item) : ''
+  return value.filter((item) => Boolean(item) && typeof item === 'object').map((item) => {
+    const row = item as Record<string, unknown>
+    const request = Array.isArray(row.request) ? row.request.filter((message) => Boolean(message) && typeof message === 'object').map((message) => {
+      const msg = message as Record<string, unknown>
+      const sections = Array.isArray(msg.sections) ? msg.sections.filter((section) => Boolean(section) && typeof section === 'object').map((section) => {
+        const part = section as Record<string, unknown>
+        return { label: safe(part.label) || '未标注区块', source: safe(part.source) || '来源未记录', content: safe(part.content) }
+      }) : undefined
+      return {
+        role: msg.role === 'system' || msg.role === 'assistant' ? msg.role : 'user',
+        source: safe(msg.source) || '来源未标注', content: safe(msg.content),
+        ...(sections?.length ? { sections } : {}),
+      }
+    }) : []
+    const toolCalls = Array.isArray(row.toolCalls) ? row.toolCalls.filter((call) => Boolean(call) && typeof call === 'object').map((call) => {
+      const tool = call as Record<string, unknown>
+      return {
+        toolId: safe(tool.toolId) || 'unknown', args: safe(tool.args),
+        ...(tool.status === 'success' || tool.status === 'failed' ? { status: tool.status } : {}),
+        ...(typeof tool.result === 'string' ? { result: safe(tool.result) } : {}),
+        ...(typeof tool.error === 'string' ? { error: safe(tool.error) } : {}),
+        ...(typeof tool.durationMs === 'number' ? { durationMs: tool.durationMs } : {}),
+      }
+    }) : []
+    return {
+      index: Number(row.index) || 0, model: safe(row.model) || null, profileRef: safe(row.profileRef) || null,
+      startedAt: safe(row.startedAt), completedAt: safe(row.completedAt),
+      status: row.status === 'completed' ? 'completed' : 'failed', request,
+      response: typeof row.response === 'string' ? safe(row.response) : undefined,
+      responseTruncated: row.responseTruncated === true,
+      toolCalls, error: typeof row.error === 'string' ? safe(row.error) : undefined,
+    }
+  })
+}
+
+function workspaceInboxTrace(events: SessionEvent[], sourceEventId: string, agentId: string) {
+  for (const event of [...events].reverse()) {
+    if (event.voided || event.sourceEventId !== sourceEventId || event.authorKind !== 'system') continue
+    for (const call of event.toolCalls) {
+      if (call.name !== 'agent.inbox.trace') continue
+      try {
+        const value = JSON.parse(call.args) as Record<string, unknown>
+        if (value.agentId !== agentId || !Array.isArray(value.steps)) continue
+        const safe = (item: unknown) => typeof item === 'string' ? redactInboxText(item).slice(0, 1200) : ''
+        return {
+          agentId, agentTitle: safe(value.agentTitle) || agentId,
+          status: value.status === 'failed' ? 'failed' as const : 'success' as const,
+          startedAt: safe(value.startedAt), completedAt: safe(value.completedAt),
+          modelTrace: safeWorkspaceModelTrace(value.modelTrace),
+          steps: value.steps.filter((step): step is Record<string, unknown> => Boolean(step) && typeof step === 'object').map((step) => ({
+            label: safe(step.label) || '处理阶段', detail: safe(step.detail), at: safe(step.at),
+            status: step.status === 'failed' ? 'failed' as const : 'success' as const,
+          })),
+        }
+      } catch { /* Ignore malformed legacy or interrupted trace events. */ }
+    }
+  }
+  return null
 }
 
 export interface TeamspaceApiConfig {
@@ -107,7 +206,7 @@ export async function migrateLegacyAgentDefinitions(ctx: Context): Promise<numbe
       ctx.agentCatalog.create({
         title: old.title,
         description: old.roleLabel || `协助团队完成「${old.title}」相关工作。`,
-        promptRef: old.promptRef || '', modelRef: '', toolIds: [],
+        promptRef: old.promptRef || '', toolIds: [],
         contextSources: ['session', 'agent-memory', 'team-kb'],
         memoryPolicy: 'agent', speechPolicy: 'passive',
       }, old.id)
@@ -146,7 +245,7 @@ export function inviteAgentToSession(ctx: Context, sessionId: string, agentId: s
   ctx.eventLog.append({
     id: randomUUID(), sessionId, authorId: null, phaseId: null,
     authorKind: 'system', kind: 'system',
-    text: `${AGENT_HISTORY_BOOTSTRAP_MARKER} 已邀请 Agent「${title}」加入会话（邀请者 ${inviterId}；可访问完整历史，并会先建立历史记忆）`,
+    text: `${AGENT_HISTORY_BOOTSTRAP_MARKER} 已邀请 Agent「${title}」加入会话（邀请者 ${inviterId}；可访问完整历史，历史消息将按顺序进入处理队列）`,
     mentions: [agentId], toolCalls: [], replyMode: '',
   })
   return { joined: true, title }
@@ -160,7 +259,7 @@ export function agentHistoryForSession(ctx: Context, sessionId: string, agentId:
 }
 
 /** AgentSnapshot 的客户端视图（前端只显示 id/标题/状态/职责）。 */
-interface AgentView { id: string; title: string; status: string; capabilities?: string[] }
+interface AgentView { id: string; title: string; status: string; iconId?: string; capabilities?: string[] }
 
 export function apply(ctx: Context) {
   const publicApiConfig = resolveTeamspaceApiConfig()
@@ -190,6 +289,7 @@ export function apply(ctx: Context) {
           id: a.descriptor.id,
           title: a.descriptor.title,
           status: a.status,
+          iconId: (() => { try { return ctx.agentCatalog.get(a.descriptor.id).iconId } catch { return 'UserFilled' } })(),
           capabilities: [...a.descriptor.capabilities],
         }))
       },
@@ -221,7 +321,7 @@ export function apply(ctx: Context) {
       },
       async agentMemoryCatalog(token: string) {
         if (!(await authTeamHuman(ctx, token))) return null
-        return ctx.agentCatalog.list(true).map(({ id, title, status }) => ({ id, title, status }))
+        return ctx.agentCatalog.list(true).map(({ id, title, status, iconId }) => ({ id, title, status, iconId }))
       },
       async agentMemoryFolders(token: string, agentId: string) {
         if (!(await authTeamHuman(ctx, token))) return null
@@ -250,7 +350,8 @@ export function apply(ctx: Context) {
           let runtime: ReturnType<typeof ctx.agents.get> | null = null
           try { runtime = ctx.agents.get(definition.id) } catch { /* archived Agent */ }
           const listing = await ctx.workdir.browse(definition.id).catch(() => ({ exists: false }))
-          return { id: definition.id, title: definition.title, status: runtime?.status ?? definition.status, workdirAvailable: listing.exists }
+          return { id: definition.id, title: definition.title, status: runtime?.status ?? definition.status,
+            iconId: definition.iconId, workdirAvailable: listing.exists }
         }))
         const progress = ctx.agentRuntime.listActiveProgress().map(({
           delta: _delta, streamText: _streamText, streamCharacterCount: _streamCount,
@@ -265,15 +366,44 @@ export function apply(ctx: Context) {
         }))
         const inboxes = await Promise.all(agents.map(async (agent) => {
           const pending: Array<{ sessionId: string; sessionTitle: string; count: number; processedCount: number; cursor: number; latestSeq: number; active: boolean }> = []
+          const recent = []
           for (const { session, members, events } of sessions) {
             if (!members.some((member) => member.principalId === agent.id)) continue
             const cursor = await ctx.agentInbox.cursor(agent.id, session.id).catch(() => 0)
             const count = events.filter((event) => event.seq > cursor && inboxConsumesEvent(event, agent.id)).length
-            const processedCount = events.filter((event) => event.seq <= cursor && inboxConsumesEvent(event, agent.id)).length
+            const processed = events.filter((event) => event.seq <= cursor && inboxConsumesEvent(event, agent.id)).sort((a, b) => b.seq - a.seq)
+            const processedCount = processed.length
+            const processedIds = new Set(processed.map((event) => event.id))
+            const conversationRows = processed.filter((event) => !(event.authorKind === 'agent' && event.authorId === agent.id
+              && event.kind === 'message' && event.sourceEventId && processedIds.has(event.sourceEventId)))
+            const recordsBySource = new Map<string, SessionEvent[]>()
+            for (const record of events) {
+              if (!record.sourceEventId || record.voided) continue
+              const group = recordsBySource.get(record.sourceEventId) ?? []
+              group.push(record)
+              recordsBySource.set(record.sourceEventId, group)
+            }
+            for (const [index, event] of conversationRows.entries()) {
+              const records = recordsBySource.get(event.id) ?? []
+              const trace = workspaceInboxTrace(records, event.id, agent.id)
+              const reply = [...records].reverse().find((item) => !item.voided && item.kind === 'message'
+                && item.authorKind === 'agent' && item.authorId === agent.id && item.sourceEventId === event.id)
+              const outcome = [...records].reverse().find((item) => !item.voided && item.sourceEventId === event.id
+                && item.toolCalls.some((call) => {
+                  if (call.name !== 'agent.reply.outcome') return false
+                  try { const value = JSON.parse(call.args); return value.agentId === agent.id && value.status === 'blocked' } catch { return false }
+                }))
+              const failed = reply?.text.startsWith('【执行失败】') || trace?.status === 'failed'
+              recent.push({ eventId: event.id, seq: event.seq, sessionId: session.id, sessionTitle: session.title,
+                text: redactInboxText(event.text).slice(0, 160), at: reply?.ts ?? outcome?.ts ?? trace?.completedAt ?? event.ts,
+                status: failed ? 'failed' : reply ? 'replied' : outcome ? 'blocked' : trace ? 'scanned' : 'legacy',
+                result: redactInboxText(reply?.text ?? outcome?.text ?? trace?.steps.at(-1)?.detail ?? '旧记录只保存了游标，缺少处理详情').slice(0, 160),
+                historyPage: Math.floor(index / 20) + 1 })
+            }
             if (count || processedCount) pending.push({ sessionId: session.id, sessionTitle: session.title, count, processedCount, cursor,
               latestSeq: events.reduce((max, event) => Math.max(max, event.seq), 0), active: ctx.agentInbox.activeSessionId() === session.id })
           }
-          return { agentId: agent.id, pending }
+          return { agentId: agent.id, pending, recent: recent.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8) }
         }))
         return { agents, progress, inboxes, processing: ctx.agentInbox.processing(), activeSessionId: work.activeSessionId,
           queue: work.queue.map((item) => ({ ...item })) }
@@ -294,10 +424,46 @@ export function apply(ctx: Context) {
         const currentPage = Math.max(1, Number(page) || 1)
         const items = await Promise.all(events.slice((currentPage - 1) * size, currentPage * size).map(async (event) => {
           const author = event.authorId ? await ctx.users.byId(event.authorId).catch(() => null) : null
+          const replies = allEvents.filter((candidate) => !candidate.voided && candidate.authorKind === 'agent' &&
+            candidate.authorId === id && candidate.kind === 'message' && candidate.sourceEventId === event.id)
+          // Agent replies are themselves inbox events for that Agent. When the
+          // reply is the selected history row, expose its execution record on
+          // the row instead of incorrectly saying it has no separate reply.
+          const executionEvents = event.authorKind === 'agent' && event.authorId === id && event.kind === 'message' && event.sourceEventId
+            ? [event, ...replies.filter((reply) => reply.id !== event.id)]
+            : replies
+          const executions = await Promise.all(executionEvents.map(async (reply) => {
+            const replyAuthor = reply.authorId ? await ctx.users.byId(reply.authorId).catch(() => null) : null
+            const record = reply.toolCalls.find((call) => call.name === 'agent.worklog')
+            let worklog: ReturnType<typeof safeWorkspaceWorklog> = []
+            if (record) try { worklog = safeWorkspaceWorklog(JSON.parse(record.args)) } catch { /* malformed legacy worklog is omitted */ }
+            const modelTraceRecord = reply.toolCalls.find((call) => call.name === 'agent.model.trace')
+            let modelTrace: ReturnType<typeof safeWorkspaceModelTrace> = []
+            if (modelTraceRecord) try { modelTrace = safeWorkspaceModelTrace(JSON.parse(modelTraceRecord.args)) } catch { /* malformed trace is omitted */ }
+            return {
+              id: reply.id, at: reply.ts, author: replyAuthor?.displayName ?? reply.authorId ?? 'Agent',
+              text: redactInboxText(reply.text), failed: reply.text.startsWith('【执行失败】'), worklog, modelTrace,
+              sourceEventIds: reply.sourceEventIds ?? [],
+              sourceEvents: await Promise.all((reply.sourceEventIds ?? []).map(async (sourceId) => {
+                const source = allEvents.find((candidate) => candidate.id === sourceId)
+                if (!source) return { id: sourceId, seq: null, at: '', author: '已撤回或不可用', text: '' }
+                const sourceAuthor = source.authorId ? await ctx.users.byId(source.authorId).catch(() => null) : null
+                return { id: source.id, seq: source.seq, at: source.ts,
+                  author: sourceAuthor?.displayName ?? source.authorId ?? '系统', text: redactInboxText(source.text).slice(0, 1000) }
+              })),
+              citations: (reply.citations ?? []).map((citation) => ({ ...citation, title: redactInboxText(citation.title) })),
+            }
+          }))
+          const liveExecutions = ctx.agentRuntime.listActiveProgress().filter((run) => run.sourceEventId === event.id).map((run) => ({
+            runId: run.runId, title: redactInboxText(run.title), phase: run.phase, at: run.at,
+            ...(run.step ? { step: safeWorkspaceWorklog([run.step])[0] } : {}),
+            steps: safeWorkspaceWorklog(run.steps), currentText: redactInboxText(run.streamText),
+          }))
           return {
             id: event.id, seq: event.seq, at: event.ts, kind: event.kind,
             author: author?.displayName ?? (event.authorId || '系统'),
-            authorKind: event.authorKind, text: redactInboxText(event.text),
+            authorKind: event.authorKind, text: redactInboxText(event.text), mentions: event.mentions,
+            inboxTrace: workspaceInboxTrace(allEvents, event.id, id), executions, liveExecutions,
           }
         }))
         return {
@@ -315,21 +481,59 @@ export function apply(ctx: Context) {
         if (!session || !ctx.session.listMembers(sid, true).some((member) => member.principalId === id)) return null
         const cursor = await ctx.agentInbox.cursor(id, sid).catch(() => 0)
         const allEvents = ctx.eventLog.listBySession(sid)
-        const events = allEvents
+        const scannedEvents = allEvents
           .filter((event) => event.seq <= cursor && inboxConsumesEvent(event, id))
           .sort((a, b) => b.seq - a.seq)
+        const scannedIds = new Set(scannedEvents.map((event) => event.id))
+        // A reply linked to a consumed source is rendered inside that source row.
+        // Keeping a second top-level row for the same Agent utterance duplicates it.
+        const events = scannedEvents.filter((event) => !(event.authorKind === 'agent' && event.authorId === id
+          && event.kind === 'message' && event.sourceEventId && scannedIds.has(event.sourceEventId)))
         const size = Math.min(50, Math.max(1, Number(pageSize) || 20))
         const currentPage = Math.max(1, Number(page) || 1)
         const items = await Promise.all(events.slice((currentPage - 1) * size, currentPage * size).map(async (event) => {
           const author = event.authorId ? await ctx.users.byId(event.authorId).catch(() => null) : null
+          const replies = allEvents.filter((candidate) => !candidate.voided && candidate.authorKind === 'agent' &&
+            candidate.authorId === id && candidate.kind === 'message' && candidate.sourceEventId === event.id)
+          const executionEvents = event.authorKind === 'agent' && event.authorId === id && event.kind === 'message' && event.sourceEventId
+            ? [event, ...replies.filter((reply) => reply.id !== event.id)]
+            : replies
+          const executions = await Promise.all(executionEvents.map(async (reply) => {
+            const replyAuthor = reply.authorId ? await ctx.users.byId(reply.authorId).catch(() => null) : null
+            const record = reply.toolCalls.find((call) => call.name === 'agent.worklog')
+            let worklog: ReturnType<typeof safeWorkspaceWorklog> = []
+            if (record) try { worklog = safeWorkspaceWorklog(JSON.parse(record.args)) } catch { /* malformed legacy worklog is omitted */ }
+            const modelTraceRecord = reply.toolCalls.find((call) => call.name === 'agent.model.trace')
+            let modelTrace: ReturnType<typeof safeWorkspaceModelTrace> = []
+            if (modelTraceRecord) try { modelTrace = safeWorkspaceModelTrace(JSON.parse(modelTraceRecord.args)) } catch { /* malformed trace is omitted */ }
+            return {
+              id: reply.id, at: reply.ts, author: replyAuthor?.displayName ?? reply.authorId ?? 'Agent',
+              text: redactInboxText(reply.text), failed: reply.text.startsWith('【执行失败】'), worklog, modelTrace,
+              sourceEventIds: reply.sourceEventIds ?? [],
+              sourceEvents: await Promise.all((reply.sourceEventIds ?? []).map(async (sourceId) => {
+                const source = allEvents.find((candidate) => candidate.id === sourceId)
+                if (!source) return { id: sourceId, seq: null, at: '', author: '已撤回或不可用', text: '' }
+                const sourceAuthor = source.authorId ? await ctx.users.byId(source.authorId).catch(() => null) : null
+                return { id: source.id, seq: source.seq, at: source.ts,
+                  author: sourceAuthor?.displayName ?? source.authorId ?? '系统', text: redactInboxText(source.text).slice(0, 1000) }
+              })),
+              citations: (reply.citations ?? []).map((citation) => ({ ...citation, title: redactInboxText(citation.title) })),
+            }
+          }))
+          const liveExecutions = ctx.agentRuntime.listActiveProgress().filter((run) => run.sourceEventId === event.id).map((run) => ({
+            runId: run.runId, title: redactInboxText(run.title), phase: run.phase, at: run.at,
+            ...(run.step ? { step: safeWorkspaceWorklog([run.step])[0] } : {}),
+            steps: safeWorkspaceWorklog(run.steps), currentText: redactInboxText(run.streamText),
+          }))
           return {
             id: event.id, seq: event.seq, at: event.ts, kind: event.kind,
             author: author?.displayName ?? (event.authorId || '系统'),
-            authorKind: event.authorKind, text: redactInboxText(event.text),
+            authorKind: event.authorKind, text: redactInboxText(event.text), mentions: event.mentions,
+            inboxTrace: workspaceInboxTrace(allEvents, event.id, id), executions, liveExecutions,
           }
         }))
         return {
-          sessionId: sid, sessionTitle: session.title, total: events.length, page: currentPage, pageSize: size,
+          sessionId: sid, sessionTitle: session.title, total: events.length, scannedTotal: scannedEvents.length, page: currentPage, pageSize: size,
           cursor, latestSeq: allEvents.reduce((max, event) => Math.max(max, event.seq), 0),
           active: ctx.agentInbox.activeSessionId() === sid, items,
         }
@@ -355,6 +559,19 @@ export function apply(ctx: Context) {
         if (!(await authTeamHuman(ctx, token))) return null
         try { return { text: await ctx.workdir.readSharedText(String(path ?? '')) } }
         catch (error) { return { error: (error as Error).message } }
+      },
+      async transferWorkspaceFile(token: string, sourceAgentId: string, path: string, targetAgentId = '') {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try {
+          const source = sourceAgentId ? { kind: 'agent' as const, agentId: String(sourceAgentId) } : { kind: 'shared' as const }
+          const target = targetAgentId
+            ? { kind: 'agent' as const, agentId: String(targetAgentId) }
+            : { kind: 'shared' as const }
+          await ctx.workdir.copyFile(source, String(path ?? ''), target)
+          return { ok: true as const }
+        } catch (error) {
+          return { error: (error as Error).message }
+        }
       },
       async agentTemplates(token: string, includeArchived = false) {
         if (!(await authTeamHuman(ctx, token))) return null
@@ -447,13 +664,30 @@ export function apply(ctx: Context) {
           return { ok: true, definition: archived }
         } catch (e) { return { error: e instanceof AgentCatalogError ? e.code : 'archive_failed', detail: (e as Error).message } }
       },
+      async deleteAgent(token: string, id: string) {
+        if (!(await authTeamHuman(ctx, token))) return null
+        try {
+          const agentId = String(id ?? '')
+          try {
+            if (ctx.agents.get(agentId).status === 'working') {
+              return { error: 'agent_busy', detail: 'Agent 正在处理任务，请等任务结束后再删除。' }
+            }
+          } catch { /* archived definitions are no longer in the live registry */ }
+          const deleted = ctx.agentCatalog.delete(agentId)
+          ctx.agents.refreshCatalog()
+          for (const session of ctx.session.listSessions()) {
+            try { ctx.session.leave(session.id, deleted.id) } catch { /* not an active member */ }
+          }
+          return { ok: true, definition: deleted }
+        } catch (e) { return { error: e instanceof AgentCatalogError ? e.code : 'delete_failed', detail: (e as Error).message } }
+      },
       /** Explicit invitation grants this Agent the full existing event history. */
       async inviteAgent(token: string, sessionId: string, agentId: string) {
         const user = await sessionMember(ctx, String(token ?? ''), String(sessionId ?? ''))
         if (!user) return null
         try {
           const result = inviteAgentToSession(ctx, String(sessionId), String(agentId), user.id)
-          return { ok: true, joined: result.joined, title: result.title, detail: `已邀请「${result.title}」；加入后可访问完整会话历史` }
+          return { ok: true, joined: result.joined, title: result.title, detail: `已邀请「${result.title}」；历史消息将按顺序进入处理队列` }
         } catch (e) { return { error: 'invite_failed', detail: (e as Error).message } }
       },
       async agentHistory(token: string, sessionId: string, agentId: string): Promise<SessionEvent[] | null> {
@@ -507,11 +741,12 @@ export function apply(ctx: Context) {
       async events(token: string, sessionId: string) {
         if (!(await sessionMember(ctx, String(token ?? ''), String(sessionId ?? '')))) return null
         if (!ctx.session.getSession(sessionId)) return null
-        return ctx.eventLog.listBySession(sessionId)
+        return ctx.eventLog.listBySession(sessionId).map((event) => presentInboxTraceEvent(ctx, event))
       },
       async event(token: string, sessionId: string, eventId: string): Promise<SessionEvent | null> {
         if (!(await sessionMember(ctx, String(token ?? ''), String(sessionId ?? '')))) return null
-        return ctx.eventLog.listBySession(sessionId).find((event) => event.id === eventId) ?? null
+        const event = ctx.eventLog.listBySession(sessionId).find((item) => item.id === eventId)
+        return event ? presentInboxTraceEvent(ctx, event) : null
       },
       async members(token: string, sessionId: string) {
         if (!(await sessionMember(ctx, String(token ?? ''), String(sessionId ?? '')))) return null

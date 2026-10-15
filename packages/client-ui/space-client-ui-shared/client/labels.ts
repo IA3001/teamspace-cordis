@@ -36,4 +36,5 @@ export interface EventLite {
   authorKind: string
   kind: string
   text: string
+  citations?: import('space-event').EventCitation[]
 }

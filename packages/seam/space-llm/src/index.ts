@@ -33,6 +33,15 @@ export interface ChatMessage {
   content: string
 }
 
+export interface ChatUsage {
+  inputTokens?: number
+  outputTokens?: number
+  /** Undefined means the provider did not report cache usage; it is not zero. */
+  cachedInputTokens?: number
+  firstTokenMs?: number
+  durationMs: number
+}
+
 export interface ChatOptions {
   /** 单次调用超时（毫秒）。缺省 60_000。 */
   timeoutMs?: number
@@ -46,6 +55,8 @@ export interface ChatOptions {
   signal?: AbortSignal
   /** Optional user-facing completion deltas; callers must not persist them as Agent context. */
   onToken?: (delta: string) => void
+  /** Numerical provider statistics only; no prompt content or credentials. */
+  onUsage?: (usage: ChatUsage) => void
 }
 
 // ── 错误分类法（规律 3：实现不得自造错误串，只能抛这里的错误码）────────────

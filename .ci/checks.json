@@ -6,7 +6,11 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        ".ci/",
+        "scripts/ci.mjs",
+        "scripts/verify-ci.mjs",
+        "scripts/dev/check-graph.mjs",
+        "scripts/dev/protection.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -16,7 +20,8 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "*",
+        "scripts/typecheck.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -26,7 +31,10 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "src/index.ts",
+        "src/startup/",
+        "scripts/dev/startup-lock.mjs",
+        "scripts/verify-startup-lock.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -36,7 +44,10 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "plugins/tool-workdir/",
+        "packages/impl/workdir/",
+        "scripts/dev/workdir-quota.mjs",
+        "scripts/verify-workdir-quota.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -46,7 +57,8 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "*",
+        "scripts/lint-deps.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -56,7 +68,8 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "*",
+        "scripts/lint-patch.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -66,7 +79,8 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "*",
+        "scripts/lint-layers.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -76,7 +90,11 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "scripts/store.ts",
+        "src/store/",
+        "plugins/",
+        "packages/impl/",
+        "scripts/lint-migrations.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -86,7 +104,11 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "src/",
+        "plugins/",
+        "packages/",
+        "web/",
+        "scripts/lint-styles.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -96,7 +118,10 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "plugins/agent-inbox/",
+        "plugins/space-message/",
+        "packages/seam/events/",
+        "scripts/verify-activity-groups.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -106,7 +131,10 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "plugins/space-api/",
+        "plugins/space-message/",
+        "packages/client-ui/",
+        "scripts/verify-user-errors.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -116,7 +144,9 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "packages/client-ui/",
+        "plugins/space-api/",
+        "scripts/verify-load-state.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -126,7 +156,9 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "packages/client-ui/",
+        "plugins/space-api/",
+        "scripts/verify-feedback.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -136,7 +168,9 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        "packages/client-ui/space-client-ui-teamspace/",
+        "plugins/decision-commands/",
+        "scripts/verify-decision-presentation.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -148,7 +182,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "packages/client-ui/space-client-ui-admin/",
+        "plugins/space-auth/",
+        "scripts/verify-admin-auth.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -160,7 +196,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "packages/client-ui/space-client-ui-admin/",
+        "plugins/space-api/",
+        "scripts/verify-admin-plugins.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -172,7 +210,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-auth/",
+        "plugins/space-api/",
+        "scripts/store.ts",
+        "scripts/verify-settings-encryption.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -184,7 +225,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-dialog/",
+        "plugins/space-auth/",
+        "plugins/space-api/",
+        "scripts/verify-session-members.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -196,7 +240,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-dialog/",
+        "plugins/space-auth/",
+        "plugins/space-api/",
+        "scripts/verify-session-access.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -208,7 +255,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-upload/",
+        "plugins/staging-commands/",
+        "scripts/verify-staging-delete.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -220,7 +269,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-upload/",
+        "plugins/space-api/",
+        "scripts/verify-upload-access.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -232,7 +283,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/session-work/",
+        "plugins/space-context/",
+        "packages/client-ui/space-client-ui-teamspace/",
+        "scripts/verify-session-work.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -244,7 +298,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-registry/",
+        "plugins/space-dialog/",
+        "packages/client-ui/space-client-ui-teamspace/",
+        "scripts/verify-agent-speech.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -256,7 +313,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-registry/",
+        "plugins/agent-runtime-dispatcher/",
+        "packages/client-ui/space-client-ui-teamspace/",
+        "scripts/verify-agent-catalog.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -268,7 +328,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-runtime-dispatcher/",
+        "plugins/agent-registry/",
+        "packages/client-ui/space-client-ui-teamspace/",
+        "scripts/verify-agent-bootstrap.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -280,7 +343,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-runtime-dispatcher/",
+        "plugins/agent-inbox/",
+        "packages/client-ui/space-client-ui-teamspace/",
+        "scripts/verify-agent-progress.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -292,7 +358,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-runtime-dispatcher/",
+        "plugins/tool-workdir/",
+        "packages/client-ui/space-client-ui-teamspace/",
+        "scripts/verify-agent-explorer.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -304,7 +373,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-inbox/",
+        "plugins/agent-registry/",
+        "packages/client-ui/space-client-ui-teamspace/",
+        "scripts/verify-agent-teamspace.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -316,7 +388,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-inbox/",
+        "plugins/agent-runtime-dispatcher/",
+        "plugins/space-message/",
+        "scripts/verify-agent-inbox.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -328,7 +403,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-inbox/",
+        "plugins/orchestrator/",
+        "scripts/verify-inbox-orchestrator-mix.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -340,7 +417,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/agent-inbox/",
+        "plugins/orchestrator/",
+        "scripts/verify-inbox-orchestrator-retry.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -352,7 +431,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/orchestrator/",
+        "plugins/flow-commands/",
+        "scripts/verify-flow-recovery.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -364,7 +445,18 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-retrieval/",
+        "plugins/kb-embedder/",
+        "packages/client-ui/space-client-ui-kb/",
+        "scripts/verify-rag.mjs",
+        "scripts/verify-context-cache.ts",
+        "packages/impl/space-agent-runtime/src/cache-context.ts",
+        "packages/impl/space-llm-openai/",
+        "packages/seam/space-llm/",
+        "plugins/space-context/",
+        "packages/seam/space-context/",
+        "packages/impl/space-agent-runtime/",
+        "scripts/verify-rag.ts"
       ],
       "timeoutMs": 180000
     },
@@ -376,7 +468,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/kb-embedder/",
+        "plugins/space-retrieval/",
+        "packages/client-ui/space-client-ui-kb/",
+        "scripts/verify-embedding-index.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -388,7 +483,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-retrieval/",
+        "plugins/kb-embedder/",
+        "packages/client-ui/space-client-ui-kb/",
+        "scripts/verify-rag-project.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -400,7 +498,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/decision-commands/",
+        "plugins/command-bus/",
+        "scripts/verify-decision-commands.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -412,7 +512,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/memory-recorder/",
+        "plugins/space-history/",
+        "scripts/verify-author-recall.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -424,7 +526,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/space-message/",
+        "plugins/space-api/",
+        "scripts/verify-empty-message.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -436,7 +540,9 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/tool-web-search/",
+        "plugins/space-tool/",
+        "scripts/verify-web-search.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -448,7 +554,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/brain-llm/",
+        "plugins/agent-analyst-llm/",
+        "plugins/space-message/",
+        "scripts/verify-llm-stream.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -460,7 +569,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "scripts/store.ts",
+        "scripts/dev/compatibility.mjs",
+        "docs/DEPLOYMENT.md",
+        "scripts/verify-backup-restore.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -472,7 +584,10 @@
         "database"
       ],
       "paths": [
-        "*"
+        "plugins/health/",
+        "plugins/space-api/",
+        "scripts/store.ts",
+        "scripts/lint-observe.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -501,7 +616,10 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        ".ci/",
+        "scripts/dev/",
+        "scripts/verify-development.mjs",
+        "docs/development/"
       ],
       "timeoutMs": 180000
     },
@@ -513,7 +631,14 @@
         "database"
       ],
       "paths": [
-        "*"
+        "packages/seam/",
+        "packages/impl/",
+        "packages/policy/",
+        "plugins/",
+        "profiles/",
+        "src/",
+        "cordis.yml",
+        "scripts/verify-engineering-consumers.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -523,7 +648,13 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        ".ci/compatibility.json",
+        "packages/seam/",
+        "packages/impl/",
+        "plugins/",
+        "src/store/",
+        "scripts/store.ts",
+        "scripts/verify-compatibility.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -533,7 +664,9 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        ".ci/quality.json",
+        "scripts/dev/quality.mjs",
+        "scripts/verify-quality.mjs"
       ],
       "timeoutMs": 180000
     },
@@ -543,7 +676,11 @@
       "needs": [],
       "resources": [],
       "paths": [
-        "*"
+        ".ci/compatibility.json",
+        "scripts/store.ts",
+        "scripts/dev/compatibility.mjs",
+        "docs/DEPLOYMENT.md",
+        "scripts/verify-upgrade-fixtures.mjs"
       ],
       "timeoutMs": 180000
     }
@@ -557,7 +694,10 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "cordis.yml",
+        "packages/client-ui/space-client-ui-admin/",
+        "packages/client-ui/space-client-ui-shared/",
+        "scripts/check:console.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -569,7 +709,8 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "packages/client-ui/",
+        "scripts/check:web.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -581,7 +722,11 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "src/",
+        "cordis.yml",
+        "profiles/",
+        "plugins/",
+        "scripts/verify-release-start.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -593,7 +738,11 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "src/",
+        "cordis.yml",
+        "profiles/",
+        "plugins/",
+        "scripts/wait:runtime-idle.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -605,7 +754,9 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "plugins/orchestrator/",
+        "plugins/agent-inbox/",
+        "scripts/verify-orchestrator.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -617,7 +768,9 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "plugins/tool-workdir/",
+        "packages/impl/workdir/",
+        "scripts/verify-workdir.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -629,7 +782,10 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "plugins/sandbox-tools/",
+        "plugins/tool-workdir/",
+        "packages/impl/workdir/",
+        "scripts/verify-p8.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -641,7 +797,10 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "plugins/sandbox-tools/",
+        "plugins/tool-workdir/",
+        "packages/impl/workdir/",
+        "scripts/verify-sandbox.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -653,7 +812,11 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "src/",
+        "cordis.yml",
+        "profiles/",
+        "plugins/",
+        "scripts/wait:runtime-idle.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -665,7 +828,11 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "src/",
+        "cordis.yml",
+        "profiles/",
+        "plugins/",
+        "scripts/smoke.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -677,7 +844,10 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "packages/client-ui/",
+        "scripts/ui-verify.mjs",
+        "scripts/ci-fixtures.mjs",
+        "scripts/verify-ui.mjs"
       ],
       "timeoutMs": 600000
     },
@@ -689,7 +859,9 @@
         "runtime"
       ],
       "paths": [
-        "*"
+        "packages/client-ui/space-client-ui-admin/",
+        "packages/client-ui/space-client-ui-shared/",
+        "scripts/verify-admin-ui.mjs"
       ],
       "timeoutMs": 600000
     }

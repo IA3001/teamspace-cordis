@@ -7,6 +7,7 @@
 // 数据源的可替换性由本缝保证（换向量库只改本层实现）。
 import { Service } from 'cordis'
 import type { Context } from 'cordis'
+import type { EventCitation } from 'space-event'
 
 declare module 'cordis' {
   interface Context {
@@ -43,25 +44,38 @@ export interface RetrievalHit {
   scope?: string
 }
 
-/** Attach a verified source list and remove citations that do not match this call's evidence. */
-export function formatCitedAnswer(answer: string, hits: readonly RetrievalHit[]): string {
-  if (!hits.length) return answer
-  const valid = new Set<string>()
+/** Separate verified evidence markers from the answer body for system-level rendering. */
+export function extractCitedAnswer(answer: string, hits: readonly RetrievalHit[]): {
+  text: string
+  citations: EventCitation[]
+} {
+  const valid = new Map<string, EventCitation>()
   for (const hit of hits) {
-    valid.add(`${hit.source}:${hit.id}`)
-    for (const id of hit.sourceEventIds ?? []) valid.add(`event:${id}`)
+    const title = hit.title?.trim() || (hit.source === 'kb' ? '知识库文档' : hit.source === 'memory' ? 'Agent 记忆' : '会话消息')
+    valid.set(`${hit.source}:${hit.id}`, {
+      source: hit.source, id: hit.id, title, sessionId: hit.sessionId,
+      ...(hit.documentId ? { documentId: hit.documentId } : {}),
+    })
+    for (const id of hit.sourceEventIds ?? []) {
+      valid.set(`event:${id}`, { source: 'event', id, title: '来源会话消息', sessionId: hit.sessionId })
+    }
   }
-  const checked = answer.replace(/【来源:(event|memory|kb):([^】]+)】/gu, (token, source: string, id: string) =>
-    valid.has(`${source}:${id}`) ? token : '【引用未通过来源核验】')
-  const refs = hits.map((hit) => {
-    const title = hit.title?.trim() || hit.source
-    const docId = hit.documentId ? `，文档 ID ${hit.documentId}` : ''
-    const events = hit.sourceEventIds?.length
-      ? `，依据事件 ${hit.sourceEventIds.map((id) => `event:${id}`).join(', ')}`
-      : ''
-    return `- 【来源:${hit.source}:${hit.id}】${title}${docId}${events}`
-  })
-  return `${checked.trim()}\n\n参考来源（本轮检索命中）：\n${refs.join('\n')}`
+  const citations: EventCitation[] = []
+  const seen = new Set<string>()
+  const text = answer.replace(/【来源:(event|memory|kb):([^】]+)】/gu, (_token, source: string, id: string) => {
+    const citation = valid.get(`${source}:${id}`)
+    if (citation && !seen.has(`${citation.source}:${citation.id}`)) {
+      seen.add(`${citation.source}:${citation.id}`)
+      citations.push(citation)
+    }
+    return ''
+  }).trim()
+  return { text, citations }
+}
+
+/** @deprecated Use extractCitedAnswer to persist the citations separately from Markdown. */
+export function formatCitedAnswer(answer: string, hits: readonly RetrievalHit[]): string {
+  return extractCitedAnswer(answer, hits).text
 }
 
 /** 检索选项。 */

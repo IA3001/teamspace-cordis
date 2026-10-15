@@ -76,7 +76,7 @@ export function apply(ctx: Context, config: Config = {}) {
     async plan(req: PlanRequest): Promise<string> {
       // 本回合授权名单（system 契约与 user 尾行共用）。
       const targets = req.targets.join('、') || '（空）'
-      // 用户消息：人类原话 + @ 提示（仅供参考）+ 本回合授权名单。
+      // 到达协调器的请求：人类原话 + @ 提及 + 本回合授权名单。
       const user =
         `人类发言：${req.humanText}\n` +
         `@ 提及提示：${req.mentionHints.join('、') || '无'}（仅供参考，以自然语言为准）\n` +
@@ -97,14 +97,14 @@ export function apply(ctx: Context, config: Config = {}) {
         })
         // system = 组装产物（身份/模板/工具目录）+ 协调者输出契约（职责词汇，
         // 模板不携带；缺了它三级兜底解析不到 JSON，大脑必炸 coordinator_error）。
-        system = `${assembled.system}\n\n${OUTPUT_CONTRACT.replaceAll('$TARGETS', targets)}`
+        system = `${assembled.stableSystem ?? assembled.system}\n\n${OUTPUT_CONTRACT.replaceAll('$TARGETS', targets)}`
         // user 侧上下文：最近历史尾部 10 条（组装产物已按 seq 升序）拼在
         // 原本的人类发言/授权名单之前 —— 授权口径行必须保持在末尾。
         const recent = assembled.history
           .slice(-10)
           .map((e) => `[seq ${e.seq}] ${e.authorKind}${e.authorId ? ` ${e.authorId}` : ''}：${e.text}`)
           .join('\n')
-        userContent = (recent ? `最近对话（供参考，按时间升序）：\n${recent}\n\n` : '') + user
+        userContent = (assembled.dynamicContext ? `${assembled.dynamicContext}\n\n` : '') + (recent ? `最近对话（供参考，按时间升序）：\n${recent}\n\n` : '') + user
       } catch (e) {
         ctx.logger.warn(
           '[brain-llm] ctx.context.assemble 失败（%s）—— L4 未就绪，回退手拼 system',

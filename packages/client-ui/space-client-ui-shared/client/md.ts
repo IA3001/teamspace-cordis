@@ -61,23 +61,54 @@ function highlightedNodes(source: string, h: Function, language: string): VNode[
   return roots
 }
 
-function cleanSourceList(text: string): string {
-  const marker = '参考来源（本轮检索命中）：'
-  const start = text.lastIndexOf(marker)
-  if (start < 0) return text
+const LEGACY_SOURCE_HEADING = '参考来源（本轮检索命中）：'
 
+function splitLegacySources(text: string): { text: string; citations: import('space-event').EventCitation[] } {
+  const start = text.lastIndexOf(LEGACY_SOURCE_HEADING)
+  if (start < 0) return { text, citations: [] }
   const body = text.slice(0, start).trimEnd()
-  const rows = text.slice(start + marker.length).split('\n')
-  const references = rows.flatMap((line) => {
+  const rows = text.slice(start + LEGACY_SOURCE_HEADING.length).split('\n')
+  const citations = rows.flatMap((line): import('space-event').EventCitation[] => {
     const match = /^\s*-\s*【来源:(event|memory|kb):([^】]+)】(.*)$/.exec(line)
     if (!match) return []
     const [, kind, id, rawLabel] = match
     const label = rawLabel!.replace(/，(?:依据事件|文档 ID).*/, '').trim() ||
       (kind === 'kb' ? '知识库文档' : kind === 'memory' ? 'Agent 记忆' : '会话消息')
-    if (kind === 'event') return [`- [${label}](#space-event-${id})`]
-    return [`- ${kind === 'kb' ? '知识库 · ' : '记忆 · '}${label}`]
+    return [{ source: kind as 'event' | 'memory' | 'kb', id: id!, title: label, sessionId: '' }]
   })
-  return references.length ? `${body}\n\n### 参考来源\n\n${references.join('\n')}` : text
+  return { text: body, citations }
+}
+
+export function eventCitations(event: { text: string; citations?: import('space-event').EventCitation[] }): import('space-event').EventCitation[] {
+  const legacy = splitLegacySources(event.text).citations
+  const citations = [...(event.citations ?? []), ...legacy]
+  return citations.filter((item, index) => citations.findIndex((candidate) =>
+    candidate.source === item.source && candidate.id === item.id) === index)
+}
+
+/** Render sources as a chat-shell feature below the message, outside Markdown. */
+export function renderCitationModule(
+  citations: readonly import('space-event').EventCitation[],
+  h: Function,
+  onEventClick?: (id: string) => void,
+): VNode | null {
+  if (!citations.length) return null
+  const label = (citation: import('space-event').EventCitation) => {
+    if (citation.source === 'event' && citation.title.startsWith('会话消息')) return citation.title
+    return `${citation.source === 'kb' ? '知识库' : citation.source === 'memory' ? '记忆' : '会话消息'} · ${citation.title}`
+  }
+  return h('section', { class: 'sp-citation-module', 'aria-label': '参考来源' }, [
+    h('strong', { class: 'sp-citation-heading' }, '参考来源'),
+    h('div', { class: 'sp-citation-list' }, citations.map((citation) => citation.source === 'event'
+      ? h('a', {
+          key: `${citation.source}:${citation.id}`, href: `#space-event-${encodeURIComponent(citation.id)}`, class: 'sp-citation-item',
+          onClick: onEventClick ? (event: MouseEvent) => {
+            event.preventDefault()
+            onEventClick(citation.id)
+          } : undefined,
+        }, label(citation))
+      : h('span', { key: `${citation.source}:${citation.id}`, class: 'sp-citation-item' }, label(citation)))),
+  ])
 }
 
 export interface AgentWorklogView {
@@ -141,13 +172,30 @@ export function extractAgentWorklog(
 /** Hide the execution receipt prefix that the runtime stores beside the final answer. */
 export function visibleAgentReply(text: string): string {
   text = extractAgentWorklog(text).text
+  // Older runtime receipts (and some providers with a non-standard DSML token
+  // spelling) can contain the private tool wire format as the whole event
+  // body. Never render tool arguments as an Agent chat reply.
+  const dsmlStart = /<\|\s*(?:\|\s*)*DSML\s*\|+\s*\|\s*calls\s*>|<\|\s*(?:\|\s*)*DSML\s*\|+(?:\s*\|+)?\s*>\s*calls\s*>/iu.exec(text)
+  if (dsmlStart) {
+    const humanPrefix = text.slice(0, dsmlStart.index).trim()
+    text = humanPrefix || '（检测到工具调用内容，已收起；请查看工作记录）'
+  }
+  // The live progress event can arrive before a malformed DSML marker is
+  // complete. Hide its prefix as soon as it is recognizable; do not wait for
+  // the persisted answer to be sanitized after the model finishes.
+  if (/^\s*<\|\s*(?:\|\s*)*D(?:S(?:M(?:L)?)?)?/iu.test(text)) {
+    text = '（正在处理工具调用，请查看工作记录）'
+  }
+  const jsonToolEnvelope = text.match(/^\s*(?:```(?:json)?\s*)?\{\s*"toolCalls"\s*:/u)
+  if (jsonToolEnvelope) text = '（检测到工具调用内容，已收起；请查看工作记录）'
+
   const finalHeading = /(?:^|\n)## 最终回复\s*\n/
   const finalStart = finalHeading.exec(text)
   if (finalStart) {
     const start = finalStart.index + finalStart[0].length
     const tail = text.slice(start)
     const end = tail.search(/\n【(?:工作区|产物清单)】/)
-    return cleanSourceList((end < 0 ? tail : tail.slice(0, end)).trim() || '（暂无回复内容）')
+    return splitLegacySources((end < 0 ? tail : tail.slice(0, end)).trim() || '（暂无回复内容）').text
   }
 
   if (!/^\[@.+?\] 已领任务：/.test(text)) return text
@@ -158,7 +206,7 @@ export function visibleAgentReply(text: string): string {
       !/^【(?:工作区|产物清单)】/.test(line))
     .join('\n')
     .trim()
-  return cleanSourceList(userText || '任务已完成，详情见工作记录。')
+  return splitLegacySources(userText || '任务已完成，详情见工作记录。').text
 }
 
 /** Render full Markdown blocks safely, with a copy control for each fenced code block. */

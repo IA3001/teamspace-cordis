@@ -62,7 +62,6 @@ export class AgentRegistry extends AgentService {
       promptRef: definition.promptRef || undefined,
       capabilities: [...definition.toolIds],
       description: definition.description,
-      modelRef: definition.modelRef,
       llmProfileRef: definition.llmProfileRef,
       toolIds: [...definition.toolIds],
       contextSources: [...definition.contextSources],

@@ -28,6 +28,7 @@ export interface ClientRoute {
 export interface ClientRouter {
   page(options: { path: string; name: string; icon?: string; order?: number; component: unknown }): unknown
   slot(options: { type: string; component: unknown; order?: number }): unknown
+  push(target: { path?: string; query?: Record<string, string | undefined> }): Promise<void>
   replace(target: { path?: string; query?: Record<string, string | undefined> }): Promise<void>
   /** 已注册的槽位视图（reactive；读 length 可判断某槽位是否有视图入驻）。 */
   readonly views: Record<string, readonly unknown[]>

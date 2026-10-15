@@ -4,13 +4,14 @@ import { fileURLToPath } from 'node:url'
 import { Context } from 'cordis'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
 import { AgentInbox } from '../plugins/agent-inbox/index.ts'
+import { MessageServiceImpl } from '../plugins/space-message/index.ts'
 import { SessionWork } from '../plugins/session-work/index.ts'
 import { waitForMentionedAgentHistory } from '../plugins/orchestrator/index.ts'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteMemoryStore } from '../packages/impl/space-store-sqlite/src/memory.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
-import { AGENT_HISTORY_BOOTSTRAP_MARKER, DECISION_REVIEW_REQUEST_MARKER } from '../packages/seam/space-event/src/index.ts'
+import { AGENT_HISTORY_BOOTSTRAP_MARKER, DECISION_REVIEW_REQUEST_MARKER, isAgentVisibleEvent } from '../packages/seam/space-event/src/index.ts'
 
 const db = new DatabaseSync(':memory:')
 db.exec('PRAGMA foreign_keys = ON')
@@ -120,25 +121,58 @@ async function main(): Promise<void> {
     'live inbox state clears after the durable cursor catches up')
 
   for (const agentId of ['a_alpha', 'a_beta']) {
-    assert.equal(await inbox.cursor(agentId, 's_alpha'), first.seq)
-    assert.equal(await inbox.cursor(agentId, 's_beta'), second.seq)
+    assert((await inbox.cursor(agentId, 's_alpha')) >= first.seq)
+    assert((await inbox.cursor(agentId, 's_beta')) >= second.seq)
     const recalled = await memory.recall(`agent:${agentId}`, { kind: 'conversation_fact:0' })
     assert.equal(recalled.length, 2, 'each Agent keeps its own memories across sessions')
     assert.deepEqual(new Set(recalled.map((item) => item.sourceEventId)), new Set([first.id, second.id]))
   }
-  assert.equal(await inbox.cursor('a_gamma', 's_alpha'), first.seq,
+  assert((await inbox.cursor('a_gamma', 's_alpha')) >= first.seq,
     'memoryPolicy=none still advances the durable inbox cursor')
-  assert.equal(await inbox.cursor('a_gamma', 's_beta'), second.seq,
+  assert((await inbox.cursor('a_gamma', 's_beta')) >= second.seq,
     'memoryPolicy=none does not stall history synchronization across queued sessions')
   assert.equal((await memory.recall('agent:a_gamma')).length, 2,
     'memoryPolicy=none retains only the two system cursor rows and writes no semantic memory')
 
   assert.equal(await memory.forgetBySource(first.id), 2, 'source withdrawal invalidates derived memories for both Agents')
   assert.equal((await memory.recall('agent:a_alpha', { kind: 'conversation_fact:0' })).length, 1)
-  assert.equal(ctx.eventLog.listBySession('s_alpha').length, 1, 'private processing does not create chat or trace events')
+  const alphaEvents = ctx.eventLog.listBySession('s_alpha')
+  const alphaTrace = alphaEvents.find((event) => event.sourceEventId === first.id &&
+    event.toolCalls.some((call) => call.name === 'agent.inbox.trace' && call.args.includes('a_alpha')))
+  assert(alphaTrace, 'background processing persists a trace linked to its source message')
+  assert.equal(isAgentVisibleEvent(alphaTrace), false, 'private inbox traces stay out of chat and Agent context')
+  const traceData = JSON.parse(alphaTrace.toolCalls.find((call) => call.name === 'agent.inbox.trace')!.args)
+  assert.equal(traceData.agentId, 'a_alpha', 'durable trace identifies the exact Agent by stable ID')
+  assert.equal(traceData.agentTitle, '研究员', 'durable trace stores the Agent display name')
+  assert(traceData.steps.some((step: { label: string }) => step.label === '长期记忆处理'),
+    'trace explains which processing path ran')
+  assert.equal(traceData.modelTrace.length, 1, 'the history trace persists every background LLM request')
+  assert.equal(traceData.modelTrace[0].request[0].source, '长期记忆提取系统提示词')
+  assert.equal(traceData.modelTrace[0].request[1].source, `待处理会话消息 #${first.seq} · ${first.id}`)
+  assert.equal(traceData.modelTrace[0].status, 'completed')
+  assert.match(traceData.modelTrace[0].response, /持久信息来自/u, 'the exact model completion is retained')
+  assert(!JSON.stringify(traceData.modelTrace).includes('secret-value-123'), 'audit prompts keep credentials redacted')
+  assert.equal(traceData.modelTrace.length, 1, 'the history trace persists every background LLM request')
+  assert.equal(traceData.modelTrace[0].request[0].source, '长期记忆提取系统提示词')
+  assert.equal(traceData.modelTrace[0].request[1].source, `待处理会话消息 #${first.seq} · ${first.id}`)
+  assert.equal(traceData.modelTrace[0].status, 'completed')
+  assert.match(traceData.modelTrace[0].response, /持久信息来自/u, 'the exact model completion is retained')
+  assert(!JSON.stringify(traceData.modelTrace).includes('secret-value-123'), 'audit prompts keep credentials redacted')
+  assert(alphaEvents.filter(isAgentVisibleEvent).length === 1, 'private processing does not add visible chat messages')
 
-  // A newly invited Agent receives one dedicated, ordered history analysis before
-  // its inbox cursor reaches the invitation event or a later @ reply can proceed.
+  const targeted = ctx.eventLog.append({
+    id: 's_alpha_targeted', sessionId: 's_alpha', authorId: 'u_member', phaseId: null,
+    authorKind: 'human', kind: 'message', text: '@研究员 请给出结论', mentions: ['a_alpha'],
+    toolCalls: [], replyMode: '',
+  })
+  const modelCallsBeforeTargeted = started
+  await Promise.all(['a_alpha', 'a_beta'].map((id) => inbox.waitThrough(id, 's_alpha', targeted.seq)))
+  assert.equal(started, modelCallsBeforeTargeted,
+    'an explicitly addressed message skips per-Agent background memory calls; the requested task supplies its own context')
+
+  // A newly invited Agent receives old messages through the same ordered inbox
+  // queue as live events. The cursor cannot jump to the invitation while the
+  // first older message is still being analyzed.
   const onboardingSession = 's_onboarding'
   ctx.session.createSession({ id: onboardingSession, title: '新 Agent 历史引导' })
   ctx.session.join({ sessionId: onboardingSession, principalId: 'u_member', role: 'DRI' })
@@ -151,41 +185,44 @@ async function main(): Promise<void> {
       authorKind: 'human', kind: 'message', text, mentions: [], toolCalls: [], replyMode: '',
     }))
   ctx.session.join({ sessionId: onboardingSession, principalId: 'a_alpha', role: '成员' })
-  let onboardingSystem = ''
   const onboardingPayloads: Array<Record<string, any>> = []
+  let releaseFirstOnboarding!: () => void
+  const firstOnboardingHeld = new Promise<void>((resolve) => { releaseFirstOnboarding = resolve })
+  let finishOldDecision: (() => void) | undefined
+  let oldDecisionStarted = false
   ctx.llm.chat = async (messages: Array<{ role: string; content: string }>) => {
-    onboardingSystem = messages[0]!.content
     const payload = JSON.parse(messages[1]!.content) as Record<string, any>
     onboardingPayloads.push(payload)
-    return JSON.stringify({ memories: [{
-      text: payload.batch === 1 ? '历史批次一已整理' : '发布窗口为周六，DRI 负责验收', weight: 0.95,
-    }] })
+    if (onboardingPayloads.length === 1) await firstOnboardingHeld
+    return JSON.stringify({ memories: [{ text: `按序处理 ${payload.event.id}`, weight: 0.95 }] })
   }
   const invitation = ctx.eventLog.append({
     id: 'onboarding_invitation', sessionId: onboardingSession, authorId: null, phaseId: null,
     authorKind: 'system', kind: 'system', text: `${AGENT_HISTORY_BOOTSTRAP_MARKER} 邀请研究员加入。`,
     mentions: ['a_alpha'], toolCalls: [], replyMode: '',
   })
-  await inbox.waitThrough('a_alpha', onboardingSession, invitation.seq)
-  assert.match(onboardingSystem, /刚加入会话.*完整会话/u, 'invited Agents receive a dedicated whole-history onboarding prompt')
-  assert.equal(onboardingPayloads.length, 2, 'long histories are split into bounded sequential batches')
-  assert.deepEqual(onboardingPayloads.flatMap((payload) => payload.history.map((event: { id: string }) => event.id)),
-    onboardingHistory.map((event) => event.id), 'onboarding analyzes the complete prior message history in sequence')
-  assert.equal(onboardingPayloads[0]!.history[0].text.includes('onboarding-secret-value'), false,
-    'onboarding redacts credentials before model input')
-  assert.equal(onboardingPayloads[0]!.history[0].text.includes('[REDACTED]'), true)
-  assert.deepEqual(onboardingPayloads[1]!.priorMemory, ['历史批次一已整理'],
-    'later batches receive earlier synthesized memory for cross-batch context')
-  assert.equal(await inbox.cursor('a_alpha', onboardingSession), invitation.seq,
+  const onboardingWait = inbox.waitThrough('a_alpha', onboardingSession, invitation.seq)
+  for (let i = 0; i < 50 && onboardingPayloads.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(onboardingPayloads.length, 1, 'history starts as a one-message-at-a-time queue')
+  assert.equal(onboardingPayloads[0]!.event.id, onboardingHistory[0]!.id, 'the oldest event is processed first')
+  assert.equal(await inbox.cursor('a_alpha', onboardingSession), 0, 'the cursor does not jump past the pending history')
+  assert.equal(onboardingPayloads[0]!.event.text.includes('onboarding-secret-value'), false,
+    'queued history redacts credentials before model input')
+  assert.equal(onboardingPayloads[0]!.event.text.includes('[REDACTED]'), true)
+  releaseFirstOnboarding()
+  await onboardingWait
+  assert.deepEqual(onboardingPayloads.map((payload) => payload.event.id),
+    onboardingHistory.map((event) => event.id), 'all historical messages are consumed by the normal queue in sequence')
+  assert((await inbox.cursor('a_alpha', onboardingSession)) >= invitation.seq,
     'the invitation cursor advances only after the onboarding analysis is persisted')
   const onboardingMemories = (await memory.recall('agent:a_alpha', { limit: 100 }))
-    .filter((item) => item.kind.startsWith(`history_bootstrap:${onboardingSession}:`))
-  assert.equal(onboardingMemories.length, 2, 'each history batch persists a private synthesized memory')
-  assert.equal(onboardingMemories.some((item) => item.text.includes('发布窗口为周六')), true)
-  assert.deepEqual(new Set(onboardingMemories.flatMap((item) => item.sourceEventIds)),
-    new Set(onboardingHistory.map((event) => event.id)), 'onboarding memories remain traceable to all historical messages')
-  assert.equal(ctx.eventLog.listBySession(onboardingSession).length, 23,
-    'private onboarding does not emit additional chat or process events')
+    .filter((item) => item.sourceEventId && onboardingHistory.some((event) => event.id === item.sourceEventId))
+  assert.equal(onboardingMemories.length, onboardingHistory.length,
+    'each processed history message writes an individually traceable memory candidate')
+  assert.deepEqual(new Set(onboardingMemories.map((item) => item.sourceEventId)),
+    new Set(onboardingHistory.map((event) => event.id)), 'queued memories retain per-message provenance')
+  assert.equal(ctx.eventLog.listBySession(onboardingSession).filter(isAgentVisibleEvent).length, 23,
+    'private onboarding traces do not emit visible chat messages')
 
   const mixed = await memory.remember('agent:a_alpha', 'mixed_decision', '综合两个来源的记忆', {
     authorId: 'a_alpha', sourceEventIds: [first.id, second.id],
@@ -241,7 +278,7 @@ async function main(): Promise<void> {
   }
   await assert.rejects(inbox.waitThrough('a_alpha', 's_review', review.seq), /simulated crash after review question append/,
     'a cursor failure after publishing the review question leaves the request replayable')
-  assert.equal(await inbox.cursor('a_alpha', 's_review'), reviewTarget.seq,
+  assert((await inbox.cursor('a_alpha', 's_review')) < review.seq,
     'a failed durable cursor write does not mark the review request consumed')
   const replayReview = inbox.waitThrough('a_alpha', 's_review', review.seq)
   await Promise.race([
@@ -259,6 +296,86 @@ async function main(): Promise<void> {
   await Promise.all(['a_alpha', 'a_beta', 'a_gamma'].map((id) => inbox.waitThrough(id, 's_review', question.seq)))
   assert.equal((await memory.recall('agent:a_alpha')).some((item) => item.sourceEventId === question.id), false,
     'review questions are not converted into Agent memory or normal answers')
+
+  // Proactive Agents evaluate each live, non-addressed message once, while the
+  // speech policy suppresses consecutive proactive replies and stores a timeline hint.
+  agents.register({
+    id: 'a_proactive', kind: 'custom', title: '主动发言测试 Agent', capabilities: [],
+    speechPolicy: 'proactive', memoryPolicy: 'none',
+  })
+  db.prepare(`INSERT OR IGNORE INTO users(id, username, password_hash, display_name, kind, created_at, team_role)
+    VALUES (?, ?, 'test', ?, 'agent', ?, 'member')`).run('a_proactive', 'inbox_proactive', '主动发言测试 Agent', new Date().toISOString())
+  ctx.session.createSession({ id: 's_proactive', title: '主动发言验收' })
+  ctx.session.join({ sessionId: 's_proactive', principalId: 'u_member', role: 'DRI' })
+  ctx.session.join({ sessionId: 's_proactive', principalId: 'a_proactive', role: '成员' })
+  ctx.context = {
+    async assemble(sessionId: string) {
+      return { sessionId, system: '这是该 Agent 的专属上下文', history: ctx.eventLog.listBySession(sessionId), memories: [], retrieval: [], approxChars: 1 }
+    },
+  }
+  new MessageServiceImpl(ctx)
+  let proactiveModelCalls = 0
+  ctx.llm.chat = async (messages: Array<{ role: string; content: string }>) => {
+    proactiveModelCalls++
+    assert.match(messages[0]!.content, /专属上下文/u, 'proactive decisions receive assembled Agent context')
+    const input = JSON.parse(messages[1]!.content) as { trigger: { text: string } }
+    if (input.trigger.text === '较旧判断等待模型') {
+      oldDecisionStarted = true
+      await new Promise<void>((resolve) => { finishOldDecision = resolve })
+      return JSON.stringify({ memories: [], decision: 'speak', text: '已经过期的主动答复' })
+    }
+    if (input.trigger.text === '第一次触发') return JSON.stringify({ memories: [], decision: 'speak', text: '我补充一个有用观点。' })
+    if (input.trigger.text === '连续触发') return JSON.stringify({ memories: [], decision: 'speak', text: '我还想接着补充。' })
+    if (input.trigger.text === '被@后恢复') return JSON.stringify({ memories: [], decision: 'speak', text: '被@回应后可以重新主动补充。' })
+    return JSON.stringify({ memories: [], decision: 'pass', text: '' })
+  }
+  const proactiveFirst = await ctx.messages.send('s_proactive', 'u_member', '第一次触发')
+  await inbox.waitThrough('a_proactive', 's_proactive', proactiveFirst.seq)
+  const firstSpeech = ctx.eventLog.listBySession('s_proactive').find((event) =>
+    event.authorId === 'a_proactive' && event.sourceEventId === proactiveFirst.id)
+  assert.equal(firstSpeech?.text, '我补充一个有用观点。', 'a proactive Agent speaks after a live message without an @ mention')
+
+  const proactiveSecond = await ctx.messages.send('s_proactive', 'u_member', '连续触发')
+  await inbox.waitThrough('a_proactive', 's_proactive', proactiveSecond.seq)
+  const persistentHint = ctx.eventLog.listBySession('s_proactive').find((event) =>
+    event.authorId === 'a_proactive' && event.sourceEventId === proactiveSecond.id && event.kind === 'system')
+  assert.equal(persistentHint?.text.startsWith('有话想说：'), true,
+    'a suppressed proactive reply becomes a durable Agent timeline event')
+  assert.equal(persistentHint?.sourceEventIds.includes(proactiveSecond.id), true,
+    'the durable hint retains its triggering message as provenance')
+
+  const beforeDirectedMention = proactiveModelCalls
+  const directedToOther = ctx.eventLog.append({
+    id: 's_proactive_directed_to_other', sessionId: 's_proactive', authorId: 'u_member', phaseId: null,
+    authorKind: 'human', kind: 'message', text: '@研究员 这条请你处理', mentions: ['a_alpha'], toolCalls: [], replyMode: '',
+  })
+  await inbox.waitThrough('a_proactive', 's_proactive', directedToOther.seq)
+  assert.equal(proactiveModelCalls, beforeDirectedMention,
+    'a proactive Agent does not spend a model call judging a message explicitly addressed to another Agent')
+  assert.equal(ctx.eventLog.listBySession('s_proactive').some((event) =>
+    event.authorId === 'a_proactive' && event.sourceEventId === directedToOther.id), false,
+  'a non-mentioned proactive Agent stays silent on another Agent’s directed message')
+
+  const oldTrigger = await ctx.messages.send('s_proactive', 'u_member', '较旧判断等待模型')
+  const oldWait = inbox.waitThrough('a_proactive', 's_proactive', oldTrigger.seq)
+  for (let i = 0; i < 50 && !oldDecisionStarted; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+  assert(oldDecisionStarted, 'the old proactive model call has started before the explicit @ arrives')
+  const supersedingMention = await ctx.messages.send('s_proactive', 'u_member', '@主动发言测试 Agent 请直接回答', ['a_proactive'])
+  finishOldDecision!()
+  await oldWait
+  await inbox.waitThrough('a_proactive', 's_proactive', supersedingMention.seq)
+  assert(!ctx.eventLog.listBySession('s_proactive').some((item) => item.authorId === 'a_proactive' && item.sourceEventId === oldTrigger.id),
+    'a newer explicit @ suppresses both the old proactive answer and its misleading @-me hint')
+
+  const addressed = await ctx.messages.send('s_proactive', 'u_member', '@主动发言测试 Agent 请继续', ['a_proactive'])
+  await inbox.waitThrough('a_proactive', 's_proactive', addressed.seq)
+  const passiveReply = await ctx.messages.send('s_proactive', 'a_proactive', '收到，继续补充。', [], null, { sourceEventId: addressed.id })
+  assert.equal(passiveReply.authorId, 'a_proactive', 'a direct human @ reply remains allowed and resets proactive eligibility')
+  const afterAddressed = await ctx.messages.send('s_proactive', 'u_member', '被@后恢复')
+  await inbox.waitThrough('a_proactive', 's_proactive', afterAddressed.seq)
+  assert.equal(ctx.eventLog.listBySession('s_proactive').some((event) =>
+    event.authorId === 'a_proactive' && event.sourceEventId === afterAddressed.id), true,
+  'an @-triggered reply restores the Agent\'s ability to speak proactively on later messages')
 
   // Simulate an app restart with a committed message that arrived before the new
   // AgentInbox subscribed to event notifications. Boot recovery must replay it.
@@ -283,6 +400,16 @@ async function main(): Promise<void> {
     id: 'recovery_history', sessionId: 's_recovery', authorId: 'u_recovery', phaseId: null,
     authorKind: 'human', kind: 'message', text: '进程停止期间提交的历史消息。', mentions: [], toolCalls: [], replyMode: '',
   })
+  // A completed meeting can also contain unconsumed events (for example, if the
+  // process stopped while it was open). Boot recovery must leave it as history.
+  recoveryCtx.session.createSession({ id: 's_closed_recovery', title: '已结束会议' })
+  recoveryCtx.session.join({ sessionId: 's_closed_recovery', principalId: 'u_recovery', role: 'DRI' })
+  recoveryCtx.session.join({ sessionId: 's_closed_recovery', principalId: 'a_recovery', role: '成员' })
+  const closedRecoveryEvent = recoveryLog.append({
+    id: 'closed_recovery_history', sessionId: 's_closed_recovery', authorId: 'u_recovery', phaseId: null,
+    authorKind: 'human', kind: 'message', text: '已结束会议中的历史消息不应重新处理。', mentions: [], toolCalls: [], replyMode: '',
+  })
+  recoveryCtx.session.closeSession('s_closed_recovery')
   let recoveryCalls = 0
   Object.assign(recoveryCtx, { llm: {
     configured: true,
@@ -293,9 +420,17 @@ async function main(): Promise<void> {
   for (let i = 0; i < 100 && await recoveredInbox.cursor('a_recovery', 's_recovery') < recoveryEvent.seq; i++) {
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
-  assert.equal(await recoveredInbox.cursor('a_recovery', 's_recovery'), recoveryEvent.seq,
+  assert((await recoveredInbox.cursor('a_recovery', 's_recovery')) >= recoveryEvent.seq,
     'startup recovery consumes committed events beyond the persisted Agent cursor')
   assert.equal(recoveryCalls, 1, 'recovery processes the missed event exactly once')
+  assert.equal(await recoveredInbox.cursor('a_recovery', 's_closed_recovery'), 0,
+    'startup recovery does not replay events from a closed meeting')
+  assert.equal(recoveryCalls, 1, 'closed meeting history does not trigger additional model calls')
+  assert.equal(recoveryLog.listBySession('s_closed_recovery').some((event) => event.id !== closedRecoveryEvent.id), false,
+    'closed meeting recovery does not append new inbox traces')
+  await recoveredInbox.waitThrough('a_recovery', 's_closed_recovery', closedRecoveryEvent.seq)
+  assert.equal(await recoveredInbox.cursor('a_recovery', 's_closed_recovery'), 0,
+    'a late explicit inbox barrier cannot restart processing after a meeting closes')
   const recoveredMemories = await recoveryMemory.recall('agent:a_recovery', { kind: 'conversation_fact:0' })
   assert.deepEqual(recoveredMemories[0]?.sourceEventIds, [recoveryEvent.id], 'recovered memory preserves event provenance')
 
@@ -314,7 +449,7 @@ async function main(): Promise<void> {
   await assert.rejects(retryWait, /temporary model outage/,
     'a failed memory update releases the explicit reply barrier promptly with a retryable error')
   await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.equal(await recoveredInbox.cursor('a_recovery', 's_recovery'), recoveryEvent.seq,
+  assert((await recoveredInbox.cursor('a_recovery', 's_recovery')) < retryEvent.seq,
     'a failed extraction does not advance the durable cursor')
   const retryWaitAfterFailure = recoveredInbox.waitThrough('a_recovery', 's_recovery', retryEvent.seq)
   await Promise.race([
@@ -322,11 +457,27 @@ async function main(): Promise<void> {
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error('inbox retry timed out')), 5_000)),
   ])
   assert.equal(retryCalls, 2, 'the failed event is retried after a temporary model outage')
-  assert.equal(await recoveredInbox.cursor('a_recovery', 's_recovery'), retryEvent.seq,
+  assert((await recoveredInbox.cursor('a_recovery', 's_recovery')) >= retryEvent.seq,
     'the cursor advances only after the retry succeeds')
   assert.equal((await recoveryMemory.recall('agent:a_recovery', { kind: 'conversation_fact:0' }))
     .some((item) => item.sourceEventId === retryEvent.id), true,
   'retry persists the memory with its source event')
+
+  let permanentCalls = 0
+  Object.assign(recoveryCtx.llm, { async chat() {
+    permanentCalls++
+    throw new Error('LLM 返回 404（单次不重试）：UnsupportedModel')
+  } })
+  const permanentEvent = recoveryLog.append({
+    id: 'recovery_permanent_failure', sessionId: 's_recovery', authorId: 'u_recovery', phaseId: null,
+    authorKind: 'human', kind: 'message', text: '不支持的模型不应被持续重试。',
+    mentions: [], toolCalls: [], replyMode: '',
+  })
+  await assert.rejects(recoveredInbox.waitThrough('a_recovery', 's_recovery', permanentEvent.seq), /UnsupportedModel/)
+  await new Promise((resolve) => setTimeout(resolve, 1_100))
+  assert.equal(permanentCalls, 1, 'permanent provider rejections do not retry on a timer')
+  assert((await recoveredInbox.cursor('a_recovery', 's_recovery')) < permanentEvent.seq,
+    'a permanently rejected event remains pending for a deliberate later retry')
   recoveryDb.close()
   console.log('✓ Agent inbox ordering, retries, per-Agent isolation, durable cursors, source provenance, and session serialization passed')
   db.close()

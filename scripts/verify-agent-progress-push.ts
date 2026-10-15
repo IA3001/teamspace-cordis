@@ -2,8 +2,61 @@ import assert from 'node:assert/strict'
 import { Context } from 'cordis'
 import { apply as applySpacePush } from '../plugins/space-push/index.ts'
 import {
+  isSessionReplyActive, progressRunHasReply, progressRunHasTimelineAnchor, progressRunsForTimelineEvent,
   settlesPendingReply, shouldWarnAboutSocketSilence, SOCKET_SILENCE_WARNING_MS,
 } from '../packages/client-ui/space-client-ui-teamspace/client/progress.ts'
+
+const trigger = { id: 'event-a', sessionId: 'session-a', authorKind: 'human' }
+const progressRun = { runId: 'run-a', sessionId: 'session-a', agentId: 'agent-a', sourceEventId: 'event-a' }
+assert.deepEqual(progressRunsForTimelineEvent(trigger, [trigger], [progressRun]), [progressRun],
+  'a run without an Agent reply is anchored to its triggering message')
+assert.equal(progressRunHasTimelineAnchor(progressRun, [trigger]), true,
+  'a visible trigger prevents the run from being duplicated at the timeline bottom')
+const reply = {
+  id: 'event-b', sessionId: 'session-a', authorKind: 'agent', authorId: 'agent-a', sourceEventId: 'event-a',
+}
+assert.equal(progressRunHasReply(progressRun, [trigger]), false,
+  'a visible trigger must not dismiss the live streamed answer')
+assert.equal(progressRunHasReply(progressRun, [trigger, reply]), true,
+  'only the persisted reply replaces its streamed answer')
+assert.equal(progressRunHasReply(progressRun, [{ ...reply, sessionId: 'session-b' }]), false,
+  'another session cannot dismiss the streamed answer')
+assert.equal(progressRunHasReply({ ...progressRun, sourceEventId: null }, [{ ...reply, sourceEventId: null }]), false,
+  'unlinked replies cannot dismiss a run without a source event')
+const unrelatedReply = { ...reply, id: 'event-later', sourceEventId: 'different-trigger', sourceEventIds: ['event-a'] }
+assert.equal(progressRunHasReply(progressRun, [unrelatedReply]), false,
+  'a context citation does not turn a later reply into this run result')
+assert.deepEqual(progressRunsForTimelineEvent(unrelatedReply, [trigger, unrelatedReply], [progressRun]), [],
+  'later replies must not reuse an earlier run DOM key through context citations')
+assert.equal(progressRunHasReply(progressRun, [{ ...reply, kind: 'system' }]), false,
+  'an Agent wants-to-speak notice does not replace its actual reply')
+assert.deepEqual(progressRunsForTimelineEvent(trigger, [trigger, reply], [progressRun]), [],
+  'once the Agent reply arrives, progress leaves the trigger row')
+assert.deepEqual(progressRunsForTimelineEvent(reply, [trigger, reply], [progressRun]), [progressRun],
+  'the completed progress timeline moves onto its Agent reply')
+assert.equal(progressRunHasTimelineAnchor(progressRun, [trigger, reply]), true,
+  'a reply-linked run also stays out of the standalone bottom fallback')
+assert.equal(progressRunHasTimelineAnchor(progressRun, []), false,
+  'runs whose trigger is outside the loaded timeline retain a fallback row')
+assert.deepEqual(progressRunsForTimelineEvent(
+  { ...trigger, id: 'event-other', sessionId: 'session-b' }, [trigger], [progressRun],
+), [], 'runs never attach across sessions or to unrelated trigger messages')
+
+const activeRun = [{ sessionId: 'session-a', phase: 'tool-start' as const }]
+assert.equal(isSessionReplyActive({ sessionId: 'session-a', activeSessionId: null, runs: activeRun }), true,
+  'a live Agent run keeps the reply status active during a session-lock handoff')
+assert.equal(isSessionReplyActive({ sessionId: 'session-a', activeSessionId: 'session-a', runs: [] }), true,
+  'an active session lease marks the reply status active before progress arrives')
+assert.equal(isSessionReplyActive({ sessionId: 'session-a', activeSessionId: null, runs: [], pendingSessionIds: ['session-a'] }), true,
+  'a queued reply keeps the session visibly active before its run starts')
+assert.equal(isSessionReplyActive({
+  sessionId: 'session-a', activeSessionId: null,
+  runs: [{ sessionId: 'session-a', phase: 'completed' }],
+}), false, 'terminal progress does not leave the session stuck in the chatting state')
+assert.equal(isSessionReplyActive({
+  sessionId: 'session-a', activeSessionId: null,
+  runs: [{ sessionId: 'session-b', phase: 'processing' }],
+}), false, 'work in another session does not mark this session as chatting')
 
 assert.equal(settlesPendingReply({ authorKind: 'agent', sourceEventId: 'event-a' }), true,
   'an Agent result settles its matching pending reply')

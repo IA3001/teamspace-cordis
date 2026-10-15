@@ -2,6 +2,88 @@ export const MAX_PROGRESS_PREVIEW_CHARACTERS = 16_000
 
 export type ProgressPreviewPhase = 'started' | 'preparing' | 'assembling-context' | 'waiting-model' | 'processing' | 'tool-start' | 'tool-finish' | 'text-delta' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
 
+const TERMINAL_PROGRESS_PHASES = new Set<ProgressPreviewPhase>(['completed', 'failed', 'cancelled'])
+
+export interface ProgressTimelineEvent {
+  id: string
+  sessionId?: string
+  authorId?: string | null
+  authorKind?: string
+  kind?: string
+  sourceEventId?: string | null
+  sourceEventIds?: string[]
+  toolCalls?: Array<{ name: string; args: string }>
+}
+
+export interface AnchoredProgressRun {
+  sessionId: string
+  agentId: string
+  sourceEventId: string | null
+}
+
+function eventReferencesRun(event: ProgressTimelineEvent, run: AnchoredProgressRun): boolean {
+  // Context citations are not task triggers; one reply can cite earlier runs.
+  return Boolean(run.sourceEventId && event.sourceEventId === run.sourceEventId &&
+    (event.kind === undefined || event.kind === 'message'))
+}
+
+export function progressRunHasReply(run: AnchoredProgressRun, events: readonly ProgressTimelineEvent[]): boolean {
+  return Boolean(run.sourceEventId && events.some((event) => event.sessionId === run.sessionId &&
+    event.authorKind === 'agent' && event.authorId === run.agentId && eventReferencesRun(event, run)))
+}
+
+/** A completed draft can be rejected by speech policy instead of becoming a reply. */
+export function progressRunHasOutcome(run: AnchoredProgressRun, events: readonly ProgressTimelineEvent[]): boolean {
+  if (progressRunHasReply(run, events)) return true
+  return Boolean(run.sourceEventId && events.some((event) => event.sessionId === run.sessionId &&
+    event.sourceEventId === run.sourceEventId && event.authorKind === 'system' && event.kind === 'system' &&
+    event.toolCalls?.some((call) => {
+      if (call.name !== 'agent.reply.outcome') return false
+      try {
+        const result = JSON.parse(call.args)
+        return result?.agentId === run.agentId && result.status === 'blocked'
+      } catch { return false }
+    })))
+}
+
+/** Attach a run to its trigger message until its Agent reply appears, then move it to that reply. */
+export function progressRunsForTimelineEvent<T extends AnchoredProgressRun>(
+  event: ProgressTimelineEvent,
+  events: readonly ProgressTimelineEvent[],
+  runs: readonly T[],
+): T[] {
+  return runs.filter((run) => {
+    if (run.sessionId !== event.sessionId || !run.sourceEventId) return false
+    if (event.authorKind === 'agent' && event.authorId === run.agentId && eventReferencesRun(event, run)) return true
+    if (event.id !== run.sourceEventId) return false
+    return !progressRunHasReply(run, events)
+  })
+}
+
+/** Only unanchored runs need a standalone fallback row. */
+export function progressRunHasTimelineAnchor(
+  run: AnchoredProgressRun,
+  events: readonly ProgressTimelineEvent[],
+): boolean {
+  return Boolean(run.sourceEventId && events.some((event) => event.sessionId === run.sessionId &&
+    event.id === run.sourceEventId) || progressRunHasReply(run, events))
+}
+
+/**
+ * Session ownership can briefly disappear while the orchestrator hands work
+ * between owners. Keep the UI busy while its own Agent run or reply is live.
+ */
+export function isSessionReplyActive(input: {
+  sessionId: string
+  activeSessionId?: string | null
+  runs: Array<{ sessionId?: string; phase: ProgressPreviewPhase }>
+  pendingSessionIds?: string[]
+}): boolean {
+  return input.activeSessionId === input.sessionId ||
+    input.runs.some((run) => run.sessionId === input.sessionId && !TERMINAL_PROGRESS_PHASES.has(run.phase)) ||
+    Boolean(input.pendingSessionIds?.includes(input.sessionId))
+}
+
 export function settlesPendingReply(event: {
   sourceEventId?: string | null
   authorKind?: string

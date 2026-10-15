@@ -132,6 +132,42 @@ async function partA(): Promise<void> {
     ['projects', 'tasks', 'scripts', 'notes'].every((name) => existsSync(join(h1.root, name))))
   check('A2d list 按 agentId 排序', workdir.list().length === 1 && workdir.list()[0]!.agentId === 'agent.coder')
 
+  // A2f team file handoff: real filesystem copy, no overwrite, and secret-path guard.
+  agents.register({ id: 'agent.other', kind: 'coding', title: '另一个', capabilities: ['coding'] })
+  const transferSource = join(h1.root, 'notes', 'handoff.ts')
+  writeFileSync(transferSource, 'export const answer = 42\n')
+  await workdir.writeFile({ kind: 'agent', agentId: 'agent.coder' }, 'projects/upload.bin', new Uint8Array([0, 1, 127, 255]))
+  check('A2f1 上传保留任意二进制字节', Buffer.from(await workdir.readFile({ kind: 'agent', agentId: 'agent.coder' }, 'projects/upload.bin')).equals(Buffer.from([0, 1, 127, 255])))
+  let uploadConflict = ''
+  try { await workdir.writeFile({ kind: 'agent', agentId: 'agent.coder' }, 'projects/upload.bin', new Uint8Array([9])) }
+  catch (error) { uploadConflict = (error as Error).message }
+  check('A2f2 上传同名文件拒绝覆盖', uploadConflict.includes('未覆盖') && Buffer.from(readFileSync(join(h1.root, 'projects', 'upload.bin'))).equals(Buffer.from([0, 1, 127, 255])))
+  await workdir.writeFile({ kind: 'shared' }, 'incoming/交接.bin', new Uint8Array([2, 3, 4]))
+  check('A2f3 上传支持共享工作区和中文文件名', Buffer.from(await workdir.readFile({ kind: 'shared' }, 'incoming/交接.bin')).equals(Buffer.from([2, 3, 4])))
+  let secretUploadRejected = false
+  try { await workdir.writeFile({ kind: 'shared' }, '.env', new Uint8Array([1])) }
+  catch { secretUploadRejected = true }
+  check('A2f4 上传禁止写入凭据路径', secretUploadRejected)
+  let uploadTraversalRejected = false
+  try { await workdir.writeFile({ kind: 'shared' }, '../outside.txt', new Uint8Array([1])) }
+  catch { uploadTraversalRejected = true }
+  check('A2f5 上传路径不能越出工作区', uploadTraversalRejected && !existsSync(join(tmp, 'outside.txt')))
+  await workdir.copyFile({ kind: 'agent', agentId: 'agent.coder' }, 'notes/handoff.ts', { kind: 'agent', agentId: 'agent.other' })
+  const transferredPath = join(tmp, 'workdirs', 'agent.other', 'handoff.ts')
+  check('A2f Agent 文件可复制到另一工作区且内容一致', existsSync(transferredPath) && readFileSync(transferredPath, 'utf8') === 'export const answer = 42\n')
+  await workdir.copyFile({ kind: 'agent', agentId: 'agent.coder' }, 'notes/handoff.ts', { kind: 'shared' })
+  check('A2g Agent 文件可复制到公共工作区', readFileSync(join(tmp, 'shared-workspace', 'handoff.ts'), 'utf8') === 'export const answer = 42\n')
+  await workdir.copyFile({ kind: 'shared' }, 'handoff.ts', { kind: 'agent', agentId: 'agent.coder' })
+  check('A2g2 公共工作区文件可复制回 Agent 工作区', readFileSync(join(h1.root, 'handoff.ts'), 'utf8') === 'export const answer = 42\n')
+  let transferConflict = ''
+  try { await workdir.copyFile({ kind: 'agent', agentId: 'agent.coder' }, 'notes/handoff.ts', { kind: 'agent', agentId: 'agent.other' }) }
+  catch (error) { transferConflict = (error as Error).message }
+  check('A2h 同名目标拒绝覆盖并说明原因', transferConflict.includes('未覆盖'))
+  let secretTransferRejected = false
+  try { await workdir.copyFile({ kind: 'agent', agentId: 'agent.coder' }, 'notes/.env', { kind: 'shared' }) }
+  catch { secretTransferRejected = true }
+  check('A2i 敏感文件禁止工作区互传', secretTransferRejected)
+
   // A3 resolve：路径边界判定（execdir 铁则）
   const inside = workdir.resolve('agent.coder', 'sub/dir/task.md')
   check('A3a root 内相对路径解析通过', inside.startsWith(h1.root))

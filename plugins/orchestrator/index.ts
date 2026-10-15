@@ -441,7 +441,7 @@ export class OrchestratorEngine extends OrchestratorService {
       if (this.activeSession()) return
       const nextIndex = this.workQueue.findIndex((item) => {
         const sid = item.kind === 'external' ? item.sessionId : item.payload.sessionId
-        return !this.decisionReviewHolds.has(sid)
+        return !this.decisionReviewHolds.has(sid) && !this.hasPendingHumanDecision(sid)
       })
       if (nextIndex < 0) return
       const [next] = this.workQueue.splice(nextIndex, 1)
@@ -463,15 +463,20 @@ export class OrchestratorEngine extends OrchestratorService {
         try { this.ctx.sessionWork.cancelQueued(sessionId, 'orchestrator-queue') } catch { /* optional in isolated verifier contexts */ }
         void this.onPlan(next.payload).catch((e: unknown) => {
           this.ctx.logger.error('[orchestrator] 排队任务启动失败（会话 %s）：%s', sessionId, (e as Error).message)
-        }).finally(() => this.scheduleQueueDrain())
+        }).finally(() => {
+          // onPlan may put this same item back when another owner entered the
+          // session between the queue check and the handoff. Wait for the
+          // session-work change signal instead of spinning through microtasks.
+          if (!this.queuedEventIds.has(eventId)) this.scheduleQueueDrain()
+        })
       } else if (next.kind === 'continue') {
         this.recoveringSessions.delete(sessionId)
         this.resumeContinuation(next.payload)
-        this.scheduleQueueDrain()
+        if (!this.queuedEventIds.has(eventId)) this.scheduleQueueDrain()
       } else {
         this.recoveringSessions.delete(sessionId)
         this.startExternalDelegate(next.sessionId, next.eventId, next.target, next.instruction)
-        this.scheduleQueueDrain()
+        if (!this.queuedEventIds.has(eventId)) this.scheduleQueueDrain()
       }
     })
   }
@@ -500,6 +505,27 @@ export class OrchestratorEngine extends OrchestratorService {
       }
     } catch { /* retain standalone engine support for isolated verifier contexts */ }
     if (this.reconcileCompletedPlan(payload)) return null
+
+    // An explicit @ of one active Agent is a routing decision, not a suggestion
+    // for the coordinator to reinterpret. This also makes a bare @ actionable.
+    const directTarget = this.resolveExplicitMention(sessionId, event.mentions)
+    if (directTarget) {
+      this.inFlight.add(sessionId)
+      try {
+        const instruction = event.text.replace(/@[^\s@]+/gu, '').trim() ||
+          `请结合当前会话上下文直接回应这次 @。如果没有具体问题，请简要介绍你的职责及可提供的帮助。`
+        this.beginExternalDelegate(sessionId, event.id, directTarget, instruction)
+        return {
+          case: 'delegated', reply: '',
+          delegation: { target: directTarget, instruction }, reason: 'explicit_mention',
+        }
+      } finally {
+        this.inFlight.delete(sessionId)
+        this.releaseSessionIfIdle(sessionId)
+        this.scheduleQueueDrain()
+      }
+    }
+
     this.inFlight.add(sessionId)
     this.activeDecisions.set(event.id, { payload, resetTurn: true })
     if (!this.persistState()) {
@@ -517,6 +543,16 @@ export class OrchestratorEngine extends OrchestratorService {
       this.releaseSessionIfIdle(sessionId)
       this.scheduleQueueDrain()
     }
+  }
+
+  private resolveExplicitMention(sessionId: string, mentions: readonly string[]): string | null {
+    if (mentions.length === 0) return null
+    try {
+      const activeMembers = new Set(this.ctx.session.listMembers(sessionId, true).map((member) => member.principalId))
+      const matches = this.ctx.agents.list()
+        .filter((agent) => activeMembers.has(agent.descriptor.id) && mentions.includes(agent.descriptor.id))
+      return matches.length === 1 ? matches[0]!.descriptor.title : null
+    } catch { return null }
   }
 
   private hasPendingHumanDecision(sessionId: string): boolean {
@@ -815,6 +851,8 @@ export class OrchestratorEngine extends OrchestratorService {
     sessionId: string; agentId: string; title: string; text: string;
     sourceEventId: string | null; sourceEventIds: string[];
     worklog?: import('space-agent-runtime').AgentWorklogStep[];
+    citations?: import('space-event').EventCitation[];
+    modelTrace?: import('space-agent-runtime').AgentModelInteraction[];
   }): SessionEvent {
     const history = this.ctx.eventLog.listBySession(input.sessionId)
     // Long-term Agent memory may cite events from other sessions. Those sources
@@ -840,7 +878,11 @@ export class OrchestratorEngine extends OrchestratorService {
         id: randomUUID(), sessionId: input.sessionId, authorId: null, phaseId: null,
         authorKind: 'system', kind: 'system',
         text: blockedSpeechNotice(input.title, decision.reason!),
-        mentions: [], toolCalls: [], replyMode: '',
+        sourceEventId: input.sourceEventId,
+        mentions: [], toolCalls: [
+          { name: 'agent.reply.outcome', args: JSON.stringify({ agentId: input.agentId, status: 'blocked', reason: decision.reason }) },
+          ...(input.worklog?.length ? [{ name: 'agent.worklog', args: JSON.stringify(input.worklog) }] : []),
+        ], replyMode: '',
       })
     }
     return this.ctx.eventLog.append({
@@ -853,8 +895,10 @@ export class OrchestratorEngine extends OrchestratorService {
       text: input.text,
       mentions: [],
       toolCalls: input.worklog?.length
-        ? [{ name: 'agent.worklog', args: JSON.stringify(input.worklog) }]
-        : [],
+        ? [{ name: 'agent.worklog', args: JSON.stringify(input.worklog) },
+          ...(input.modelTrace?.length ? [{ name: 'agent.model.trace', args: JSON.stringify(input.modelTrace) }] : [])]
+        : input.modelTrace?.length ? [{ name: 'agent.model.trace', args: JSON.stringify(input.modelTrace) }] : [],
+      citations: input.citations,
       replyMode: '',
       sourceEventId: input.sourceEventId,
       sourceEventIds,
@@ -865,6 +909,8 @@ export class OrchestratorEngine extends OrchestratorService {
   reportAgentResult(
     sessionId: string, target: string, text: string, sourceEventIds: string[] = [],
     worklog?: import('space-agent-runtime').AgentWorklogStep[],
+    citations?: import('space-event').EventCitation[],
+    modelTrace?: import('space-agent-runtime').AgentModelInteraction[],
   ): SessionEvent {
     // 同 reportFeedback：账本单一真相源，不卡回合状态（流程轨时序交叠）。
     const t = this.turns.get(sessionId)
@@ -886,7 +932,7 @@ export class OrchestratorEngine extends OrchestratorService {
     const sourceEventId = this.delegationSources.get(this.delegationKey(sessionId, target))
     const result = this.appendAgentReply({
       sessionId, agentId: agent.descriptor.id, title: agent.descriptor.title,
-      text, sourceEventId: sourceEventId ?? null, sourceEventIds, worklog,
+      text, sourceEventId: sourceEventId ?? null, sourceEventIds, worklog, citations, modelTrace,
     })
     this.settleDelegation(sessionId, target)
     return result
@@ -1034,7 +1080,7 @@ export class OrchestratorEngine extends OrchestratorService {
   }
 }
 
-/** Barrier shared by the live @ route and its integration verifier. */
+/** Explicit barrier for callers that truly require durable inbox memories. */
 export async function waitForMentionedAgentHistory(
   ctx: Context,
   sessionId: string,
@@ -1047,6 +1093,39 @@ export async function waitForMentionedAgentHistory(
   await Promise.all(mentionedAgents.map((id) => ctx.agentInbox.waitThrough(id, sessionId, seq)))
 }
 
+/** Recover a recent explicit @ that was recorded but never produced a reply. */
+export function latestUnansweredExplicitMention(
+  ctx: Context,
+  sessionId: string,
+  now = Date.now(),
+): PlanPayload | null {
+  try {
+    const events = ctx.eventLog.listBySession(sessionId)
+    const event = events.at(-1)
+    if (!event || event.kind !== 'message' || event.authorKind !== 'human' || event.voided || !event.authorId) return null
+    const age = now - Date.parse(event.ts)
+    if (!Number.isFinite(age) || age < 0 || age > 30 * 60_000) return null
+    if (event.mentions.length === 0) return null
+    if (events.some((later) => later.seq > event.seq &&
+      (later.sourceEventId === event.id || later.sourceEventIds.includes(event.id)))) return null
+    const activeMembers = new Set(ctx.session.listMembers(sessionId, true).map((member) => member.principalId))
+    const mentionedAgents = ctx.agents.list().filter((agent) => activeMembers.has(agent.descriptor.id) &&
+      event.mentions.includes(agent.descriptor.id))
+    if (mentionedAgents.length !== 1) return null
+    return { sessionId, authorId: event.authorId, event }
+  } catch { return null }
+}
+
+/** Backward-compatible query for the legacy, bare-@ recovery case. */
+export function latestUnansweredBareMention(
+  ctx: Context,
+  sessionId: string,
+  now = Date.now(),
+): PlanPayload | null {
+  const payload = latestUnansweredExplicitMention(ctx, sessionId, now)
+  return payload && !payload.event.text.replace(/@[^\s@]+/gu, '').trim() ? payload : null
+}
+
 export function apply(ctx: Context, config: Config = {}) {
   const engine = new OrchestratorEngine(ctx, config)
   const inboxPauseNotices = new InboxPauseNoticeGate()
@@ -1056,34 +1135,27 @@ export function apply(ctx: Context, config: Config = {}) {
     void engine.onPlan(payload)
   })
   // 接缝二（IM 主路径，2026-09-30）：@ 了任何 a_* 成员或会议目标角色才
-  // 触发回合；纯聊天（mentions 为空 / 只 @ 人类）不打扰 AI。
+  // 触发回合；纯聊天（mentions 为空 / 只 @ 人类）不打扰 AI。收件箱记忆沉淀
+  // 与当前定向任务并行，不能让新 @ 等待历史消息逐条调用模型。
   ctx.on('space/plan', (signal: PlanSignal) => {
     const members = ctx.session.listMembers(signal.sessionId, true)
     const memberIds = new Set(members.map((m) => m.principalId))
     const wantsAi = signal.mentions.some((m) => m.startsWith('a_') || memberIds.has(m))
     if (!wantsAi) return
-    void waitForMentionedAgentHistory(ctx, signal.sessionId, signal.mentions, signal.event.seq)
-      .then(async () => {
-        inboxPauseNotices.recovered(signal.sessionId)
-        try {
-          await engine.onPlan({
-            sessionId: signal.sessionId,
-            authorId: signal.authorId,
-            event: signal.event,
-          })
-        } catch (error) {
-          ctx.logger.error('[orchestrator] @ Plan 执行失败（session=%s, event=%s）：%s',
-            signal.sessionId, signal.event.id, (error as Error).message)
-        }
-      }, (error: unknown) => {
-      ctx.logger.error('[orchestrator] @ 回复前 Agent 消息游标追赶失败（session=%s）：%s',
-        signal.sessionId, (error as Error).message)
+    inboxPauseNotices.recovered(signal.sessionId)
+    void engine.onPlan({
+      sessionId: signal.sessionId,
+      authorId: signal.authorId,
+      event: signal.event,
+    }).catch((error: unknown) => {
+      ctx.logger.error('[orchestrator] @ Plan 执行失败（session=%s, event=%s）：%s',
+        signal.sessionId, signal.event.id, (error as Error).message)
       if (!inboxPauseNotices.shouldAnnounce(signal.sessionId)) return
       try {
         ctx.eventLog.append({
           id: randomUUID(), sessionId: signal.sessionId, authorId: null, phaseId: null,
           authorKind: 'system', kind: 'system', sourceEventId: signal.event.id,
-          text: 'Agent 正在顺序处理更早的会话消息；本次 @ 回复已暂停。系统会在后台重试，完成后请重新 @ 发起回复。',
+          text: 'Agent 当前无法启动这条 @ 任务；消息已保留，请检查运行状态后重试。',
           mentions: [], toolCalls: [], replyMode: '',
         })
       } catch (appendError) {
@@ -1097,6 +1169,9 @@ export function apply(ctx: Context, config: Config = {}) {
   // 决定是否继续（exactly-once 信号源在 eventlog.append 内部，这里只消费）。
   ctx.on('space/event-appended', ({ event }) => {
     engine.handleAgentEvent(event)
+    // A queued plan held by a pending human decision can resume only when a
+    // decision/approval event changes that condition.
+    if (event.kind === 'decision' || event.kind === 'approval') engine.wakeQueue()
   })
   // 回合状态只读口（P4 右栏「已暂停/暂停原因/调用次数」的数据源；Part B 的探针）。
   ctx.server.get('/api/sessions/:id/turn', async (req) => {
@@ -1120,5 +1195,13 @@ export function apply(ctx: Context, config: Config = {}) {
   ctx.on('app/ready', () => {
     ctx.logger.info('[orchestrator] 应用清单就绪，恢复持久回合与队列')
     engine.recoverPersistedWork()
+    for (const session of ctx.session.listSessions()) {
+      const payload = latestUnansweredExplicitMention(ctx, session.id)
+      if (!payload || engine.turn(session.id).state === 'chain') continue
+      void engine.onPlan(payload).catch((error: unknown) => ctx.logger.warn(
+        '[orchestrator] 恢复未回复的 @ 消息失败（session=%s, event=%s）：%s',
+        session.id, payload.event.id, (error as Error).message,
+      ))
+    }
   }, { global: true })
 }

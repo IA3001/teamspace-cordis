@@ -425,6 +425,26 @@ const judge = (name, ok, detail) => { console.log(`[AS] ${name}: ${ok ? 'GREEN' 
     syntheticClockInstalled = false
     await page.reload({ waitUntil: 'networkidle' })
     await page.locator('textarea').waitFor({ state: 'visible', timeout: 10000 })
+    const restoredRow = page.locator('.sp-msg').filter({ hasText: '需求分析师 · 正在工作' }).last()
+    await restoredRow.waitFor({ state: 'visible', timeout: 3000 })
+    const restoredHeader = await restoredRow.locator('.sp-progress-card .el-collapse-item__header').innerText()
+    const refreshKeepsWorklog = restoredHeader.includes('正在请求模型，等待首个响应')
+    detail.push(`刷新后从本地进度快照恢复工作记录卡片与当前阶段=${refreshKeepsWorklog}（${restoredHeader.trim()}）`)
+    ok &&= refreshKeepsWorklog
+    // Remove the synthetic run from the test browser so later UI scenarios do
+    // not inherit it as if it were real user work.
+    await page.evaluate((runId) => {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)
+        if (!key?.startsWith('space_agent_progress_v1_')) continue
+        try {
+          const runs = JSON.parse(localStorage.getItem(key) ?? '[]')
+          localStorage.setItem(key, JSON.stringify(runs.filter((run) => run.runId !== runId)))
+        } catch { /* ignore invalid fixture state */ }
+      }
+    }, runId)
+    await page.reload({ waitUntil: 'networkidle' })
+    await page.locator('textarea').waitFor({ state: 'visible', timeout: 10000 })
   } catch (e) {
     ok = false
     detail.push('异常:' + String(e).slice(0, 140))
@@ -958,6 +978,14 @@ console.log('== 断言区 ==')
     const agentErrors = []
     agentPage.on('pageerror', (e) => agentErrors.push(String(e).slice(0, 120)))
     await agentPage.goto(`${teamspaceBase}/teamspace/agents`, { waitUntil: 'networkidle', timeout: 20000 })
+    const redundantNavigationRemoved = !(await agentPage.getByText('返回会话', { exact: true }).count()) &&
+      !(await agentPage.getByText('团队共享资源', { exact: true }).count())
+    const topBarRemoved = await agentPage.locator('.sp-agent-directory-page').evaluate((element) => {
+      const header = element.closest('.sp-compact-header-layout')?.querySelector('.layout-header')
+      return Boolean(header && getComputedStyle(header).display === 'none' && header.getBoundingClientRect().height === 0)
+    })
+    detail.push(`重复回退栏、资源徽标和空顶栏已移除=${redundantNavigationRemoved && topBarRemoved}`)
+    ok &&= redundantNavigationRemoved && topBarRemoved
     const fontFamily = await agentPage.locator('.k-layout').evaluate((element) => getComputedStyle(element).fontFamily)
     const genericFamily = fontFamily.split(',').at(-1)?.trim().replace(/^['"]|['"]$/g, '')
     detail.push(`共享无衬线字体=${fontFamily}`)
@@ -987,6 +1015,16 @@ console.log('== 断言区 ==')
     await agentPage.screenshot({ path: '/tmp/ui-agent-management-final.png' })
     await promptTab.click()
     const promptEditorSeparated = await agentPage.locator('.sp-agent-prompt-editor').isVisible()
+    const promptColumns = await agentPage.evaluate(() => {
+      const directory = document.querySelector('.sp-agent-prompt-directory')
+      const main = document.querySelector('.sp-agent-prompt-main')
+      const page = document.querySelector('.sp-agent-directory-page .sp-agent-page-inner')
+      return { directory: directory?.getBoundingClientRect().width ?? 0, main: main?.getBoundingClientRect().width ?? 0,
+        pageWidth: page?.getBoundingClientRect().width ?? 0, viewportWidth: innerWidth }
+    })
+    const promptListHasRoom = promptColumns.directory / promptColumns.main >= 0.42 && promptColumns.pageWidth >= promptColumns.viewportWidth * 0.9
+    detail.push(`共享提示词列表与页面充分利用可用宽度=${promptListHasRoom}（页面 ${Math.round(promptColumns.pageWidth)}/${Math.round(promptColumns.viewportWidth)}px，目录/编辑区 ${Math.round(promptColumns.directory)}/${Math.round(promptColumns.main)}px）`)
+    ok &&= promptListHasRoom
     const promptAlignment = await agentPage.locator('.sp-agent-prompt-menu-item').first().evaluate((element) => {
       const labels = [...element.querySelectorAll('.el-text')]
       const leftEdges = labels.map((label) => label.getBoundingClientRect().left)
@@ -1098,6 +1136,15 @@ console.log('== 断言区 ==')
       const pagination = document.querySelector('.sp-memory-page .sp-memory-pagination')
       const agentScroller = document.querySelector('.sp-memory-agent-scroll .el-scrollbar__wrap')
       const folderScroller = document.querySelector('.sp-memory-folder-scroll .el-scrollbar__wrap')
+      const table = document.querySelector('.sp-memory-list-card .el-table')
+      const header = table?.querySelector('.el-table__header-wrapper')
+      const listBody = document.querySelector('.sp-memory-list-card .el-card__body')
+      const tableHeaders = [...(header?.querySelectorAll('th') ?? [])].filter((cell) => getComputedStyle(cell).display !== 'none')
+      const listRect = listBody?.getBoundingClientRect()
+      const columnsVisible = Boolean(listRect && table && tableHeaders.length >= 4 && table.offsetWidth <= (listBody?.clientWidth ?? 0) + 1 && tableHeaders.every((cell) => {
+        const rect = cell.getBoundingClientRect()
+        return rect.width > 0 && rect.left >= listRect.left - 1 && rect.right <= listRect.right + 1
+      }))
       const paginationRect = pagination?.getBoundingClientRect()
       return {
         documentOverflow: Boolean(root && root.scrollHeight > root.clientHeight + 1),
@@ -1105,12 +1152,57 @@ console.log('== 断言区 ==')
         paginationVisible: Boolean(paginationRect && paginationRect.top >= 0 && paginationRect.bottom <= innerHeight),
         agentListConstrained: Boolean(agentScroller && agentScroller.clientHeight > 0 && getComputedStyle(agentScroller).overflowY !== 'visible'),
         folderTreeConstrained: Boolean(folderScroller && folderScroller.clientHeight > 0 && getComputedStyle(folderScroller).overflowY !== 'visible'),
+        columnsVisible,
+        redundantNavigationRemoved: !document.body.innerText.includes('返回会话'),
+        topBarRemoved: Boolean(page?.closest('.sp-compact-header-layout')?.querySelector('.layout-header') &&
+          getComputedStyle(page.closest('.sp-compact-header-layout').querySelector('.layout-header')).display === 'none'),
+        pageUsesViewport: Boolean(page && page.getBoundingClientRect().width >= innerWidth * 0.9),
       }
     })
-    detail.push(`document 无滚动=${!metrics.documentOverflow} | 页面容器无滚动=${!metrics.pageOverflow} | Agent 列表内部可滚动=${metrics.agentListConstrained} | 文件夹树内部可滚动=${metrics.folderTreeConstrained} | 分页控件在视口内=${metrics.paginationVisible}`)
-    ok &&= !metrics.documentOverflow && !metrics.pageOverflow && metrics.paginationVisible && metrics.agentListConstrained && metrics.folderTreeConstrained
+    detail.push(`document 无滚动=${!metrics.documentOverflow} | 页面容器无滚动=${!metrics.pageOverflow} | Agent 列表内部可滚动=${metrics.agentListConstrained} | 文件夹树内部可滚动=${metrics.folderTreeConstrained} | 分页控件在视口内=${metrics.paginationVisible} | 表格列完整位于面板内=${metrics.columnsVisible} | 重复导航与空顶栏已移除=${metrics.redundantNavigationRemoved && metrics.topBarRemoved} | 页面使用视口宽度=${metrics.pageUsesViewport}`)
+    ok &&= !metrics.documentOverflow && !metrics.pageOverflow && metrics.paginationVisible && metrics.agentListConstrained && metrics.folderTreeConstrained && metrics.columnsVisible && metrics.redundantNavigationRemoved && metrics.topBarRemoved && metrics.pageUsesViewport
   } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 120)) }
   judge('AS28 记忆库固定视口并仅列表内部滚动', ok, detail.join(' | '))
+}
+
+// The selected memory and its metadata share one readable, internally scrollable drawer.
+{
+  let ok = true; const detail = []
+  try {
+    const firstMemory = page.locator('.sp-memory-list-card .el-table__row').filter({ hasText: '记忆详情长文本换行验收' }).first()
+    await firstMemory.waitFor({ timeout: 10000 })
+    await firstMemory.click()
+    const drawer = page.locator('.el-drawer').filter({ has: page.getByRole('heading', { name: '记忆详情' }) })
+    await drawer.waitFor({ state: 'visible', timeout: 5000 })
+    const initial = await drawer.evaluate((element) => {
+      const scroll = element.querySelector('.el-drawer__body .el-scrollbar')
+      const viewport = scroll?.querySelector('.el-scrollbar__wrap')
+      const text = element.querySelector('.el-drawer__body textarea')
+      const metadata = element.querySelector('.el-descriptions')
+      const move = [...element.querySelectorAll('button')].find((button) => button.textContent?.trim() === '移动')
+      return {
+        oneScrollRegion: Boolean(viewport && text && metadata && move && viewport.contains(text) && viewport.contains(metadata) && viewport.contains(move)),
+        textWraps: Boolean(text && text.readOnly && text.wrap !== 'off' && text.value.includes('记忆详情长文本换行验收') && text.value.length > 3000 && text.clientWidth > 0 && text.scrollWidth <= text.clientWidth + 1),
+        scrollable: Boolean(viewport && viewport.scrollHeight > viewport.clientHeight + 20),
+      }
+    })
+    await drawer.locator('.el-scrollbar__wrap').evaluate((element) => { element.scrollTop = element.scrollHeight })
+    await page.waitForTimeout(50)
+    const controlsReachable = await drawer.evaluate((element) => {
+      const viewport = element.querySelector('.el-drawer__body .el-scrollbar__wrap')
+      const metadata = element.querySelector('.el-descriptions')
+      const move = [...element.querySelectorAll('button')].find((button) => button.textContent?.trim() === '移动')
+      const viewportRect = viewport?.getBoundingClientRect()
+      const metadataRect = metadata?.getBoundingClientRect()
+      const moveRect = move?.getBoundingClientRect()
+      return Boolean(viewport && viewport.scrollTop > 0 && viewportRect && metadataRect && moveRect &&
+        metadataRect.top >= viewportRect.top && metadataRect.bottom <= viewportRect.bottom + 1 &&
+        moveRect.top >= viewportRect.top && moveRect.bottom <= viewportRect.bottom + 1)
+    })
+    detail.push(`长夹具正文自然换行=${initial.textWraps} | 正文、元信息、移动操作共用滚动区=${initial.oneScrollRegion} | 长内容产生内部滚动=${initial.scrollable} | 滚到底部后元信息和操作可达=${controlsReachable}`)
+    ok &&= initial.textWraps && initial.oneScrollRegion && initial.scrollable && controlsReachable
+  } catch (e) { ok = false; detail.push('异常:' + String(e).slice(0, 120)) }
+  judge('AS32 记忆详情正文换行且完整内容可在抽屉内滚动', ok, detail.join(' | '))
 }
 
 // Agent management and workspace pages keep scrolling inside their content panes.
@@ -1128,6 +1220,15 @@ console.log('== 断言区 ==')
         await page.getByText('团队 Agent', { exact: true }).waitFor({ timeout: 5000 })
         await page.getByRole('tab', { name: '文件' }).waitFor({ timeout: 5000 })
       }
+      const redundantNavigationRemoved = !(await page.getByText('返回会话', { exact: true }).count())
+      const workspaceHelpRemoved = item.path !== '/teamspace/workspaces' || !(await page.getByText('工作区目录规范', { exact: true }).count())
+      const topBarRemoved = await page.locator(item.selector).evaluate((element) => {
+        const header = element.closest('.sp-compact-header-layout')?.querySelector('.layout-header')
+        return Boolean(header && getComputedStyle(header).display === 'none' && header.getBoundingClientRect().height === 0)
+      })
+      const pageUsesViewport = await page.locator(item.selector).locator('.sp-agent-page-inner').evaluate((element) => element.getBoundingClientRect().width >= innerWidth * 0.9)
+      detail.push(`${item.path}: 重复导航与空顶栏移除=${redundantNavigationRemoved && topBarRemoved} | 页面充分利用可用宽度=${pageUsesViewport} | 占空间的目录说明移除=${workspaceHelpRemoved}`)
+      ok &&= redundantNavigationRemoved && topBarRemoved && workspaceHelpRemoved && pageUsesViewport
       const metrics = await page.evaluate(({ selector, needsAgentScroll }) => {
         const root = document.scrollingElement
         const surface = document.querySelector(selector)
@@ -1438,6 +1539,55 @@ console.log('== 断言区 ==')
     await page.screenshot({ path: '/tmp/ui-kb-load-failure.png' })
     await retry.click()
     await loadError.waitFor({ state: 'hidden', timeout: 10000 })
+
+    const unnecessaryBackActionRemoved = !(await page.getByRole('button', { name: '← 团队空间', exact: true }).count())
+    detail.push(`知识库无用的团队空间回退入口已移除=${unnecessaryBackActionRemoved}`)
+    ok &&= unnecessaryBackActionRemoved
+    const redundantTopBarRemoved = await page.locator('.sp-kb-wrap').evaluate((element) => {
+      const header = document.querySelector('.layout-header')
+      return !header || (getComputedStyle(header).display === 'none' && header.getBoundingClientRect().height === 0)
+    })
+    detail.push(`知识库重复空顶栏已隐藏=${redundantTopBarRemoved}`)
+    ok &&= redundantTopBarRemoved
+
+    const columnWidths = await page.evaluate(() => {
+      const list = document.querySelector('.sp-kb-document-list-column')
+      const detail = document.querySelector('.sp-kb-document-detail-column')
+      const root = document.querySelector('.sp-kb-wrap')
+      const tabs = document.querySelector('.sp-kb-tabs')
+      const tabContent = document.querySelector('.sp-kb-tabs > .el-tabs__content')
+      const pane = document.querySelector('.sp-kb-tabs .el-tab-pane')
+      const workspace = document.querySelector('.sp-kb-master-detail')
+      const listWidth = list?.getBoundingClientRect().width ?? 0
+      const detailWidth = detail?.getBoundingClientRect().width ?? 0
+      const workspaceRect = workspace?.getBoundingClientRect()
+      const describe = (element) => element ? {
+        className: String(element.className).slice(0, 70), height: Math.round(element.getBoundingClientRect().height),
+        display: getComputedStyle(element).display, flex: getComputedStyle(element).flex,
+      } : null
+      const ancestors = []
+      for (let element = root; element && ancestors.length < 6; element = element.parentElement) ancestors.push(describe(element))
+      return {
+        listWidth, detailWidth, listToDetail: detailWidth ? listWidth / detailWidth : 0,
+        rootWidthRatio: (root?.getBoundingClientRect().width ?? 0) / document.documentElement.clientWidth,
+        rootHeight: root?.getBoundingClientRect().height ?? 0,
+        tabsHeight: tabs?.getBoundingClientRect().height ?? 0,
+        tabContentHeight: tabContent?.getBoundingClientRect().height ?? 0,
+        paneHeight: pane?.getBoundingClientRect().height ?? 0,
+        ancestors,
+        tabsFlex: tabs ? getComputedStyle(tabs).flex : '',
+        tabContentFlex: tabContent ? getComputedStyle(tabContent).flex : '',
+        paneFlex: pane ? getComputedStyle(pane).flex : '',
+        workspaceHeight: workspaceRect?.height ?? 0,
+        workspaceBottom: workspaceRect?.bottom ?? 0,
+        viewportHeight: document.documentElement.clientHeight,
+      }
+    })
+    const layoutUsesViewport = columnWidths.rootWidthRatio >= 0.72 && columnWidths.rootWidthRatio <= 0.9 && columnWidths.listToDetail >= 0.65 &&
+      columnWidths.detailWidth >= 520 && columnWidths.workspaceHeight >= columnWidths.viewportHeight * 0.55 &&
+      columnWidths.workspaceBottom >= columnWidths.viewportHeight - 180
+    detail.push(`知识库使用宽屏和剩余高度=${layoutUsesViewport}（根宽比 ${columnWidths.rootWidthRatio.toFixed(2)}，根/标签/内容/面板高 ${columnWidths.rootHeight.toFixed(0)}/${columnWidths.tabsHeight.toFixed(0)}/${columnWidths.tabContentHeight.toFixed(0)}/${columnWidths.workspaceHeight.toFixed(0)}px，列表/详情 ${columnWidths.listWidth.toFixed(0)}/${columnWidths.detailWidth.toFixed(0)}px，面板底 ${columnWidths.workspaceBottom.toFixed(0)}px，布局 ${JSON.stringify(columnWidths.ancestors)}，flex ${columnWidths.tabsFlex}/${columnWidths.tabContentFlex}/${columnWidths.paneFlex}）`)
+    ok &&= layoutUsesViewport
 
     const folderTree = page.locator('.sp-kb-folder-scroll .el-tree')
     const folderRoot = folderTree.locator('.el-tree-node__content').filter({ hasText: '全部资料' }).first()

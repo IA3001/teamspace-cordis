@@ -55,7 +55,7 @@ import { SqliteAgentCatalog } from '../packages/impl/space-store-sqlite/src/agen
 import { SqliteUserStore } from '../packages/impl/space-store-sqlite/src/users.ts'
 import { loadMigrations } from '../packages/impl/space-store-sqlite/src/loader.ts'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
-import { AGENT_PROGRESS_HEARTBEAT_MS, apply as runtimeApply } from '../packages/impl/space-agent-runtime/src/index.ts'
+import { AGENT_PROGRESS_HEARTBEAT_MS, apply as runtimeApply, inject as runtimeInject } from '../packages/impl/space-agent-runtime/src/index.ts'
 import { apply as agentDispatcherApply } from '../plugins/agent-runtime-dispatcher/index.ts'
 import { apply as brainApply } from '../plugins/brain-stub/index.ts'
 import { apply as brainLlmApply } from '../plugins/brain-llm/index.ts'
@@ -215,19 +215,18 @@ async function partB(): Promise<void> {
     uninvitedResult?.case === 'replied' && uninvitedResult.delegation === null && ctx.agents.get('agent.tester').status === 'idle',
     JSON.stringify({ result: uninvitedResult, status: ctx.agents.get('agent.tester').status }))
 
-  // B1 分支一（命中）：@编码者 → 合法 JSON 委托，instruction = 人类原话。
+  // B1 分支一（命中）：显式 @ 唯一 Agent 直接路由，正文作为执行指令。
   const HUMAN = '@agent.coder 实现登录页，先出方案'
+  const instruction = '实现登录页，先出方案'
   const ev1 = humanCommit(ctx, session.id, 'u_dri', HUMAN, ['agent.coder'])
   const r1 = await engine.onPlan({ sessionId: session.id, authorId: 'u_dri', event: ev1 })
   await new Promise((r) => setTimeout(r, 80)) // 委托认领是异步（事件总线）
   check('B1a 命中 → delegated', r1?.case === 'delegated', JSON.stringify(r1))
   check('B1b 委托目标 = 名册 title（编码者）', r1?.delegation?.target === '编码者', JSON.stringify(r1?.delegation))
-  check('B1c instruction = 人类原话（逐字透传）', r1?.delegation?.instruction === HUMAN, JSON.stringify(r1?.delegation?.instruction))
+  check('B1c @ 正文作为指令原文直达 Agent', r1?.delegation?.instruction === instruction, JSON.stringify(r1?.delegation?.instruction))
   const evs1 = ctx.eventLog.listBySession(session.id)
   const announce = evs1.find((e) => e.authorId === 'a_coordinator' && e.text.includes('将委托[编码者]'))
-  check('B1d 宣告带大脑附言且明示占位（非 NLP）',
-    !!announce && announce.text.includes('大脑附言') && announce.text.includes('【占位】') && announce.text.includes('非 NLP'),
-    announce?.text)
+  check('B1d 显式 @ 直达不伪造协调者决策宣告', !announce)
 
   // B2 回执链路闭环：coder 认领 → 工作区落盘（含提示词段）→ 收执 → await_human。
   const receipt = evs1.find((e) => e.authorId === 'agent.coder' && e.authorKind === 'agent')
@@ -331,6 +330,8 @@ async function partC(): Promise<void> {
 // ══════════════════════════════════════════════════════════════════════════
 async function partD(): Promise<void> {
   section('Part D：catalog Agent 回归（目录形状 / 委托定向性 / /tell 共享干活路径）')
+
+  check('D0 Agent runtime 显式注入执行路径读取的会话服务', runtimeInject.includes('session'))
 
   const tmp = mkdtempSync(join(tmpdir(), 'p8-stubs-'))
   const db = memoryDb(true)
@@ -535,7 +536,7 @@ async function partE(): Promise<void> {
       const s = createSessionWithRoster(ctx)
 
       // E2 兜底 0 层：合法 JSON → delegated，mock 决策逐字透传（原始输出未被动过）。
-      const ev = humanCommit(ctx, s.id, 'u_dri', '@需求分析师 分析边界条件', ['a_analyst'])
+      const ev = humanCommit(ctx, s.id, 'u_dri', '需求分析师，请分析边界条件')
       const r = await engine.onPlan({ sessionId: s.id, authorId: 'u_dri', event: ev })
       check('E2a brain-llm 合法 JSON → delegated（兜底 0 层直通）',
         r?.case === 'delegated' && r.delegation?.target === '需求分析师', JSON.stringify(r))
@@ -632,7 +633,7 @@ async function partE(): Promise<void> {
       const customId = 'research_helper_42'
       const customDefinition = ctx.agentCatalog.create({
         title: '自定义研究助手', description: '使用团队搜索工具完成研究任务并提供依据。',
-        promptRef: 'prompt.custom.research', modelRef: 'mock-model', toolIds: ['web.search'],
+        promptRef: 'prompt.custom.research', toolIds: ['web.search'],
         contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive',
       }, customId)
       ctx.prompts.upsert(customDefinition.promptRef, customDefinition.title, '你是团队自定义研究助手，使用工具检索并引用证据。')

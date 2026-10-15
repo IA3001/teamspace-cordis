@@ -47,9 +47,9 @@
 - [packages/client-ui/space-client-ui-admin/src/index.ts](../../packages/client-ui/space-client-ui-admin/src/index.ts)：`testTextProfileStream`
   `token: string, idInput: string`
 - [packages/client-ui/space-client-ui-admin/src/index.ts](../../packages/client-ui/space-client-ui-admin/src/index.ts)：`testEmbeddingApi`
-  `token: string`
+  `token: string, profileId?: string`
 - [packages/client-ui/space-client-ui-admin/src/index.ts](../../packages/client-ui/space-client-ui-admin/src/index.ts)：`testWebSearchApi`
-  `token: string`
+  `token: string, profileId?: string`
 - [packages/client-ui/space-client-ui-admin/src/index.ts](../../packages/client-ui/space-client-ui-admin/src/index.ts)：`sandboxApprovals`
   `token: string`
 - [packages/client-ui/space-client-ui-admin/src/index.ts](../../packages/client-ui/space-client-ui-admin/src/index.ts)：`decideSandboxApproval`
@@ -146,6 +146,8 @@
   `token: string, path = ''`
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`sharedWorkspaceRead`
   `token: string, path: string`
+- [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`transferWorkspaceFile`
+  `token: string, sourceAgentId: string, path: string, targetAgentId = ''`
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`agentTemplates`
   `token: string, includeArchived = false`
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`saveAgentTemplate`
@@ -168,7 +170,3 @@
   `token: string, id: string, patch: AgentDefinitionPatch`
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`archiveAgent`
   `token: string, id: string`
-- [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`inviteAgent`
-  `token: string, sessionId: string, agentId: string`
-- [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`agentHistory`
-  `token: string, sessionId: string, agentId: string`

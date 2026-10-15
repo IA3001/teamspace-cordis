@@ -34,6 +34,8 @@
   `type`
 - [packages/client-ui/space-client-ui-kb/client/index.ts](../../packages/client-ui/space-client-ui-kb/client/index.ts)：`space-client-ui-shared/client/md.ts`
   `value`
+- [packages/client-ui/space-client-ui-kb/client/index.ts](../../packages/client-ui/space-client-ui-kb/client/index.ts)：`space-client-ui-shared/client/icon-library.ts`
+  `value`
 - [packages/client-ui/space-client-ui-kb/src/index.ts](../../packages/client-ui/space-client-ui-kb/src/index.ts)：`space-kb`
   `value`
 - [packages/client-ui/space-client-ui-sessions/client/index.ts](../../packages/client-ui/space-client-ui-sessions/client/index.ts)：`space-client-ui-shared/client/errors.ts`
@@ -60,6 +62,10 @@
   `value`
 - [packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts](../../packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts)：`space-client-ui-shared/client/console.ts`
   `value`
+- [packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts](../../packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts)：`space-client-ui-shared/client/md.ts`
+  `value`
+- [packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts](../../packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts)：`space-client-ui-shared/client/icon-library.ts`
+  `value`
 - [packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts](../../packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts)：`space-client-ui-shared/client/im.css`
   `value`
 - [packages/client-ui/space-client-ui-teamspace/client/agents.ts](../../packages/client-ui/space-client-ui-teamspace/client/agents.ts)：`space-client-ui-shared/client/console.ts`
@@ -68,9 +74,15 @@
   `value`
 - [packages/client-ui/space-client-ui-teamspace/client/agents.ts](../../packages/client-ui/space-client-ui-teamspace/client/agents.ts)：`space-client-ui-shared/client/errors.ts`
   `value`
+- [packages/client-ui/space-client-ui-teamspace/client/agents.ts](../../packages/client-ui/space-client-ui-teamspace/client/agents.ts)：`space-client-ui-shared/client/icon-library.ts`
+  `value`
+- [packages/client-ui/space-client-ui-teamspace/client/agents.ts](../../packages/client-ui/space-client-ui-teamspace/client/agents.ts)：`space-client-ui-shared/client/im.css`
+  `value`
 - [packages/client-ui/space-client-ui-teamspace/client/index.ts](../../packages/client-ui/space-client-ui-teamspace/client/index.ts)：`space-client-ui-shared/client/theme.ts`
   `value`
 - [packages/client-ui/space-client-ui-teamspace/client/index.ts](../../packages/client-ui/space-client-ui-teamspace/client/index.ts)：`space-client-ui-shared/client/console.ts`
+  `value`
+- [packages/client-ui/space-client-ui-teamspace/client/index.ts](../../packages/client-ui/space-client-ui-teamspace/client/index.ts)：`space-client-ui-shared/client/icon-library.ts`
   `value`
 - [packages/client-ui/space-client-ui-teamspace/client/index.ts](../../packages/client-ui/space-client-ui-teamspace/client/index.ts)：`space-client-ui-shared/client/im.css`
   `value`
@@ -101,6 +113,8 @@
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`space-agent-catalog`
   `type`
 - [packages/client-ui/space-client-ui-teamspace/src/index.ts](../../packages/client-ui/space-client-ui-teamspace/src/index.ts)：`space-prompt`
+  `type`
+- [packages/impl/space-agent-runtime/src/cache-context.ts](../../packages/impl/space-agent-runtime/src/cache-context.ts)：`space-llm`
   `type`
 - [packages/impl/space-agent-runtime/src/execution-graph.ts](../../packages/impl/space-agent-runtime/src/execution-graph.ts)：`space-llm`
   `type`
@@ -186,23 +200,3 @@
   `type`
 - [packages/impl/space-store-sqlite/src/settings.ts](../../packages/impl/space-store-sqlite/src/settings.ts)：`space-settings`
   `value`
-- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-staging`
-  `value`
-- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-staging`
-  `type`
-- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-event`
-  `value`
-- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-event`
-  `type`
-- [packages/impl/space-store-sqlite/src/users.ts](../../packages/impl/space-store-sqlite/src/users.ts)：`space-identity`
-  `value`
-- [packages/impl/space-store-sqlite/src/users.ts](../../packages/impl/space-store-sqlite/src/users.ts)：`space-identity`
-  `type`
-- [packages/impl/space-workdir-local/src/index.ts](../../packages/impl/space-workdir-local/src/index.ts)：`space-workdir`
-  `value`
-- [packages/impl/space-workdir-local/src/index.ts](../../packages/impl/space-workdir-local/src/index.ts)：`space-workdir`
-  `type`
-- [packages/policy/space-agent-speech/src/index.ts](../../packages/policy/space-agent-speech/src/index.ts)：`space-event`
-  `type`
-- [packages/policy/space-authz/src/index.ts](../../packages/policy/space-authz/src/index.ts)：`space-orchestrator`
-  `type`

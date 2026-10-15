@@ -158,6 +158,7 @@ declare module '@cordisjs/plugin-database' {
       context_sources: string
       memory_policy: string
       speech_policy: string
+      icon_id: string
       template_id: string
       template_version: number
       status: string
@@ -398,6 +399,7 @@ export function apply(ctx: Context, config: Config = {}) {
     context_sources: { type: 'string', nullable: false },
     memory_policy: { type: 'string', nullable: false },
     speech_policy: { type: 'string', nullable: false },
+    icon_id: { type: 'string', nullable: false },
     template_id: { type: 'string', nullable: false },
     template_version: { type: 'integer', nullable: false },
     status: { type: 'string', nullable: false },

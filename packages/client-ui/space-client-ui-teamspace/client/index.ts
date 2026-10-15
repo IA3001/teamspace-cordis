@@ -30,8 +30,9 @@ import type { Component, VNodeChild } from 'vue'
 import { useRpc, useContext, useRoute, useRouter } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
 import { ICONS } from 'space-client-ui-shared/client/console.ts'
+import { DEFAULT_AGENT_ICON, SvgIcon } from 'space-client-ui-shared/client/icon-library.ts'
 import 'space-client-ui-shared/client/im.css'
-import { extractAgentWorklog, renderMarkdown, visibleAgentReply } from 'space-client-ui-shared/client/md.ts'
+import { eventCitations, extractAgentWorklog, renderCitationModule, renderMarkdown, visibleAgentReply } from 'space-client-ui-shared/client/md.ts'
 import IconBtn from 'space-client-ui-shared/client/IconBtn.ts'
 import { authorLabel, formatTime, memberLabel } from 'space-client-ui-shared/client/labels.ts'
 import { userFacingFailure, userFacingPause } from 'space-client-ui-shared/client/errors.ts'
@@ -42,7 +43,8 @@ import type { EventLite, MemberLite } from 'space-client-ui-shared/client/labels
 import { AgentManagementPage, AGENT_PAGE_ICON } from './agents.ts'
 import { AgentMemoryPage, AgentWorkspacePage, MEMORY_PAGE_ICON, WORKSPACE_PAGE_ICON } from './agent-operations.ts'
 import {
-  appendProgressDelta, progressPreviewLabel, settlesPendingReply, shouldWarnAboutSocketSilence,
+  appendProgressDelta, isSessionReplyActive, progressPreviewLabel, progressRunHasTimelineAnchor,
+  progressRunHasOutcome, progressRunsForTimelineEvent, settlesPendingReply, shouldWarnAboutSocketSilence,
 } from './progress.ts'
 import { groupActivityEvents } from './activity-groups.ts'
 import { decisionPresentation } from './decision-presentation.ts'
@@ -83,6 +85,7 @@ type TEvent = EventLite & {
   sourceEventIds?: string[]
   voided?: boolean
   toolCalls?: Array<{ name: string; args: string; result?: string; err?: string }>
+  citations?: import('space-event').EventCitation[]
 }
 type AgentProgressStep = { label: string; at: string; kind?: 'phase' | 'tool'; status?: 'running' | 'success' | 'failed'; detail?: string; toolId?: string; inputSummary?: string; resultSummary?: string; durationMs?: number }
 type AgentProgressLite = {
@@ -102,6 +105,43 @@ type AgentProgressLite = {
   streamText?: string
   streamCharacterCount?: number
   streamTruncated?: boolean
+}
+type InboxTraceView = {
+  agentId: string
+  agentTitle: string
+  status: 'success' | 'failed'
+  sourceSeq?: number
+  startedAt: string
+  completedAt: string
+  steps: Array<{ label: string; detail?: string; at: string; status: 'success' | 'failed' }>
+}
+
+function inboxTraceFromEvent(event: TEvent): InboxTraceView | null {
+  const args = event.toolCalls?.find((call) => call.name === 'agent.inbox.trace')?.args
+  if (!args) return null
+  try {
+    const value = JSON.parse(args) as Record<string, unknown>
+    if (typeof value.agentId !== 'string' || !value.agentId) return null
+    const steps = Array.isArray(value.steps) ? value.steps.flatMap((step) => {
+      if (!step || typeof step !== 'object') return []
+      const row = step as Record<string, unknown>
+      return [{
+        label: typeof row.label === 'string' ? row.label : '处理阶段',
+        detail: typeof row.detail === 'string' ? row.detail : undefined,
+        at: typeof row.at === 'string' ? row.at : '',
+        status: row.status === 'failed' ? 'failed' as const : 'success' as const,
+      }]
+    }) : []
+    return {
+      agentId: value.agentId,
+      agentTitle: typeof value.agentTitle === 'string' && value.agentTitle ? value.agentTitle : value.agentId,
+      status: value.status === 'failed' ? 'failed' : 'success',
+      sourceSeq: typeof value.sourceSeq === 'number' ? value.sourceSeq : undefined,
+      startedAt: typeof value.startedAt === 'string' ? value.startedAt : event.ts,
+      completedAt: typeof value.completedAt === 'string' ? value.completedAt : event.ts,
+      steps,
+    }
+  } catch { return null }
 }
 
 function downstreamAgentCounts(events: readonly TEvent[]): Map<string, number> {
@@ -128,7 +168,7 @@ type ReactResult = ReactSummaryLite[] | { error: string }
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎯', '❓'] as const
 interface MeLite { id: string; username: string; displayName: string }
 /** AI 成员工作状态（agents RPC 的客户端视图）。 */
-interface AgentView { id: string; title: string; status: string; capabilities?: string[] }
+interface AgentView { id: string; title: string; status: string; iconId?: string; capabilities?: string[] }
 /** 团队待办（todos RPC 的客户端视图；序号由渲染时按 createdAt 升序编，不持久化）。 */
 interface TodoView { id: string; done: boolean; text: string; createdAt: string }
 /** 联想菜单只用于 @成员；操作从消息卡片和协作面板发起。 */
@@ -307,6 +347,31 @@ const TeamspacePage = defineComponent({
     const timelineLoadingSessionId = ref('')
     const timelineFailedSessionId = ref('')
     const progressRuns = ref([]) as { value: AgentProgressLite[] }
+    let progressStorageKey = ''
+    const persistProgressRuns = () => {
+      if (!progressStorageKey) return
+      try { localStorage.setItem(progressStorageKey, JSON.stringify(progressRuns.value.slice(-40))) }
+      catch { /* Storage quota/private browsing must not interrupt chat. */ }
+    }
+    const restoreProgressRuns = (userId: string) => {
+      progressStorageKey = `space_agent_progress_v1_${userId}`
+      let saved: AgentProgressLite[] = []
+      try {
+        const parsed: unknown = JSON.parse(localStorage.getItem(progressStorageKey) ?? '[]')
+        if (Array.isArray(parsed)) {
+          const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
+          saved = parsed.filter((run): run is AgentProgressLite => Boolean(run &&
+            typeof run.runId === 'string' && typeof run.sessionId === 'string' &&
+            typeof run.agentId === 'string' && typeof run.title === 'string' &&
+            typeof run.phase === 'string' && typeof run.at === 'string' && Date.parse(run.at) >= cutoff))
+        }
+      } catch { /* Corrupt or unavailable local state is treated as empty. */ }
+      const merged = new Map(saved.map((run) => [run.runId, run]))
+      for (const run of progressRuns.value) merged.set(run.runId, run)
+      progressRuns.value = [...merged.values()].slice(-40)
+      persistProgressRuns()
+    }
+    const expandedInboxTraces = ref(new Set<string>())
     const progressClock = ref(Date.now())
     const socketState = ref<'connecting' | 'online' | 'resyncing' | 'degraded' | 'disconnected'>('connecting')
     const pendingReplies = ref([]) as { value: PendingReplyLite[] }
@@ -387,6 +452,8 @@ const TeamspacePage = defineComponent({
     const scrollbar = ref<{ setScrollTop: (v: number) => unknown } | null>(null)
     /** 非贴底阅读时，保留视口顶部附近的消息及其相对位置，供窗口缩放后恢复。 */
     let scrollAnchor: { id: string; offset: number } | null = null
+    let timelineResizeObserver: ResizeObserver | null = null
+    let followScrollFrame = 0
     let resizeFrame = 0
     let replyTimer: ReturnType<typeof setTimeout> | undefined
     let progressClockTimer: ReturnType<typeof setInterval> | undefined
@@ -678,7 +745,12 @@ const TeamspacePage = defineComponent({
         sessionsLoaded.value = true
         sessionsLoadFailed.value = false
         if (!activeId.value && sessions.value.length > 0) {
-          const initial = sessions.value.find((s) => s.id === route.query.session) ?? sessions.value[0]!
+          // Session storage is ordered oldest-first. When opening Teamspace
+          // without an explicit session in the URL, land in the newest open
+          // meeting instead of trapping users in the oldest closed one.
+          const initial = sessions.value.find((s) => s.id === route.query.session) ??
+            [...sessions.value].reverse().find((s) => s.status === 'open') ??
+            sessions.value.at(-1)!
           activeId.value = initial.id
           if (route.query.session !== initial.id) void router.replace({ query: { session: initial.id } })
         }
@@ -702,6 +774,11 @@ const TeamspacePage = defineComponent({
         if (isUnauth(ev) || isUnauth(mb)) return unauthed()
         if (ev) {
           events.value = ev
+          // A final event owns the durable worklog. Drop its temporary browser
+          // snapshot so refresh never shows a stale live card beside the receipt.
+          progressRuns.value = progressRuns.value.filter((run) =>
+            run.sessionId !== requestedSessionId || !progressRunHasOutcome(run, ev))
+          persistProgressRuns()
           const settledSources = new Set((ev as TEvent[]).filter(settlesPendingReply)
             .map((event) => event.sourceEventId)
             .filter((sourceId): sourceId is string => typeof sourceId === 'string' && sourceId.length > 0))
@@ -940,15 +1017,17 @@ const TeamspacePage = defineComponent({
             else if (steps.at(-1)?.label === update.step.label) steps[steps.length - 1] = update.step
             else steps.push(update.step)
           } else if (steps.at(-1)?.label !== label) steps.push({ label, at: update.at, kind: 'phase' })
-          progressRuns.value = [
-            ...progressRuns.value.filter((run) => run.runId !== update.runId),
-            {
+          const updatedRun = {
               ...previous, ...update, steps: steps.slice(-30),
               streamText: preview.text,
               streamCharacterCount: preview.totalCharacters,
               streamTruncated: preview.truncated,
-            },
-          ].slice(-40)
+          }
+          // Updating a run must not reorder concurrent streamed reply rows.
+          progressRuns.value = previous
+            ? progressRuns.value.map((run) => run.runId === update.runId ? updatedRun : run)
+            : [...progressRuns.value, updatedRun].slice(-40)
+          persistProgressRuns()
           return
         }
         if (msg?.type === 'space:agent-progress-snapshot') {
@@ -957,10 +1036,11 @@ const TeamspacePage = defineComponent({
           // user belongs to. Keep other-session runs too: the queue panel must
           // explain what the globally active Agent is doing while this session waits.
           if (!snapshot?.sessionId || !snapshot.runId || !snapshot.agentId) return
-          progressRuns.value = [
-            ...progressRuns.value.filter((run) => run.runId !== snapshot.runId),
-            { ...snapshot, steps: (snapshot.steps ?? []).slice(-30) },
-          ].slice(-40)
+          const hydratedRun = { ...snapshot, steps: (snapshot.steps ?? []).slice(-30) }
+          progressRuns.value = progressRuns.value.some((run) => run.runId === snapshot.runId)
+            ? progressRuns.value.map((run) => run.runId === snapshot.runId ? hydratedRun : run)
+            : [...progressRuns.value, hydratedRun].slice(-40)
+          persistProgressRuns()
           socketState.value = 'online'
           return
         }
@@ -1377,8 +1457,21 @@ const TeamspacePage = defineComponent({
       const meRes = await rpc.value.me(getToken())
       if (!meRes || isUnauth(meRes)) { unauthed(); return }
       me.value = meRes
+      restoreProgressRuns(meRes.id)
       nearBottom.value = true
       await load()
+      await nextTick()
+      const timelineView = document.querySelector('.content-body .el-scrollbar__view')
+      if (timelineView) {
+        timelineResizeObserver = new ResizeObserver(() => {
+          if (!nearBottom.value) return
+          cancelAnimationFrame(followScrollFrame)
+          followScrollFrame = requestAnimationFrame(() => {
+            if (nearBottom.value) scrollToBottom()
+          })
+        })
+        timelineResizeObserver.observe(timelineView)
+      }
       if (socket?.readyState === WebSocket.OPEN) socketState.value = 'online'
       restoreDraft()
       syncTypingPoll()
@@ -1402,6 +1495,8 @@ const TeamspacePage = defineComponent({
       document.querySelector('.content-body .el-scrollbar__wrap')
         ?.removeEventListener('scroll', onScroll)
       cancelAnimationFrame(resizeFrame)
+      cancelAnimationFrame(followScrollFrame)
+      timelineResizeObserver?.disconnect()
       socket?.removeEventListener('message', onSocketMessage)
       socket?.removeEventListener('open', onSocketOpen)
       socket?.removeEventListener('close', onSocketClose)
@@ -1436,15 +1531,41 @@ const TeamspacePage = defineComponent({
       const ElTimeline = resolveComponent('el-timeline') as unknown as string
       const ElAvatar = resolveComponent('el-avatar') as unknown as string
       const ElTimelineItem = resolveComponent('el-timeline-item') as unknown as string
-      const progressPreview = (run: AgentProgressLite, key: string) => run.streamText
-        ? h(ElText, { key }, {
+      const progressPreview = (run: AgentProgressLite, key: string) => {
+        if (!run.streamText) return null
+        const visibleText = visibleAgentReply(run.streamText)
+        return h(ElText, { key }, {
           default: () => `${progressPreviewLabel(run.phase, {
-            text: run.streamText!,
+            text: visibleText,
             totalCharacters: run.streamCharacterCount ?? Array.from(run.streamText!).length,
             truncated: run.streamTruncated ?? false,
-          })}\n${run.streamText}`,
+          })}\n${visibleText}`,
         })
-        : null
+      }
+      const liveReplyRow = (run: AgentProgressLite) => {
+        const visibleText = visibleAgentReply(run.streamText ?? '')
+        return h('div', {
+          key: `reply-${run.runId}`, class: 'sp-msg sp-live-reply', role: 'status', 'aria-live': 'polite',
+        }, [
+        h(ElAvatar, { size: 32, class: 'sp-msg-avatar sp-msg-avatar--agent' }, {
+          default: () => h(SvgIcon, { name: agents.value.find((agent) => agent.id === run.agentId)?.iconId ?? DEFAULT_AGENT_ICON }),
+        }),
+        h('div', { class: 'sp-msg-body' }, [
+          h('div', { class: 'sp-msg-name' }, `${run.title} · ${run.phase === 'completed' ? '正在同步回复' : '正在回复'}`),
+          h('div', { class: 'sp-bubble agent sp-live-reply-bubble' }, [
+            renderMarkdown(visibleText, h, {
+              Markdown, Button: ElButton, transformProse: displayMentionsInMarkdown,
+            }),
+            run.phase !== 'completed' && visibleText !== '（正在处理工具调用，请查看工作记录）'
+              ? h('span', { class: 'sp-typing-dots', 'aria-label': '正在生成' }, [h('i'), h('i'), h('i')]) : null,
+          ]),
+        ]),
+        ])
+      }
+      const hasVisibleLiveReply = (run: AgentProgressLite) => Boolean(
+        run.sessionId === activeId.value && run.streamText &&
+        !['failed', 'cancelled'].includes(run.phase) && !progressRunHasOutcome(run, events.value),
+      )
       const progressTimeline = (
         steps: AgentProgressLite['steps'],
         keyPrefix: string,
@@ -1509,8 +1630,14 @@ const TeamspacePage = defineComponent({
       const busySession = work?.activeSessionId
       const busyTitle = sessions.value.find((session) => session.id === busySession)?.title ?? busySession
       const waitingHere = work?.queue.some((item) => item.sessionId === activeSession.value?.id) ?? false
+      const replyingHere = activeSession.value ? isSessionReplyActive({
+        sessionId: activeSession.value.id,
+        activeSessionId: busySession,
+        runs: progressRuns.value,
+        pendingSessionIds: pendingReplies.value.map((item) => item.sessionId),
+      }) : false
       const activeStatus = !activeSession.value ? null
-        : busySession === activeSession.value.id
+        : replyingHere
           ? { label: '聊天中…', tag: 'warning' }
           : busySession && waitingHere
             ? { label: `排队中 · ${busyTitle} 正在处理`, tag: 'info' }
@@ -1578,7 +1705,7 @@ const TeamspacePage = defineComponent({
           h(ICONS.agents),
           h('span', '团队 Agent'),
         ]) }),
-        turn.value?.state === 'static' && turn.value.stopReason
+        turn.value?.state === 'static' && turn.value.stopReason && turn.value.stopReason !== 'completed'
           ? h(ElTag, {
               key: 'paused', size: 'small', type: 'warning', class: 'sp-mobile-secondary',
               title: turn.value.stopDetail || userFacingPause(turn.value.stopReason),
@@ -1758,6 +1885,61 @@ const TeamspacePage = defineComponent({
             })
           : null
         if (ev.authorKind === 'system' && !isFlow) {
+          const inboxTrace = inboxTraceFromEvent(ev)
+          if (inboxTrace) {
+            const ElTimeline = resolveComponent('el-timeline') as unknown as string
+            const ElTimelineItem = resolveComponent('el-timeline-item') as unknown as string
+            const ElTag = resolveComponent('el-tag') as unknown as string
+            const ElButton = resolveComponent('el-button') as unknown as string
+            const ElText = resolveComponent('el-text') as unknown as string
+            const ElSpace = resolveComponent('el-space') as unknown as string
+            const started = Date.parse(inboxTrace.startedAt)
+            const completed = Date.parse(inboxTrace.completedAt)
+            const duration = Number.isFinite(started) && Number.isFinite(completed)
+              ? `${Math.max(0, completed - started)} ms` : '耗时未知'
+            const expanded = expandedInboxTraces.value.has(ev.id)
+            const toggleTrace = () => {
+              const next = new Set(expandedInboxTraces.value)
+              if (next.has(ev.id)) next.delete(ev.id)
+              else next.add(ev.id)
+              expandedInboxTraces.value = next
+            }
+            const traceDetails = expanded
+              ? inboxTrace.steps.length
+                ? h(ElTimeline, {}, {
+                    default: () => inboxTrace.steps.map((step, index) => {
+                      const content = h(ElSpace, { direction: 'vertical', size: 2 }, {
+                        default: () => [
+                          h(ElText, { tag: 'strong' }, { default: () => step.label }),
+                          step.detail ? h(ElText, { size: 'small', type: 'info' }, { default: () => step.detail }) : null,
+                        ],
+                      })
+                      return h(ElTimelineItem, {
+                        key: `${ev.id}-trace-${index}`, timestamp: step.at ? formatTime(step.at) : undefined,
+                        type: step.status === 'failed' ? 'danger' : 'primary', hollow: true,
+                      }, { default: () => content })
+                    }),
+                  })
+                : h(ElText, { type: 'info' }, { default: () => '该记录没有保存阶段明细。' })
+              : null
+            return h('div', { class: 'sp-sys', key: ev.id, 'data-ev-id': ev.id }, [
+              h(ElSpace, { size: 6, wrap: true }, { default: () => [
+                h(ElTag, { size: 'small', type: inboxTrace.status === 'success' ? 'success' : 'danger', effect: 'dark' }, {
+                  default: () => inboxTrace.status === 'success' ? '已完成' : '失败',
+                }),
+                h(ElButton, { text: true, size: 'small', 'aria-expanded': expanded, onClick: toggleTrace }, {
+                  default: () => `${inboxTrace.agentTitle} · ${inboxTrace.steps.length} 步 · ${duration}`,
+                }),
+                inboxTrace.sourceSeq !== undefined
+                  ? h(ElText, { size: 'small', type: 'info' }, { default: () => `来源 #${inboxTrace.sourceSeq}` })
+                  : null,
+                h(ElButton, { text: true, size: 'small', onClick: () => {
+                  void router.replace({ path: '/teamspace/workspaces', query: { agent: inboxTrace.agentId } })
+                } }, { default: () => '工作区 ↗' }),
+              ] }),
+              traceDetails,
+            ])
+          }
           const queuedPosition = ev.text.match(/Agent 任务已排队[（(]\s*第\s*(\d+)\s*位[）)]/u)?.[1]
           const queueStarted = /排队任务开始处理/u.test(ev.text)
           if (queuedPosition || queueStarted) {
@@ -1803,6 +1985,13 @@ const TeamspacePage = defineComponent({
           ? h(ElText, { size: 'small', type: 'info' }, { default: () => '消息已撤回' })
           : isFlow
             ? flowCard
+            : ev.authorKind === 'agent' && ev.kind === 'system' && ev.text.startsWith('有话想说：')
+              ? h('div', { class: 'sp-bubble agent sp-pending-bubble' }, [
+                  h('span', { class: 'sp-pending-label' }, '有话想说'),
+                  h(ElText, { size: 'small', type: 'info' }, {
+                    default: () => ev.text.slice('有话想说：'.length).trim(),
+                  }),
+                ])
             : ev.authorKind === 'human'
               ? renderText(ev.text)
               : renderMarkdown(decision?.recommendation ?? visibleText, h, {
@@ -1855,11 +2044,7 @@ const TeamspacePage = defineComponent({
         const reactionsRow = summaryTags.length
           ? h('div', { class: 'sp-reactions' }, summaryTags)
           : null
-        const sourceIds = new Set([ev.sourceEventId, ...(ev.sourceEventIds ?? [])].filter(Boolean))
-        const matchingRuns = ev.authorKind === 'agent'
-          ? progressRuns.value.filter((run) => run.sessionId === ev.sessionId && run.agentId === ev.authorId &&
-              Boolean(run.sourceEventId && sourceIds.has(run.sourceEventId)))
-          : []
+        const matchingRuns = progressRunsForTimelineEvent(ev, events.value, progressRuns.value)
         const persistedWorklog = extractAgentWorklog(ev.text, ev.toolCalls).steps
         // When the final event arrives, keep the run's in-memory timeline on
         // the message even if persistence omitted its worklog tool call.
@@ -1897,13 +2082,15 @@ const TeamspacePage = defineComponent({
             }),
           }))
         return h('div', {
-          key: ev.id, 'data-ev-id': ev.id,
+          key: ev.authorKind === 'agent' && completedRun ? `reply-${completedRun.runId}` : ev.id, 'data-ev-id': ev.id,
           class: `sp-msg${self ? ' self' : ''}${progressCards.length ? ' has-progress' : ''}${groupedWithPrevious ? ' sp-msg--grouped' : ''}`,
         }, [
         !self ? h(ElAvatar, {
           size: 32,
           class: ['sp-msg-avatar', `sp-msg-avatar--${ev.authorKind}`],
-        }, { default: () => name.charAt(0) }) : null,
+        }, { default: () => ev.authorKind === 'agent'
+          ? h(SvgIcon, { name: agents.value.find((agent) => agent.id === ev.authorId)?.iconId ?? DEFAULT_AGENT_ICON })
+          : name.charAt(0) }) : null,
           h('div', { class: 'sp-msg-body' }, [
             h('div', { class: 'sp-msg-name' }, name),
             ev.replyTo ? quoteBlock(ev.replyTo) : null,
@@ -1928,6 +2115,9 @@ const TeamspacePage = defineComponent({
                 scrollToEvent(link.hash.slice('#space-event-'.length))
               },
             }, [bubble]),
+            ev.authorKind === 'agent' && !ev.voided
+              ? renderCitationModule(eventCitations(ev), h, scrollToEvent)
+              : null,
             decision
               ? h(ElAlert, {
                   title: decision.title,
@@ -2000,6 +2190,12 @@ const TeamspacePage = defineComponent({
             previousEvent.authorKind === ev.authorKind && previousEvent.authorId === ev.authorId &&
             previousEvent.ts.slice(0, 10) === ev.ts.slice(0, 10) && elapsed >= 0 && elapsed <= 120_000)
           nodes.push(messageRow(ev, fv, causalCounts, groupedWithPrevious))
+          // Keep a streaming reply beside the message that triggered it. Putting
+          // every live draft after the whole timeline made it look like it
+          // belonged to the newest message, even when another Agent was active.
+          for (const run of progressRunsForTimelineEvent(ev, events.value, progressRuns.value)) {
+            if (hasVisibleLiveReply(run)) nodes.push(liveReplyRow(run))
+          }
           previousEvent = ev
         }
         return nodes
@@ -2107,7 +2303,10 @@ const TeamspacePage = defineComponent({
             members.value.find((member) => member.principalId === id)?.role).filter(Boolean)
           const name = [...new Set(names)].join('、') || '团队 Agent'
           return h('div', { key: item.key, class: 'sp-msg sp-msg-pending', role: 'status', 'aria-live': 'polite' }, [
-            h(ElAvatar, { size: 32 }, { default: () => name.charAt(0) }),
+            h(ElAvatar, { size: 32 }, { default: () => {
+              const agentId = item.mentions.find((id) => agents.value.some((agent) => agent.id === id))
+              return agentId ? h(SvgIcon, { name: agents.value.find((agent) => agent.id === agentId)?.iconId ?? DEFAULT_AGENT_ICON }) : name.charAt(0)
+            } }),
             h('div', { class: 'sp-msg-body' }, [
               h('div', { class: 'sp-msg-name' }, name),
               h('div', { class: 'sp-bubble agent sp-pending-bubble' }, [
@@ -2123,11 +2322,9 @@ const TeamspacePage = defineComponent({
           ])
         })
       const liveProgressRows = progressRuns.value
-        .filter((run) => run.sessionId === activeId.value &&
-          !events.value.some((ev) => ev.authorKind === 'agent' && ev.authorId === run.agentId &&
-            new Set([ev.sourceEventId, ...(ev.sourceEventIds ?? [])].filter(Boolean)).has(run.sourceEventId)))
+        .filter((run) => run.sessionId === activeId.value && !progressRunHasTimelineAnchor(run, events.value))
         .map((run) => h('div', { key: `live-run-${run.runId}`, class: 'sp-msg has-progress' }, [
-          h(ElAvatar, { size: 32 }, { default: () => run.title.charAt(0) }),
+          h(ElAvatar, { size: 32 }, { default: () => h(SvgIcon, { name: agents.value.find((agent) => agent.id === run.agentId)?.iconId ?? DEFAULT_AGENT_ICON }) }),
           h('div', { class: 'sp-msg-body' }, [
             h('div', { class: 'sp-msg-name' }, `${run.title} · ${run.phase === 'completed' ? '已完成' : run.phase === 'failed' ? '执行失败' : run.phase === 'cancelled' ? '已取消' : '正在工作'}`),
             h(ElCollapse, progressCollapseProps(run.runId), {
@@ -2143,6 +2340,11 @@ const TeamspacePage = defineComponent({
             }),
           ]),
         ]))
+      // If the trigger is outside the loaded timeline, retain a standalone
+      // fallback. Anchored streams are rendered immediately after their trigger.
+      const liveStreamRows = progressRuns.value
+        .filter((run) => hasVisibleLiveReply(run) && !progressRunHasTimelineAnchor(run, events.value))
+        .map(liveReplyRow)
       // 人类「正在输入」行（AI 行之上）：3s 内有 typing 帧才显示。
       const humanTypingLine = humanTyping.value.name
         ? h(ElRow, { justify: 'center', key: 'human-typing' }, {
@@ -2271,7 +2473,7 @@ const TeamspacePage = defineComponent({
                               : null,
                           ])
                         : null,
-                      ...pendingReplyLines, ...liveProgressRows, humanTypingLine,
+                      ...pendingReplyLines, ...liveProgressRows, ...liveStreamRows, humanTypingLine,
                     ]),
       ])
 
@@ -2375,7 +2577,7 @@ const TeamspacePage = defineComponent({
         t?.state === 'chain'
           ? h('div', { class: 'sp-context-notice sp-context-notice--working' },
               `AI 协作中${t.delegatedTargets.length ? ` · ${t.delegatedTargets.join('、')} 正在处理` : ' · 等待 AI 回应'}`)
-          : t?.state === 'static' && t.stopReason
+          : t?.state === 'static' && t.stopReason && t.stopReason !== 'completed'
             ? h('div', { class: 'sp-context-notice sp-context-notice--paused' }, userFacingPause(t.stopReason))
             : null,
         contextSection('成员', `${mentionCandidates().length}`, mentionCandidates().length
@@ -2394,7 +2596,9 @@ const TeamspacePage = defineComponent({
                 onClick: () => { insertMention(m.principalId); inputEl.value?.focus() },
               }, {
                 default: () => [
-                  h(ElAvatar, { size: 30, class: 'sp-context-avatar' }, { default: () => name.charAt(0) }),
+                  h(ElAvatar, { size: 30, class: 'sp-context-avatar' }, { default: () => ag
+                    ? h(SvgIcon, { name: ag.iconId ?? DEFAULT_AGENT_ICON })
+                    : name.charAt(0) }),
                   h('span', { class: 'sp-context-member-copy' }, [
                     h('span', { class: 'sp-context-member-name' }, name),
                     h('span', { class: 'sp-context-member-role' }, status),
@@ -2493,7 +2697,7 @@ const TeamspacePage = defineComponent({
                     }, {
                       default: () => invitableAgents().map((agent) => h(ElOption, {
                         key: agent.id, label: agent.title, value: agent.id,
-                      })),
+                      }, { default: () => h('span', { class: 'sp-agent-menu-item' }, [h(SvgIcon, { name: agent.iconId ?? DEFAULT_AGENT_ICON }), h('span', agent.title)]) })),
                     }),
                     h(ElButton, {
                       type: 'primary',
@@ -2545,13 +2749,16 @@ const TeamspacePage = defineComponent({
                     setTimeout(() => el?.classList.remove('sp-flash'), 1400)
                   })
                 }
-                const calls = (ev.toolCalls ?? []).filter((call) => call.name !== 'agent.worklog')
+                const calls = (ev.toolCalls ?? []).filter((call) =>
+                  call.name !== 'agent.worklog' && call.name !== 'agent.reply.outcome')
                 const summary = ev.voided ? '消息已撤回' : displayMentionsInText(ev.text)
                 const preview = summary.length > 140 ? `${summary.slice(0, 140)}…` : summary
                 const author = activityAuthorLabel(ev.authorId)
                 return h('article', { key: `activity-${ev.id}`, class: 'sp-activity-item' }, [
                     h('div', { class: 'sp-activity-heading' }, [
-                      h(ElAvatar, { size: 22, class: 'sp-activity-avatar' }, { default: () => author.charAt(0) || '系' }),
+                      h(ElAvatar, { size: 22, class: 'sp-activity-avatar' }, { default: () => ev.authorKind === 'agent'
+                        ? h(SvgIcon, { name: agents.value.find((agent) => agent.id === ev.authorId)?.iconId ?? DEFAULT_AGENT_ICON })
+                        : author.charAt(0) || '系' }),
                       h(ElButton, {
                         text: true, type: 'primary', size: 'small', class: 'sp-activity-meta',
                         title: `跳转到第 ${ev.seq} 条消息`, onClick: jumpToEvent,

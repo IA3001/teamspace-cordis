@@ -100,5 +100,84 @@
   "archive": {
     "docs/development/archive/2026-10-13-loader-test.md": "3c62e78ab92ba169e9e946ac50da635461ef49af26c3457ba56773f1d5b022cf"
   },
-  "changes": []
+  "changes": [
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0035_event_citations.up.sql",
+      "hash": "6fdfc00ab4ce78cc1980bc7de231b60cfe7c12f03fa75fecde31e075f6a04085",
+      "description": "docs/compatibility/event-citations.md",
+      "oldVersion": "34",
+      "upgrade": "Apply migration 0035; existing events receive citations=[] and old API clients may ignore the optional field.",
+      "rollback": "Apply migration 0035 down; only structured citation metadata is discarded, event bodies remain unchanged.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-rag.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0035_event_citations.down.sql",
+      "hash": "24d2b4da466eb3bd0668dbe403aedb3f75349350551a071a4e222098bca40ab8",
+      "description": "docs/compatibility/event-citations.md",
+      "oldVersion": "34",
+      "upgrade": "Apply migration 0035; existing events receive citations=[] and old API clients may ignore the optional field.",
+      "rollback": "Apply migration 0035 down; only structured citation metadata is discarded, event bodies remain unchanged.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-rag.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/seam/space-agent-runtime/src/index.ts",
+      "hash": "8d6acef031fa36de42b6760870518c1a49da4cfa0cb3e2e6bbcebebd7c0b502d",
+      "description": "docs/compatibility/event-citations.md",
+      "oldVersion": "34",
+      "upgrade": "Apply migration 0035; existing events receive citations=[] and old API clients may ignore the optional field.",
+      "rollback": "Apply migration 0035 down; only structured citation metadata is discarded, event bodies remain unchanged.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-rag.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/seam/space-event/src/index.ts",
+      "hash": "dd163dbc73a0adac98b215248d3f82e17cf8dd39ab084c6b741f5207b2555708",
+      "description": "docs/compatibility/event-citations.md",
+      "oldVersion": "34",
+      "upgrade": "Apply migration 0035; existing events receive citations=[] and old API clients may ignore the optional field.",
+      "rollback": "Apply migration 0035 down; only structured citation metadata is discarded, event bodies remain unchanged.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-rag.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/seam/space-orchestrator/src/index.ts",
+      "hash": "f311f6bd9dfb2d3481736b342f1ed10accab0f91dd5d23231874fd59948749ff",
+      "description": "docs/compatibility/event-citations.md",
+      "oldVersion": "34",
+      "upgrade": "Apply migration 0035; existing events receive citations=[] and old API clients may ignore the optional field.",
+      "rollback": "Apply migration 0035 down; only structured citation metadata is discarded, event bodies remain unchanged.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-rag.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/seam/space-retrieval/src/index.ts",
+      "hash": "aa2ab6d194b5d6cc889d02fc13bc4dc37a6de8a21370e67ade682a3c86bb9cf7",
+      "description": "docs/compatibility/event-citations.md",
+      "oldVersion": "34",
+      "upgrade": "Apply migration 0035; existing events receive citations=[] and old API clients may ignore the optional field.",
+      "rollback": "Apply migration 0035 down; only structured citation metadata is discarded, event bodies remain unchanged.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-rag.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    }
+  ]
 }

@@ -20,7 +20,7 @@
 import { Service } from 'cordis'
 import type { Context } from 'cordis'
 import type { PlanPayload } from 'space-staging'
-import type { SessionEvent } from 'space-event'
+import type { EventCitation, SessionEvent } from 'space-event'
 
 /** /commit 触发 Plan 的载荷 —— 本缝词汇的一部分，转出给实现与订阅方。 */
 export type { PlanPayload } from 'space-staging'
@@ -82,14 +82,13 @@ export interface PlanRequest {
   /** 发起 /commit 的人。 */
   authorId: string
   /**
-   * 人类这条发言的原话 —— 授权与否由大脑**读它（自然语言）判断**。
-   * 这是「@ 指令走 NLP 判定而不是字符串识别」的落点：字符串只是提示。
+   * 人类这条发言的原话 —— 对没有唯一明确 Agent @ 的协调请求，由大脑读它
+   *（自然语言）决定是否委托。单个 Agent 的明确 @ 由引擎直接路由，不进入大脑计划。
    */
   humanText: string
   /**
-   * @ 提及提示（会话内成员 id，承 events.mentions），**仅供参考**：
-   * 它不是路由依据 ——「让记录官整理一下」没有 @ 也应被识别；
-   * @ 与自然语言冲突时以自然语言为准（承旧 MentionHints 口径）。
+   * @ 提及提示（会话内成员 id，承 events.mentions），仅供协调器判断多目标或
+   * 没有唯一显式 Agent 目标的请求；无 @ 的自然语言委托仍可由协调器识别。
    */
   mentionHints: string[]
   /**
@@ -247,6 +246,8 @@ export abstract class OrchestratorService extends Service {
   abstract reportAgentResult(
     sessionId: string, target: string, text: string, sourceEventIds?: string[],
     worklog?: import('space-agent-runtime').AgentWorklogStep[],
+    citations?: EventCitation[],
+    modelTrace?: import('space-agent-runtime').AgentModelInteraction[],
   ): SessionEvent
 
   /** Forget an in-flight delegate after its source is invalidated. */

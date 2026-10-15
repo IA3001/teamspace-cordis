@@ -97,10 +97,19 @@ async function listProviderModels(baseURLInput: string, apiKey: string, target: 
     if (!response.ok) return { ok: false, detail: `供应商模型列表接口返回 HTTP ${response.status}。请确认 API 地址、密钥及供应商是否提供 OpenAI 兼容的 /models 接口。` }
     const body = await response.json() as { data?: unknown[]; models?: unknown[]; result?: { data?: unknown[] } }
     const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : Array.isArray(body?.result?.data) ? body.result.data : []
-    const eligibleRows = target === 'embedding' ? rows.filter(isEmbeddingModel) : rows
+    const arkCodingPlan = url.hostname === 'ark.cn-beijing.volces.com' && url.pathname.replace(/\/+$/, '') === '/api/coding/v3/models'
+    // Ark's generic /models catalog includes Embedding products unavailable to
+    // Coding Plan. Its published integration maps doubao-embedding-vision to
+    // version 251215; exposing other Ark Embedding IDs lets the user save a
+    // model that will return 404 from /embeddings.
+    const eligibleRows = target === 'embedding'
+      ? rows.filter(isEmbeddingModel).filter((row) => !arkCodingPlan || ['doubao-embedding-vision', 'doubao-embedding-vision-251215'].includes(modelId(row)))
+      : rows
     const models = [...new Set(eligibleRows.map(modelId).filter((id) => /^[\w./:-]{1,200}$/.test(id)))].sort((a, b) => a.localeCompare(b))
     if (!models.length && target === 'embedding' && rows.length) {
-      return { ok: false, detail: `接口返回了 ${rows.length} 个模型，但未识别到 Embedding 模型。列表会排除普通对话模型；如供应商使用特殊 ID，可在模型名处手动输入。` }
+      return { ok: false, detail: arkCodingPlan
+        ? '方舟 Coding Plan 当前仅支持 doubao-embedding-vision（对应版本 doubao-embedding-vision-251215）；普通方舟模型清单不能代表 Coding Plan 权限。请确认该模型已开通，或改用标准方舟 API Base URL。'
+        : `接口返回了 ${rows.length} 个模型，但未识别到 Embedding 模型。列表会排除普通对话模型；如供应商使用特殊 ID，可在模型名处手动输入。` }
     }
     if (!models.length) return { ok: false, detail: '接口可访问，但没有返回可识别的模型 ID（预期为 OpenAI 兼容的 data[].id）。' }
     return { ok: true, models: models.slice(0, 500) }
@@ -461,18 +470,23 @@ export function apply(ctx: Context) {
         return `首段 ${firstDeltaMs === undefined ? '未收到' : `${firstDeltaMs}ms`}，${chunks} 段，${characters} 字符，总计 ${Date.now() - started}ms`
       }
     },
-    async testEmbeddingApi(token: string) {
+    async testEmbeddingApi(token: string, profileId?: string) {
       if (!(await auth(ctx, token))) return null
       const started = Date.now()
       try {
-        const vector = await ctx.embeddings.embed(['连通测试'])
+        const vector = await ctx.embeddings.embed(['连通测试'], { profileRef: profileId, signal: AbortSignal.timeout(20000) })
         return { ok: true, detail: `连通正常（${Date.now() - started}ms）：${vector[0]?.length ?? 0} 维` }
       } catch (e) { return { ok: false, ...fail(e) } }
     },
-    async testWebSearchApi(token: string) {
+    async testWebSearchApi(token: string, profileId?: string) {
       if (!(await auth(ctx, token))) return null
-      const baseURL = ctx.settings.get<string>('search.baseURL', '').trim().replace(/\/$/, '')
-      const apiKey = ctx.settings.get<string>('search.apiKey', '').trim()
+      const useProfile = profileId && !(profileId === 'default' && !ctx.settings.get<string>('search.activeProfileRef', ''))
+      if (useProfile && !readServiceProfiles(ctx, 'webSearch').some((profile) => profile.id === profileId)) {
+        return { ok: false, error: 'not_found', detail: '网页搜索供应商配置不存在' }
+      }
+      const prefix = useProfile ? serviceProfilePrefix('webSearch', profileId!) : 'search'
+      const baseURL = ctx.settings.get<string>(`${prefix}.baseURL`, '').trim().replace(/\/$/, '')
+      const apiKey = ctx.settings.get<string>(`${prefix}.apiKey`, '').trim()
       if (!baseURL || !apiKey) return { ok: false, error: 'not_configured', detail: '请先保存网页搜索 API 地址和密钥' }
       try {
         const response = await fetch(`${baseURL}/search`, {

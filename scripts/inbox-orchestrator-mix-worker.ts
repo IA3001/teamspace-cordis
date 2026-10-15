@@ -1,9 +1,9 @@
-import { existsSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { Context } from 'cordis'
 import { AgentRegistry } from '../plugins/agent-registry/index.ts'
 import { AgentInbox } from '../plugins/agent-inbox/index.ts'
-import { OrchestratorEngine, waitForMentionedAgentHistory } from '../plugins/orchestrator/index.ts'
+import { OrchestratorEngine } from '../plugins/orchestrator/index.ts'
 import { SqliteEventLog } from '../packages/impl/space-store-sqlite/src/eventlog.ts'
 import { SqliteMemoryStore } from '../packages/impl/space-store-sqlite/src/memory.ts'
 import { SqliteSessionStore } from '../packages/impl/space-store-sqlite/src/session.ts'
@@ -38,36 +38,19 @@ Object.assign(ctx, {
 })
 new AgentInbox(ctx)
 const engine = new OrchestratorEngine(ctx)
+ctx.on('orchestrator/delegate', (payload: { sessionId: string; eventId: string; target: string }) => {
+  writeFileSync(`${signalDir}/direct-task-started`, JSON.stringify(payload))
+  engine.cancelDelegatedTask(payload.sessionId, payload.target, payload.eventId)
+  sessionWork.leave(payload.sessionId, `orchestrator:${payload.sessionId}`)
+})
 // Production has server handles keeping the process alive; this focused worker
 // supplies one so pending cross-process slot waits can be observed faithfully.
 const keepAlive = setInterval(() => engine.wakeQueue(), 20)
-let brainCalls = 0
-engine.registerBrain({
-  async plan() {
-    brainCalls++
-    const cursorRows = await memory.recall('agent:a_mixed_worker', { kind: 'cursor:s_mixed', limit: 10 })
-    const memories = await memory.recall('agent:a_mixed_worker', { kind: 'conversation_fact:0', limit: 10 })
-    const causalMemory = memories.find((item) =>
-      item.sourceEventId === eventId || item.sourceEventIds.includes(eventId))
-    writeFileSync(`${signalDir}/brain-started`, JSON.stringify({
-      cursor: Math.max(0, ...cursorRows.map((row) => Number(row.text) || 0)),
-      memory: causalMemory?.text ?? null,
-    }))
-    const deadline = Date.now() + 10_000
-    while (!existsSync(`${signalDir}/release-brain`) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    if (!existsSync(`${signalDir}/release-brain`)) throw new Error('test harness did not release coordinator brain')
-    return JSON.stringify({ reply: '已等待记忆完成并给出结论。', reason: '完成', delegate: null })
-  },
-})
-
 const event = eventLog.listBySession('s_mixed').find((item) => item.id === eventId)
 if (!event) throw new Error('seeded Agent mention event is missing')
 writeFileSync(`${signalDir}/orchestrator-ready`, 'ready')
-await waitForMentionedAgentHistory(ctx, event.sessionId, event.mentions, event.seq)
-writeFileSync(`${signalDir}/history-barrier-passed`, 'passed')
 await engine.onPlan({ sessionId: event.sessionId, authorId: event.authorId!, event })
+writeFileSync(`${signalDir}/task-dispatched`, 'dispatched')
 const latest = eventLog.listBySession(event.sessionId).reduce((max, item) => Math.max(max, item.seq), 0)
 await ctx.agentInbox.waitThrough('a_mixed_worker', event.sessionId, latest)
 const idleDeadline = Date.now() + 5_000
@@ -75,7 +58,7 @@ while (sessionWork.state().activeSessionId && Date.now() < idleDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10))
 }
 if (sessionWork.state().activeSessionId) throw new Error('Agent Inbox did not release the shared session slot')
-writeFileSync(`${signalDir}/orchestrator-finished`, JSON.stringify({ brainCalls }))
+writeFileSync(`${signalDir}/orchestrator-finished`, JSON.stringify({ dispatched: true }))
 clearInterval(keepAlive)
 sessionWork.dispose()
 db.close()

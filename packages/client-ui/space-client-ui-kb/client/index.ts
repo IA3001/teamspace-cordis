@@ -18,6 +18,7 @@ import { userFacingFailure } from 'space-client-ui-shared/client/errors.ts'
 import { resolveLoadView } from 'space-client-ui-shared/client/load-state.ts'
 import type { KbDocument, KbDocumentDetail, KbFolder, KbHit } from 'space-kb'
 import { renderMarkdown } from 'space-client-ui-shared/client/md.ts'
+import { SvgIcon } from 'space-client-ui-shared/client/icon-library.ts'
 
 /** 知识库文档视图（KbDocument 契约子集）。 */
 type DocRow = KbDocument
@@ -317,9 +318,6 @@ const KbPage = defineComponent({
                 level: embOn.value ? 'ok' : 'warn' },
               { text: `文档 ${docs.value.length} 篇`, level: 'idle' },
             ],
-            actions: [
-              { label: '← 团队空间', onClick: () => { location.href = '/teamspace' } },
-            ],
           }),
         h(ElTabs, {
           class: 'sp-kb-tabs sp-page-tabs', modelValue: activeWorkspace.value,
@@ -349,13 +347,13 @@ const KbPage = defineComponent({
                     void loadSelectedDoc(selectedDocId.value)
                   },
                   renderContent: (_render: unknown, context: { data: KbFolderNode }) => h('span', { class: 'sp-explorer-tree-node' }, [
-                    h('span', { class: 'sp-explorer-tree-name' }, context.data.name),
+                    h('span', { class: 'sp-explorer-tree-name' }, [h(SvgIcon, { name: 'Folder' }), h('span', context.data.name)]),
                     h(ElText, { type: 'info', size: 'small' }, { default: () => String(context.data.documentCount) }),
                   ]),
                 }) }),
               }),
             ]),
-            h(ElCol, { span: 5 }, [
+            h(ElCol, { span: 8, class: 'sp-kb-document-list-column' }, [
               h(ElCard, { shadow: 'never' }, {
                 header: () => h(ElRow, { justify: 'space-between', align: 'middle' }, [
                   h(ElText, { tag: 'strong' }, { default: () => `资料 · ${docs.value.filter((doc) => !selectedFolderPath.value || doc.folderPath === selectedFolderPath.value).length}` }),
@@ -377,13 +375,15 @@ const KbPage = defineComponent({
                     highlightCurrentRow: true,
                     onRowClick: (doc: DocRow) => { void selectDoc(doc.id) },
                   }, { default: () => [
-                    h(ElTableColumn, { prop: 'title', label: '资料名称', minWidth: 140, showOverflowTooltip: true }),
+                    h(ElTableColumn, { prop: 'title', label: '资料名称', minWidth: 140, showOverflowTooltip: true }, {
+                      default: ({ row }: { row: DocRow }) => h('span', { class: 'sp-workspace-file-name' }, [h(SvgIcon, { name: 'Document' }), h('span', row.title)]),
+                    }),
                     h(ElTableColumn, { prop: 'chunkCount', label: '检索块', width: 82 }),
                   ] })
                 },
               }),
             ]),
-            h(ElCol, { span: 15 }, [
+            h(ElCol, { span: 12, class: 'sp-kb-document-detail-column' }, [
               (() => {
                 const selected = selectedDetail.value ?? docs.value.find((doc) => doc.id === selectedDocId.value)
                 if (!selected) return h(ElCard, { shadow: 'never' }, {

@@ -62,6 +62,15 @@ export interface ToolCall {
   err?: string
 }
 
+/** Verified sources attached to an Agent reply and rendered by the chat shell. */
+export interface EventCitation {
+  source: 'event' | 'memory' | 'kb'
+  id: string
+  title: string
+  sessionId: string
+  documentId?: string
+}
+
 /**
  * 一条事件。对应 events 表一行。
  *
@@ -87,6 +96,8 @@ export interface SessionEvent {
   /** 显式实体 id（principal_id），不做文本解析。 */
   mentions: string[]
   toolCalls: ToolCall[]
+  /** Verified answer sources; presentation belongs to the chat UI, not Markdown. */
+  citations?: EventCitation[]
   /** 长回复 / 快速回复。 */
   replyMode: string
   /** 引用/回复的目标事件 id（可空；引用系统化 2026-10-02）。 */

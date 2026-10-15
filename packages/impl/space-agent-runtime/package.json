@@ -12,6 +12,7 @@
     "space-command": "*",
     "space-llm": "*",
     "space-prompt": "*",
+    "space-session": "*",
     "space-workdir": "*",
     "space-tool": "*"
   },

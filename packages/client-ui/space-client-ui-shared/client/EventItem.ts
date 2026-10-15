@@ -7,7 +7,7 @@ import { defineComponent, h, ref, resolveComponent } from 'vue'
 import type { PropType, VNode } from 'vue'
 import { authorLabel } from './labels'
 import type { EventLite, MemberLite } from './labels'
-import { renderMarkdown, visibleAgentReply } from './md'
+import { eventCitations, renderCitationModule, renderMarkdown, visibleAgentReply } from './md'
 
 export default defineComponent({
   name: 'SpaceEventItem',
@@ -41,6 +41,8 @@ export default defineComponent({
       if (kind === 'agent' && props.event.kind === 'message') {
         // Agent 正文使用外壳已注册的安全 Markdown 组件。
         children.push(h('div', { class: 'sp-event-markdown' }, renderMarkdown(visibleAgentReply(props.event.text), h, { Markdown, Button: ElButton })))
+        const citations = renderCitationModule(eventCitations(props.event), h)
+        if (citations) children.push(citations)
       } else if (kind === 'human') {
         // human：纯文本（@高亮等由外层页面处理，此处保持原样）
         children.push(h('span', ` ${props.event.text}`))

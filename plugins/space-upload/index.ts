@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from 'cordis'
 
 export const name = 'space-upload'
-export const inject = ['server', 'users', 'session', 'database', 'kb', 'eventLog']
+export const inject = ['server', 'users', 'session', 'database', 'kb', 'eventLog', 'workdir']
 
 import z from 'schemastery'
 
@@ -48,6 +48,27 @@ function readToken(req: HeaderRequest): string {
   return ''
 }
 
+async function readLimitedBody(req: { body: ReadableStream<Uint8Array> | null }, maxBytes: number): Promise<Uint8Array> {
+  const reader = req.body?.getReader()
+  if (!reader) return new Uint8Array()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const part = await reader.read()
+    if (part.done) break
+    total += part.value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel()
+      throw new Error('too_large')
+    }
+    chunks.push(part.value)
+  }
+  const result = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength }
+  return result
+}
+
 /** 文件名安全化：只留 [A-Za-z0-9._-中文]，其余替换 '_'；空了兜底 'file'。 */
 function sanitize(name: string): string {
   const out = name.replace(/[^A-Za-z0-9._\-\u4e00-\u9fa5]/g, '_')
@@ -71,6 +92,71 @@ export function apply(ctx: Context, config: Config = {}) {
   const MAX_BYTES = (config.maxMb ?? 20) * 1024 * 1024
   const dir = config.dir?.startsWith('/') || config.dir?.startsWith('./') ? config.dir : `${process.cwd()}/${config.dir ?? 'data/uploads'}`
   const pendingImports = new Map<string, Promise<{ id: string; title: string }>>()
+
+  // Agent workspaces use the same authenticated API origin as chat attachments,
+  // but files are stored in the isolated workdir service and never in uploads/.
+  ctx.server.post('/api/workspace-files/upload', async (req) => {
+    let user: { id: string; kind?: string }
+    try { user = await ctx.users.verifyToken(readToken(req)) }
+    catch { return Response.json({ error: 'unauthorized' }, { status: 401 }) }
+    if (user.kind !== 'human') return Response.json({ error: 'unauthorized' }, { status: 401 })
+    const url = new URL(req.url, 'http://localhost')
+    const scope = url.searchParams.get('scope')
+    const agentId = url.searchParams.get('agentId')?.trim() ?? ''
+    const path = url.searchParams.get('path') ?? ''
+    if ((scope !== 'shared' && scope !== 'agent') || (scope === 'agent' && !agentId) || !path || path.length > 1024) {
+      return Response.json({ error: 'invalid_path' }, { status: 400 })
+    }
+    const size = Number(req.headers.get('content-length') ?? 0)
+    if (size > 20 * 1024 * 1024) return Response.json({ error: 'too_large' }, { status: 413 })
+    let bytes: Uint8Array
+    try { bytes = await readLimitedBody(req, 20 * 1024 * 1024) }
+    catch (error) {
+      return Response.json({ error: (error as Error).message === 'too_large' ? 'too_large' : 'upload_failed' }, {
+        status: (error as Error).message === 'too_large' ? 413 : 400,
+      })
+    }
+    try {
+      await ctx.workdir.writeFile(scope === 'shared' ? { kind: 'shared' } : { kind: 'agent', agentId }, path, bytes)
+      return Response.json({ ok: true, path, size: bytes.byteLength })
+    } catch (error) {
+      const message = (error as Error).message || 'upload_failed'
+      const status = /已存在同名文件/.test(message) ? 409 : /未入驻/.test(message) ? 404 : /超过 20 MB/.test(message) ? 413 : 400
+      return Response.json({ error: message }, { status })
+    }
+  })
+
+  ctx.server.get('/api/workspace-files/download', async (req) => {
+    let user: { id: string; kind?: string }
+    try { user = await ctx.users.verifyToken(readToken(req)) }
+    catch { return Response.json({ error: 'unauthorized' }, { status: 401 }) }
+    if (user.kind !== 'human') return Response.json({ error: 'unauthorized' }, { status: 401 })
+    const url = new URL(req.url, 'http://localhost')
+    const scope = url.searchParams.get('scope')
+    const agentId = url.searchParams.get('agentId')?.trim() ?? ''
+    const path = url.searchParams.get('path') ?? ''
+    if ((scope !== 'shared' && scope !== 'agent') || (scope === 'agent' && !agentId) || !path || path.length > 1024) {
+      return Response.json({ error: 'invalid_path' }, { status: 400 })
+    }
+    try {
+      const bytes = await ctx.workdir.readFile(scope === 'shared' ? { kind: 'shared' } : { kind: 'agent', agentId }, path)
+      const filename = path.split('/').at(-1) ?? 'download'
+      const body = new ArrayBuffer(bytes.byteLength)
+      new Uint8Array(body).set(bytes)
+      return new Response(body, { headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        'Content-Length': String(bytes.byteLength),
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
+      } })
+    } catch (error) {
+      const message = (error as Error).message || 'not_found'
+      const status = (error as NodeJS.ErrnoException).code === 'ENOENT' || /未入驻|不存在/.test(message) ? 404 : /超过 20 MB/.test(message) ? 413 : 400
+      return Response.json({ error: message }, { status })
+    }
+  })
+
   ctx.server.post('/api/upload', async (req) => {
     // Uploads belong to a session; no detached public file URLs are created.
     let user: { id: string; kind?: string }

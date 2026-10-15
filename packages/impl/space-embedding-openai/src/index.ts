@@ -75,7 +75,7 @@ export abstract class EmbeddingService extends Service {
   abstract get identity(): string
   abstract get model(): string
   /** 批量向量：返回与 texts 等长的向量数组，顺序一一对应。 */
-  abstract embed(texts: string[], options?: { expectedIdentity?: string; signal?: AbortSignal }): Promise<number[][]>
+  abstract embed(texts: string[], options?: { expectedIdentity?: string; signal?: AbortSignal; profileRef?: string }): Promise<number[][]>
 }
 
 export class OpenAiEmbedding extends EmbeddingService {
@@ -91,7 +91,14 @@ export class OpenAiEmbedding extends EmbeddingService {
   }
 
   /** 取值优先级：settings（面板设置页）> Config > env 兜底（每次现算）。 */
-  private resolve(): { key: string; base: string; model: string } {
+  private resolve(profileRef?: string): { key: string; base: string; model: string } {
+    if (profileRef && !(profileRef === 'default' && !this.settings?.get<string>('embed.activeProfileRef', ''))) {
+      const profiles = this.settings?.get<Array<{ id: string }>>('embed.profiles', []) ?? []
+      if (!profiles.some((profile) => profile.id === profileRef)) throw new EmbeddingError('not_configured', '嵌入供应商配置不存在')
+      const prefix = `embed.profile.${profileRef}`
+      return { key: this.settings!.get<string>(`${prefix}.apiKey`, '').trim(),
+        base: this.settings!.get<string>(`${prefix}.baseURL`, '').trim(), model: this.settings!.get<string>(`${prefix}.model`, '').trim() }
+    }
     const s = this.settings
     return {
       key:
@@ -123,9 +130,9 @@ export class OpenAiEmbedding extends EmbeddingService {
   }
   get model(): string { return this.resolve().model }
 
-  async embed(texts: string[], options?: { expectedIdentity?: string; signal?: AbortSignal }): Promise<number[][]> {
+  async embed(texts: string[], options?: { expectedIdentity?: string; signal?: AbortSignal; profileRef?: string }): Promise<number[][]> {
     if (options?.expectedIdentity && options.expectedIdentity !== this.identity) throw new EmbeddingError('not_configured', '向量模型已切换，取消旧模型请求')
-    const { base, key, model } = this.resolve()
+    const { base, key, model } = this.resolve(options?.profileRef)
     if (!base || !key || !model) {
       throw new EmbeddingError(
         'not_configured',

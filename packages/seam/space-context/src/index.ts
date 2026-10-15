@@ -25,13 +25,21 @@ export interface AssembledContext {
   sessionId: string
   /** 系统提示词（promptRef 模板 + 角色说明 + 工具目录），已裁剪到预算内。 */
   system: string
-  /** 最近历史（按 seq 升序，最多 recentLimit 条）。 */
+  /** Stable persona/template/tool prefix, excluding live session state. */
+  stableSystem?: string
+  /** Source-labelled pieces that concatenate to stableSystem in order. */
+  stableSystemSections?: Array<{ label: string; source: string; content: string }>
+  /** Fresh session state; insert after stable history, before the current task. */
+  dynamicContext?: string
+  /** Source-labelled pieces that concatenate to dynamicContext in order. */
+  dynamicContextSections?: Array<{ label: string; source: string; content: string }>
+  /** 历史按 seq 升序；缓存块模式最多比 recentLimit 多 7 条，零表示不注入。 */
   history: SessionEvent[]
   /** 记忆召回（weight×新近度排序后截断）。 */
   memories: MemoryItem[]
   /** 检索命中（score 降序，query 非空时才有）。 */
   retrieval: RetrievalHit[]
-  /** 实际使用的字符预算（system+history 序列化后的近似值，可观测）。 */
+  /** 近似字符占用：system、history、memory 与 retrieval 正文，可观测。 */
   approxChars: number
 }
 
@@ -45,6 +53,10 @@ export interface AssembleOptions {
   contextSources?: readonly string[]
   /** 最近历史条数（缺省 20）。 */
   recentLimit?: number
+  /** Keep an append-only tail between block boundaries; default retains legacy slicing. */
+  historyMode?: 'cache-blocks'
+  /** Restrict and canonically order advertised tools for an executing Agent. */
+  toolIds?: readonly string[]
   /** 记忆召回条数（缺省 5；0 = 不注入记忆）。 */
   memoryLimit?: number
   /** 检索 query（非空才做检索注入）。 */

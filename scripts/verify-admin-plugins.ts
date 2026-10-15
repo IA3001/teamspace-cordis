@@ -161,6 +161,18 @@ try {
   assert.equal((modelRequest?.init?.headers as Record<string, string>).Authorization, 'Bearer coding-plan-api-key')
   assert.equal(JSON.stringify(catalog).includes('coding-plan-api-key'), false, 'model-list response never contains credentials')
   modelResponseBody = { data: [
+    { id: 'doubao-embedding-large-text-240915' },
+    { id: 'doubao-embedding-vision' },
+    { id: 'doubao-embedding-vision-251215' },
+    { id: 'doubao-embedding-vision-250615' },
+    { id: 'doubao-seed-2-pro', type: 'chat' },
+  ] }
+  const arkCodingEmbeddings = await rpc.fetchTextModels('', {
+    target: 'embedding', baseURL: 'https://ark.cn-beijing.volces.com/api/coding/v3', apiKey: 'coding-plan-api-key',
+  })
+  assert.deepEqual(arkCodingEmbeddings.models, ['doubao-embedding-vision', 'doubao-embedding-vision-251215'], 'Ark Coding Plan lists the published alias and its documented version, excluding other Embedding model versions')
+  assert.equal(modelRequest?.url.pathname, '/api/coding/v3/models')
+  modelResponseBody = { data: [
     { id: 'doubao-seed-2-pro', type: 'chat' },
     { id: 'qwen3.7-text-embedding' },
     { id: 'ark-embed-v1', capabilities: ['embeddings'] },
@@ -200,5 +212,17 @@ try {
 } finally {
   globalThis.fetch = originalFetch
 }
+// A saved search profile must be tested directly, without switching the current service.
+await rpc.saveServiceProfile('', 'webSearch', { id: 'probe-search', name: 'Probe Search', baseURL: 'https://search-probe.invalid', apiKey: 'probe-secret' })
+const activeBeforeProbe = settingValues.get('search.activeProfileRef')
+try {
+  globalThis.fetch = async (url) => {
+    assert.equal(String(url), 'https://search-probe.invalid/search')
+    return new Response('{}', { status: 200 })
+  }
+  assert.equal((await rpc.testWebSearchApi('', 'probe-search')).ok, true)
+  assert.equal(settingValues.get('search.activeProfileRef'), activeBeforeProbe, 'probe does not activate the selected profile')
+  assert.equal((await rpc.testWebSearchApi('', 'missing')).error, 'not_found')
+} finally { globalThis.fetch = originalFetch }
 console.log('✓ Open Admin operations and generic OpenAI-compatible model discovery for text, embedding, profiles, and Ark Coding Plan are covered')
 execFileSync(process.execPath, ['scripts/record-action.mjs', 'verify-admin-plugins', '{"ok":true}'], { stdio: 'inherit' })

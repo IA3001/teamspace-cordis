@@ -11,6 +11,7 @@
 //     实现层降级不炸）。规律 3：实现不得自造错误串。
 import { Service } from 'cordis'
 import type { Context } from 'cordis'
+import type { EventCitation } from 'space-event'
 
 declare module 'cordis' {
   interface Context {
@@ -66,6 +67,34 @@ export interface AgentWorklogStep {
   durationMs?: number
 }
 
+/** Auditable model request/response captured at the LLM seam (credentials redacted). */
+export interface AgentModelInteraction {
+  index: number
+  model: string | null
+  profileRef?: string | null
+  startedAt: string
+  completedAt?: string
+  status: 'completed' | 'failed'
+  request: Array<{
+    role: 'system' | 'user' | 'assistant'
+    source: string
+    content: string
+    /** System message fragments, in the exact order concatenated for the provider. */
+    sections?: Array<{ label: string; source: string; content: string }>
+  }>
+  response?: string
+  responseTruncated?: boolean
+  toolCalls: Array<{
+    toolId: string
+    args: string
+    status?: 'success' | 'failed'
+    result?: string
+    error?: string
+    durationMs?: number
+  }>
+  error?: string
+}
+
 /** 一次干活路径的回执。receipt 是给人看的时间线文本；其余字段给断言与未来 UI。 */
 export interface AgentExecutionReceipt {
   /** 干活的 agent（= 入参 agentId）。 */
@@ -96,14 +125,18 @@ export interface AgentExecutionReceipt {
   toolResults?: Array<{ toolId: string; ok: boolean; output: string; code?: string; costMs: number }>
   /** Session events and memories that informed this result. */
   sourceEventIds?: string[]
+  /** Sources selected from verified retrieval evidence for system-level UI rendering. */
+  citations?: EventCitation[]
   /** Human-facing execution milestones, persisted with the final receipt. */
   worklog?: AgentWorklogStep[]
+  /** Exact role-separated provider inputs and raw outputs, with credentials redacted. */
+  modelTrace?: AgentModelInteraction[]
 }
 
 export class AgentExecutionFailureError extends Error {
   readonly code?: string
 
-  constructor(message: string, readonly worklog: AgentWorklogStep[], cause?: unknown) {
+  constructor(message: string, readonly worklog: AgentWorklogStep[], cause?: unknown, readonly modelTrace: AgentModelInteraction[] = []) {
     super(message, { cause })
     this.name = 'AgentExecutionFailureError'
     const code = cause && typeof cause === 'object' && 'code' in cause

@@ -16,6 +16,14 @@ import type { AgentProgressUpdate } from 'space-agent-runtime'
 
 interface ClientIdentity { token: string; userId: string }
 interface RpcRequest { args?: unknown[] }
+interface AgentWantsToSpeakUpdate {
+  sessionId: string
+  agentId: string
+  title: string
+  sourceEventId: string
+  wantsToSpeak: boolean
+  at: string
+}
 
 async function activeIdentity(ctx: Context, identities: Map<string, ClientIdentity>, clientId: string) {
   const identity = identities.get(clientId)
@@ -164,6 +172,11 @@ export function apply(ctx: Context) {
   })
   ctx.on('space/plan', (signal) => {
     if (!signal.mentions.length) return
+    for (const agentId of signal.mentions) {
+      void sendToSession(signal.sessionId, 'space:agent-wants-to-speak', {
+        sessionId: signal.sessionId, agentId, wantsToSpeak: false,
+      })
+    }
     void sendToSession(signal.sessionId, 'space:reply-pending', {
       sessionId: signal.sessionId,
       sourceEventId: signal.event.id,
@@ -171,6 +184,9 @@ export function apply(ctx: Context) {
       mentions: signal.mentions,
       at: new Date().toISOString(),
     })
+  })
+  ctx.on('space/agent-wants-to-speak', (update: AgentWantsToSpeakUpdate) => {
+    void sendToSession(update.sessionId, 'space:agent-wants-to-speak', update)
   })
   ctx.on('space/typing', (update) => {
     void sendToSession(update.sessionId, 'space:typing', update)

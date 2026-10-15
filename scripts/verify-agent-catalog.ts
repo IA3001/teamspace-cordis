@@ -22,6 +22,8 @@ const teamTemplateMigration = migrations.find((m) => m.version === 29)
 assert.ok(teamTemplateMigration, 'team-authored Agent template migration must be present')
 const lifecycleMigration = migrations.find((m) => m.version === 30)
 assert.ok(lifecycleMigration, 'Agent template lifecycle migration must be present')
+const iconMigration = migrations.find((m) => m.version === 36)
+assert.ok(iconMigration, 'Agent SVG icon persistence migration must be present')
 const dir = mkdtempSync(join(tmpdir(), 'agent-catalog-verify-'))
 const path = join(dir, 'catalog.db')
 
@@ -32,27 +34,34 @@ try {
   db.exec(templateMigration.up)
   db.exec(teamTemplateMigration.up)
   db.exec(lifecycleMigration.up)
+  db.exec(iconMigration.up)
   let catalog = new SqliteAgentCatalog(new Context(), db)
   const created = catalog.create({
     title: '研究助手',
     description: '检索资料并给出依据。',
     promptRef: 'prompt.research',
-    modelRef: 'model.reasoning',
     llmProfileRef: 'ark-coding',
     templateOrigin: { id: 'research', version: 1 },
     toolIds: ['web.search', 'kb.search'],
     contextSources: ['session', 'agent-memory', 'team-kb'],
     memoryPolicy: 'agent',
     speechPolicy: 'passive',
-  }, 'a_shared_research')
+    iconId: 'Code',
+    // Simulate a stale client/database-era override. The catalog now ignores it.
+    modelRef: 'legacy-unverified-model',
+  } as Parameters<typeof catalog.create>[0], 'a_shared_research')
   assert.equal(created.id, 'a_shared_research')
   assert.equal(created.status, 'active')
+  assert.equal(created.iconId, 'Code', 'custom SVG icon persists on Agent definitions')
   assert.equal(created.llmProfileRef, 'ark-coding')
+  assert.equal('modelRef' in created, false, 'Agent definitions no longer expose a per-Agent model override')
+  assert.equal((db.prepare('SELECT model_ref FROM agent_definitions WHERE id = ?').get(created.id) as { model_ref: string }).model_ref,
+    '', 'legacy or stale model overrides are discarded on catalog writes')
   assert.deepEqual(created.templateOrigin, { id: 'research', version: 1 })
   assert.deepEqual(created.toolIds, ['web.search', 'kb.search'])
   const teamTemplate = catalog.saveTemplate({
     title: '发布验收助手', summary: '检查发布前后状态', input: {
-      title: '发布验收助手', description: '验证发布前后状态并列出结果。', promptRef: '', modelRef: '', llmProfileRef: 'ark-coding',
+      title: '发布验收助手', description: '验证发布前后状态并列出结果。', promptRef: '', llmProfileRef: 'ark-coding',
       toolIds: ['web.search'], contextSources: ['session', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive',
     },
   })
@@ -80,14 +89,23 @@ try {
     'restoring allows a new revision without losing prior versions')
   assert.throws(() => catalog.saveTemplate({ title: '', summary: '无效', input: teamTemplate.input }), /模板名称/u)
   assert.deepEqual(catalog.list().map((a) => a.id), [created.id])
+  const deletable = catalog.create({
+    title: '删除验收助手', description: '验证永久删除目录配置。', promptRef: '',
+    toolIds: [], contextSources: ['session'], memoryPolicy: 'none', speechPolicy: 'passive',
+  }, 'a_delete_check')
+  assert.equal(catalog.delete(deletable.id).title, deletable.title)
+  assert.throws(() => catalog.get(deletable.id), (e: unknown) => e instanceof AgentCatalogError && e.code === 'not_found',
+    'deleting removes the shared definition from persistent lookup')
+  assert.deepEqual(catalog.list().map((a) => a.id), [created.id], 'deleted definitions no longer appear in the active catalog')
   assert.throws(() => catalog.create({
-    title: '研究助手', description: 'duplicate', promptRef: '', modelRef: '',
+    title: '研究助手', description: 'duplicate', promptRef: '',
     toolIds: [], contextSources: [], memoryPolicy: 'agent', speechPolicy: 'passive',
   }), (e: unknown) => e instanceof AgentCatalogError && e.code === 'duplicate_title')
 
-  const updated = catalog.update(created.id, { description: '检索并引用团队资料。', toolIds: ['kb.search'] })
+  const updated = catalog.update(created.id, { description: '检索并引用团队资料。', toolIds: ['kb.search'], iconId: 'DataBoard' })
   assert.equal(updated.description, '检索并引用团队资料。')
   assert.equal(updated.llmProfileRef, 'ark-coding', 'patches that omit the profile retain it')
+  assert.equal(updated.iconId, 'DataBoard', 'Agent icon changes persist through updates')
   assert.deepEqual(updated.templateOrigin, { id: 'research', version: 1 }, 'editing an Agent preserves its immutable template origin')
   assert.deepEqual(updated.toolIds, ['kb.search'])
 
@@ -101,6 +119,8 @@ try {
   rollbackDb.exec(templateMigration.up)
   rollbackDb.exec(teamTemplateMigration.up)
   rollbackDb.exec(lifecycleMigration.up)
+  rollbackDb.exec(iconMigration.up)
+  rollbackDb.exec(iconMigration.down)
   rollbackDb.exec(lifecycleMigration.down)
   rollbackDb.exec(teamTemplateMigration.down)
   rollbackDb.exec(templateMigration.down)
@@ -109,6 +129,7 @@ try {
     'team template rollback removes the added table')
   const rolledBackColumns = rollbackDb.prepare(`PRAGMA table_info(agent_definitions)`).all() as Array<{ name: string }>
   assert.equal(rolledBackColumns.some((column) => column.name === 'llm_profile_ref'), false, 'profile migration down removes the additive column')
+  assert.equal(rolledBackColumns.some((column) => column.name === 'icon_id'), false, 'icon migration down removes the additive column')
   assert.equal(rolledBackColumns.some((column) => column.name === 'template_id' || column.name === 'template_version'), false,
     'template provenance rollback removes both additive columns')
   const templateColumns = rollbackDb.prepare(`PRAGMA table_info(agent_templates)`).all() as Array<{ name: string }>

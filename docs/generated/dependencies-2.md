@@ -1,5 +1,25 @@
 # dependencies（续）
 
+- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-staging`
+  `value`
+- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-staging`
+  `type`
+- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-event`
+  `value`
+- [packages/impl/space-store-sqlite/src/staging.ts](../../packages/impl/space-store-sqlite/src/staging.ts)：`space-event`
+  `type`
+- [packages/impl/space-store-sqlite/src/users.ts](../../packages/impl/space-store-sqlite/src/users.ts)：`space-identity`
+  `value`
+- [packages/impl/space-store-sqlite/src/users.ts](../../packages/impl/space-store-sqlite/src/users.ts)：`space-identity`
+  `type`
+- [packages/impl/space-workdir-local/src/index.ts](../../packages/impl/space-workdir-local/src/index.ts)：`space-workdir`
+  `value`
+- [packages/impl/space-workdir-local/src/index.ts](../../packages/impl/space-workdir-local/src/index.ts)：`space-workdir`
+  `type`
+- [packages/policy/space-agent-speech/src/index.ts](../../packages/policy/space-agent-speech/src/index.ts)：`space-event`
+  `type`
+- [packages/policy/space-authz/src/index.ts](../../packages/policy/space-authz/src/index.ts)：`space-orchestrator`
+  `type`
 - [packages/policy/space-authz/src/index.ts](../../packages/policy/space-authz/src/index.ts)：`space-session`
   `value`
 - [packages/policy/space-authz/src/index.ts](../../packages/policy/space-authz/src/index.ts)：`space-session`
@@ -7,6 +27,8 @@
 - [packages/seam/space-agent-inbox/src/index.ts](../../packages/seam/space-agent-inbox/src/index.ts)：`space-memory`
   `type`
 - [packages/seam/space-agent-inbox/src/index.ts](../../packages/seam/space-agent-inbox/src/index.ts)：`space-event`
+  `type`
+- [packages/seam/space-agent-runtime/src/index.ts](../../packages/seam/space-agent-runtime/src/index.ts)：`space-event`
   `type`
 - [packages/seam/space-context/src/index.ts](../../packages/seam/space-context/src/index.ts)：`space-memory`
   `type`
@@ -22,6 +44,8 @@
   `type`
 - [packages/seam/space-orchestrator/src/index.ts](../../packages/seam/space-orchestrator/src/index.ts)：`space-event`
   `type`
+- [packages/seam/space-retrieval/src/index.ts](../../packages/seam/space-retrieval/src/index.ts)：`space-event`
+  `type`
 - [packages/seam/space-staging/src/index.ts](../../packages/seam/space-staging/src/index.ts)：`space-event`
   `type`
 - [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-agent-inbox`
@@ -30,11 +54,19 @@
   `type`
 - [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-memory`
   `type`
+- [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-context`
+  `type`
+- [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-message`
+  `type`
+- [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-agent-speech`
+  `value`
 - [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-event`
   `value`
 - [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-event`
   `type`
 - [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-agent-inbox`
+  `type`
+- [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-agent-runtime`
   `type`
 - [plugins/agent-inbox/index.ts](../../plugins/agent-inbox/index.ts)：`space-event`
   `value`

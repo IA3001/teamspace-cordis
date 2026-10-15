@@ -33,7 +33,6 @@ function toDefinition(r: Row): AgentDefinition {
     title: r.title as string,
     description: r.description as string,
     promptRef: r.prompt_ref as string,
-    modelRef: r.model_ref as string,
     llmProfileRef: r.llm_profile_ref as string,
     templateOrigin: r.template_id
       ? { id: r.template_id as string, version: Number(r.template_version) }
@@ -42,6 +41,7 @@ function toDefinition(r: Row): AgentDefinition {
     contextSources: parseList(r.context_sources, 'contextSources'),
     memoryPolicy: r.memory_policy as string,
     speechPolicy: r.speech_policy as string,
+    iconId: (r.icon_id as string) || 'UserFilled',
     status: r.status as AgentDefinition['status'],
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
@@ -62,16 +62,20 @@ function cleanInput(input: AgentDefinitionInput): AgentDefinitionInput {
     !Number.isSafeInteger(templateOrigin.version) || templateOrigin.version < 1)) {
     throw new AgentCatalogError('invalid_input', '模板来源必须包含有效模板 ID 和正整数版本')
   }
+  const iconId = String(input.iconId ?? 'UserFilled').trim()
+  if (!/^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(iconId)) {
+    throw new AgentCatalogError('invalid_input', '请选择有效的 SVG 图标')
+  }
   return {
     title,
     description,
     promptRef: String(input.promptRef ?? '').trim(),
-    modelRef: String(input.modelRef ?? '').trim(),
     llmProfileRef: String(input.llmProfileRef ?? '').trim(),
     toolIds: parseList(JSON.stringify(input.toolIds ?? []), 'toolIds'),
     contextSources: parseList(JSON.stringify(input.contextSources ?? ['session', 'agent-memory', 'team-kb']), 'contextSources'),
     memoryPolicy: String(input.memoryPolicy ?? 'agent').trim() || 'agent',
     speechPolicy: String(input.speechPolicy ?? 'passive').trim() || 'passive',
+    iconId,
     templateOrigin,
   }
 }
@@ -114,14 +118,15 @@ export class SqliteAgentCatalog extends AgentCatalogService {
       this.db.prepare(`
         INSERT INTO agent_definitions(
           id, title, description, prompt_ref, model_ref, llm_profile_ref, tool_ids,
-          context_sources, memory_policy, speech_policy, template_id, template_version,
+          context_sources, memory_policy, speech_policy, icon_id, template_id, template_version,
           status, created_at, updated_at
-        ) VALUES ($id, $title, $description, $promptRef, $modelRef, $llmProfileRef, $toolIds, $contextSources, $memoryPolicy, $speechPolicy, $templateId, $templateVersion, 'active', $createdAt, $updatedAt)
+        ) VALUES ($id, $title, $description, $promptRef, $modelRef, $llmProfileRef, $toolIds, $contextSources, $memoryPolicy, $speechPolicy, $iconId, $templateId, $templateVersion, 'active', $createdAt, $updatedAt)
       `).run({
         $id: id, $title: value.title, $description: value.description,
-        $promptRef: value.promptRef, $modelRef: value.modelRef, $llmProfileRef: value.llmProfileRef ?? '',
+        $promptRef: value.promptRef, $modelRef: '', $llmProfileRef: value.llmProfileRef ?? '',
         $toolIds: JSON.stringify(value.toolIds), $contextSources: JSON.stringify(value.contextSources),
         $memoryPolicy: value.memoryPolicy, $speechPolicy: value.speechPolicy,
+        $iconId: value.iconId ?? 'UserFilled',
         $templateId: value.templateOrigin?.id ?? '', $templateVersion: value.templateOrigin?.version ?? 0,
         $createdAt: timestamp, $updatedAt: timestamp,
       })
@@ -145,13 +150,14 @@ export class SqliteAgentCatalog extends AgentCatalogService {
         UPDATE agent_definitions SET title = $title, description = $description, prompt_ref = $promptRef,
           model_ref = $modelRef, llm_profile_ref = $llmProfileRef, tool_ids = $toolIds,
           context_sources = $contextSources, memory_policy = $memoryPolicy,
-          speech_policy = $speechPolicy, updated_at = $updatedAt
+          speech_policy = $speechPolicy, icon_id = $iconId, updated_at = $updatedAt
         WHERE id = $id
       `).run({
         $id: id, $title: value.title, $description: value.description,
-        $promptRef: value.promptRef, $modelRef: value.modelRef, $llmProfileRef: value.llmProfileRef ?? '',
+        $promptRef: value.promptRef, $modelRef: '', $llmProfileRef: value.llmProfileRef ?? '',
         $toolIds: JSON.stringify(value.toolIds), $contextSources: JSON.stringify(value.contextSources),
         $memoryPolicy: value.memoryPolicy, $speechPolicy: value.speechPolicy, $updatedAt: now(),
+        $iconId: value.iconId ?? 'UserFilled',
       })
     } catch (e) {
       if (/UNIQUE/i.test(String((e as Error).message))) {
@@ -181,6 +187,12 @@ export class SqliteAgentCatalog extends AgentCatalogService {
       this.db.prepare(`UPDATE agent_definitions SET status = 'archived', updated_at = ? WHERE id = ?`).run(now(), id)
     }
     return this.get(id)
+  }
+
+  delete(id: string): AgentDefinition {
+    const current = this.get(id)
+    this.db.prepare(`DELETE FROM agent_definitions WHERE id = ?`).run(id)
+    return current
   }
 
   saveTemplate(input: Omit<AgentTemplate, 'id' | 'version' | 'teamOwned'>, id?: string): AgentTemplate {

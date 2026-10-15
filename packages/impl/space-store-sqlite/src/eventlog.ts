@@ -28,6 +28,7 @@ function toEvent(r: Row): SessionEvent {
     text: (r.text as string) ?? '',
     mentions: parse(r.mentions, []) as string[],
     toolCalls: parse(r.tool_calls, []) as ToolCall[],
+    citations: parse(r.citations, []) as SessionEvent['citations'],
     replyMode: (r.reply_mode as string) ?? '',
     replyTo: (r.reply_to as string | null) ?? null,
     sourceEventId: (r.source_event_id as string | null) ?? null,
@@ -78,8 +79,8 @@ export class SqliteEventLog extends EventLogService {
     try {
       this.db
         .prepare(
-          `INSERT INTO events(id, session_id, seq, phase_id, ts, author_id, author_kind, kind, text, mentions, tool_calls, reply_mode, reply_to, source_event_id, voided)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          `INSERT INTO events(id, session_id, seq, phase_id, ts, author_id, author_kind, kind, text, mentions, tool_calls, reply_mode, reply_to, source_event_id, citations, voided)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
         )
         .run(
           input.id,
@@ -96,6 +97,7 @@ export class SqliteEventLog extends EventLogService {
           input.replyMode ?? '',
           input.replyTo ?? null,
           primarySourceEventId,
+          JSON.stringify(input.citations ?? []),
         )
       const link = this.db.prepare('INSERT INTO event_sources(event_id, source_event_id, relation) VALUES (?, ?, ?)')
       for (const sourceEventId of sourceEventIds) {

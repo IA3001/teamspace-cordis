@@ -89,22 +89,25 @@ export function apply(ctx: Context) {
       /** 检索：topK 固定 8；关键词粗排 + 向量重排（A2）；无效 token 返回 null。 */
       async searchKb(token: string, query: string) {
         if (!(await auth(ctx, token))) return null
+        const q = String(query ?? '')
+        if (!q.trim()) return { error: 'empty_query', detail: '检索词不能为空' }
         try {
-          const q = String(query ?? '')
+          const documents = await ctx.kb.listDocuments()
+          const sources = new Map<string, string>(documents.map((d) => [d.id, d.source]))
+          const withSources = (hits: Awaited<ReturnType<typeof ctx.kb.search>>) =>
+            hits.map((hit) => ({ ...hit, source: sources.get(hit.docId) ?? '' }))
           const keyword = await ctx.kb.search(q, { topK: 8 })
-          if (!ctx.embeddings.configured) return keyword
-          const titles = new Map<string, string>(
-            (await ctx.kb.listDocuments()).map((d) => [d.id, d.title]),
-          )
+          if (!ctx.embeddings.configured) return withSources(keyword)
+          const titles = new Map<string, string>(documents.map((d) => [d.id, d.title]))
           const identity = ctx.embeddings.identity
-          return await vectorRerank(q, keyword, {
+          return withSources(await vectorRerank(q, keyword, {
             modelIdentity: identity,
             currentModelIdentity: () => ctx.embeddings.identity,
             chunks: await ctx.kb.allChunks(),
             embed: (texts) => ctx.embeddings.embed(texts, { expectedIdentity: identity }),
             topK: 8,
             titles,
-          })
+          }))
         } catch {
           return { error: 'search-failed' }
         }

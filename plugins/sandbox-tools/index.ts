@@ -120,6 +120,32 @@ function parseArgs<T extends Record<string, unknown>>(raw: string): T {
   return value as T
 }
 
+function safeProjectRelativePath(root: string, projectRoot: string, value: unknown): string {
+  const input = String(value ?? '')
+  if (!input || isAbsolute(input) || input.includes('\\') || input.split('/').some((part) => !part || part === '.' || part === '..')) {
+    throw new Error(`项目文件必须是项目目录内的相对路径：${input || '(空)'}`)
+  }
+  const absolute = within(projectRoot, input)
+  const projectRelative = relative(projectRoot, absolute)
+  if (!projectRelative || projectRelative.startsWith('..') || isAbsolute(projectRelative)) throw new Error('项目文件路径越界')
+  const workdirRelative = relative(root, absolute)
+  if (workdirRelative.startsWith('..') || isAbsolute(workdirRelative)) throw new Error('项目文件路径越出个人工作区')
+  return projectRelative
+}
+
+function cmakeExecutableSources(text: string): string[] {
+  const uncommented = text.replace(/#[^\r\n]*/gu, ' ')
+  const sources: string[] = []
+  for (const match of uncommented.matchAll(/\badd_executable\s*\(([^)]*)\)/giu)) {
+    const tokens = match[1]!.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+/gu) ?? []
+    for (const token of tokens.slice(1)) {
+      const source = token.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, (_whole, doubleQuoted: string | undefined, singleQuoted: string | undefined) => doubleQuoted ?? singleQuoted ?? token)
+      if (/\.(?:c|cc|cpp|cxx|c\+\+|m|mm)$/iu.test(source) && !source.includes('$<')) sources.push(source.replace(/^\.\//u, ''))
+    }
+  }
+  return sources
+}
+
 function assertActive(invoker: { signal?: AbortSignal }): void {
   if (invoker.signal?.aborted) throw new Error('Agent 任务已撤回，工具调用已取消')
 }
@@ -237,6 +263,73 @@ export async function apply(ctx: Context) {
         throw error
       }
       return `已写入 ${relative(root, path)}（${Buffer.byteLength(content)} 字节）`
+    },
+  })
+
+  ctx.tools.register({
+    id: 'tool.workspace.verify', title: '检查多文件工程完整性',
+    description: 'args: {"projectPath":"个人工作区内的项目目录","requiredFiles":["项目内相对路径"]}；检查交付文件存在性，并检查 CMakeLists.txt 中 add_executable 声明的源文件与本地 include 依赖。不能替代实际编译或测试。',
+    capabilities: ['workspace.read', 'workspace.verify'],
+    parameters: { type: 'object', properties: {
+      projectPath: { type: 'string', description: '个人工作区内的项目目录，例如 projects/hello-cordis' },
+      requiredFiles: { type: 'array', items: { type: 'string' }, maxItems: 100, description: '用户明确要求交付的相对路径，例如 README.md' },
+    }, required: ['projectPath', 'requiredFiles'], additionalProperties: false },
+    handler: async (raw, invoker) => {
+      assertActive(invoker)
+      const args = parseArgs<{ projectPath?: string; requiredFiles?: unknown }>(raw)
+      const requiredFiles = args.requiredFiles
+      if (!Array.isArray(requiredFiles) || requiredFiles.length > 100 || requiredFiles.some((item) => typeof item !== 'string')) {
+        throw new Error('requiredFiles 必须是最多 100 项的相对路径数组')
+      }
+      const root = (await claimWorkdir(ctx, invoker)).root
+      const projectPath = within(root, String(args.projectPath ?? ''))
+      const projectRelative = assertOrganizedWorkspacePath(root, projectPath, ['projects'])
+      let actualProject: string
+      try { actualProject = await realPathWithin(root, projectPath) }
+      catch { return `工作区检查未通过：项目目录不存在或不可访问：${projectRelative}` }
+      if (!(await stat(actualProject)).isDirectory()) throw new Error('projectPath 必须指向目录')
+
+      const missing = new Set<string>()
+      const inspect = async (relativePath: string): Promise<string | undefined> => {
+        const safeRelative = safeProjectRelativePath(root, actualProject, relativePath)
+        const candidate = within(actualProject, safeRelative)
+        try {
+          const realCandidate = await realPathWithin(root, candidate)
+          const info = await stat(realCandidate)
+          if (!info.isFile() || info.size > MAX_FILE_BYTES) { missing.add(safeRelative); return undefined }
+          return await readFile(realCandidate, 'utf8')
+        } catch {
+          missing.add(safeRelative)
+          return undefined
+        }
+      }
+      for (const required of requiredFiles as string[]) await inspect(required)
+      const cmake = await inspect('CMakeLists.txt')
+      const cmakeSources = cmake === undefined ? [] : cmakeExecutableSources(cmake)
+      const queue = [...cmakeSources]
+      const inspected = new Set<string>()
+      while (queue.length) {
+        assertActive(invoker)
+        const sourcePath = safeProjectRelativePath(root, actualProject, queue.shift())
+        if (inspected.has(sourcePath)) continue
+        inspected.add(sourcePath)
+        const source = await inspect(sourcePath)
+        if (source === undefined) continue
+        for (const include of source.matchAll(/^\s*#\s*include\s*"([^"]+)"/gmu)) {
+          const relativeToSource = `${dirname(sourcePath)}/${include[1]}`.replace(/^\.\//u, '')
+          const rootRelative = include[1]!
+          // C/C++ includes normally resolve beside the including file. Also
+          // accept project-root-relative includes used by simple projects.
+          await inspect(relativeToSource)
+          if (missing.has(relativeToSource) && relativeToSource !== rootRelative) {
+            missing.delete(relativeToSource)
+            await inspect(rootRelative)
+          }
+        }
+      }
+      const missingList = [...missing].sort()
+      if (missingList.length) return `工作区检查未通过（缺少文件）：\n${missingList.map((path) => `- ${path}`).join('\n')}`
+      return `工作区检查通过：${projectRelative}；已检查交付清单、CMake 目标源文件和本地 include 依赖。此检查只验证文件存在，不代表已编译或测试。`
     },
   })
 

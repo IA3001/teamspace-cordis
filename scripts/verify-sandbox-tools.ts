@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   agents.register({ id: 'a_sandbox_verify', kind: 'custom', title: '沙箱验收 Agent', capabilities: [] })
   const workdir = new LocalWorkdirService(ctx, sandbox)
   const eventLog = new VerifyEventLog(ctx)
-  const tools = new ToolRegistry(ctx, { allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute'] })
+  const tools = new ToolRegistry(ctx, { allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.workspace.verify', 'tool.code.execute'] })
   new SqliteSandboxApproval(ctx, approvalDb)
   await applySandboxTools(ctx)
   await workdir.claim('a_sandbox_verify')
@@ -77,6 +77,38 @@ async function main(): Promise<void> {
   const personal = await tools.invoke('tool.workspace.read', JSON.stringify({ path: 'notes/result.txt' }), invoker)
   assert.equal(personal.ok, true)
   assert.equal(personal.output, 'personal data')
+
+  const project = 'projects/qa-agent-collab/hello-cordis'
+  const files = [
+    ['CMakeLists.txt', 'cmake_minimum_required(VERSION 3.20)\nproject(hello_cordis LANGUAGES CXX)\nadd_executable(hello_cordis helloworld.cpp greeting.cpp)\n'],
+    ['greeting.cpp', '#include "greeting.hpp"\n#include <iostream>\nvoid greet() { std::cout << "Hello"; }\n'],
+    ['greeting.hpp', '#pragma once\nvoid greet();\n'],
+  ] as const
+  for (const [path, content] of files) {
+    const written = await tools.invoke('tool.workspace.write', JSON.stringify({ path: `${project}/${path}`, content }), invoker)
+    assert.equal(written.ok, true, written.output)
+  }
+  const requiredFiles = ['helloworld.cpp', 'greeting.hpp', 'greeting.cpp', 'README.md', 'CMakeLists.txt']
+  const incompleteProject = await tools.invoke('tool.workspace.verify', JSON.stringify({ projectPath: project, requiredFiles }), invoker)
+  assert.equal(incompleteProject.ok, true, 'an incomplete report is a successful check operation, not a tool transport failure')
+  assert.match(incompleteProject.output, /工作区检查未通过/u)
+  assert.match(incompleteProject.output, /helloworld\.cpp/u, 'CMake target references to missing source files must be reported')
+  assert.match(incompleteProject.output, /README\.md/u, 'explicitly required deliverables must be reported when absent')
+  for (const [path, content] of [
+    ['helloworld.cpp', '#include "greeting.hpp"\nint main() { greet(); return 0; }\n'],
+    ['README.md', '# Hello Cordis\n'],
+  ] as const) {
+    const written = await tools.invoke('tool.workspace.write', JSON.stringify({ path: `${project}/${path}`, content }), invoker)
+    assert.equal(written.ok, true, written.output)
+  }
+  const completeProject = await tools.invoke('tool.workspace.verify', JSON.stringify({ projectPath: project, requiredFiles }), invoker)
+  assert.match(completeProject.output, /^工作区检查通过/u)
+  const missingInclude = await tools.invoke('tool.workspace.write', JSON.stringify({
+    path: `${project}/greeting.cpp`, content: '#include "missing.hpp"\nvoid greet() {}\n',
+  }), invoker)
+  assert.equal(missingInclude.ok, true)
+  const incompleteDependency = await tools.invoke('tool.workspace.verify', JSON.stringify({ projectPath: project, requiredFiles }), invoker)
+  assert.match(incompleteDependency.output, /missing\.hpp/u, 'local quoted include dependencies must be checked')
 
   writeFileSync(sharedPath, 'shared read only')
   const shared = await tools.invoke('tool.workspace.read', JSON.stringify({ path: sharedFile, scope: 'shared' }), invoker)
@@ -181,7 +213,7 @@ async function main(): Promise<void> {
   rmSync(sharedPath, { force: true })
   rmSync(sandbox, { recursive: true, force: true })
   rmSync(outside, { recursive: true, force: true })
-  console.log('✓ workspace boundaries, symlink checks, Docker limits, atomic approval delivery, stale-temp cleanup, and read-only shared mount passed')
+  console.log('✓ workspace boundaries, multi-file project completeness, CMake/include dependency checks, Docker limits, atomic approval delivery, and read-only shared mount passed')
 }
 
 try {

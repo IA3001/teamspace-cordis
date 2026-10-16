@@ -202,6 +202,43 @@
         "scripts/verify-llm-stream.ts",
         "scripts/verify-agent-teamspace.ts"
       ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_workspace_verify.up.sql",
+      "hash": "09d6310aadde3ae5dd9e67e158105c2d6f9b597df2bcfef730ec9c84e736c649",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "36",
+      "upgrade": "Apply migration 0037; built-in coder and tester Agents gain the workspace verifier while existing tool selections are preserved.",
+      "rollback": "Apply migration 0037 down; stored Agent tool selections remain unchanged and older runtimes ignore the unregistered optional tool.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-project-completeness.ts",
+        "scripts/verify-sandbox-tools.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_workspace_verify.down.sql",
+      "hash": "8939f3560ad29471fdfe79fe7ff21d4616f9ac3c1bb041646a20efabb49275ab",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "36",
+      "upgrade": "Apply migration 0037; built-in coder and tester Agents gain the workspace verifier while existing tool selections are preserved.",
+      "rollback": "The down migration intentionally preserves Agent configuration; no user-authored tool selection is removed.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-project-completeness.ts"
+      ]
+    },
+    {
+      "path": "packages/seam/space-agent-catalog/src/index.ts",
+      "hash": "0c5112190c173376f55ebaf726f0b4dc367bc78a59c5cff3ed6390d8a5b36472",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "New coding and testing Agent templates advertise tool.workspace.verify; existing Agent definitions receive the optional tool through migration 0037.",
+      "rollback": "Revert the catalog default together with migration 0037; user-edited Agent definitions remain unchanged.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-project-completeness.ts"
+      ]
     }
   ]
 }

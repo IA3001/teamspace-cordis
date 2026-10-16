@@ -1304,7 +1304,7 @@ console.log('== 断言区 ==')
   judge('AS31 工作区显示当前执行状态与历史消化记录', ok, detail.join(' | '))
 }
 
-// AS11 A real isolated session verifies the complete DRI decision card lifecycle.
+// AS11 A real isolated session verifies the DRI decision card and human-reviewed Agent relay.
 {
   let ok = true; const detail = []
   let eventId = ''
@@ -1321,15 +1321,16 @@ console.log('== 断言区 ==')
       db.prepare(`INSERT INTO sessions(id,title,status,created_at,updated_at)
         VALUES (?, 'UI 决策卡片验收', 'open', ?, ?)`).run(temporaryDecisionSession, now, now)
       db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
-        VALUES (?, ?, 'DRI', 'active', ?, NULL, ''), (?, 'a_analyst', '成员', 'active', ?, NULL, '')`)
-        .run(temporaryDecisionSession, user.user_id, now, temporaryDecisionSession, now)
+        VALUES (?, ?, 'DRI', 'active', ?, NULL, ''), (?, 'a_analyst', '成员', 'active', ?, NULL, ''),
+          (?, 'agent.tester', '成员', 'active', ?, NULL, '')`)
+        .run(temporaryDecisionSession, user.user_id, now, temporaryDecisionSession, now, temporaryDecisionSession, now)
       const addEvent = (id, seq, authorId, authorKind, kind, text, replyTo = null) =>
         db.prepare(`INSERT INTO events(id,session_id,seq,phase_id,ts,author_id,author_kind,kind,text,
           mentions,tool_calls,reply_mode,reply_to) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, '[]', '[]', '', ?)`)
           .run(id, temporaryDecisionSession, seq, new Date(Date.now() + seq).toISOString(), authorId,
             authorKind, kind, text, replyTo)
       addEvent(eventId, 1, 'a_analyst', 'agent', 'message',
-        '建议采用方案 A。\n\n[测试无效目标按钮](#teamspace-agent?to=unknown_agent&task=执行)\n【需要DRI决策】是否接受方案 A？')
+        '建议采用方案 A。\n\n[测试未加入目标](#teamspace-agent?to=unknown_agent&task=执行)\n[请测试者复核](#teamspace-agent?to=agent.tester&task=复核验收口径)\n【需要DRI决策】是否接受方案 A？')
     } finally { db.close() }
 
     await page.goto(`${teamspaceBase}/teamspace?session=${encodeURIComponent(temporaryDecisionSession)}`,
@@ -1347,14 +1348,47 @@ console.log('== 断言区 ==')
     const namedAgent = authorName === '需求分析师'
     detail.push(`消息作者优先显示共享 Agent 名称=${namedAgent}（${authorName}）`)
     ok &&= namedAgent
-    await message.getByRole('link', { name: '测试无效目标按钮' }).click()
-    const rejectedAction = await page.getByText('此操作目标不是当前会话中可调用的 Agent').isVisible()
-    detail.push(`Agent 操作链接校验会话目标=${rejectedAction}`)
+    await message.getByRole('link', { name: '测试未加入目标' }).click()
+    const rejectedAction = await page.getByText('目标 Agent 尚未加入当前会话，不能中继任务；请先邀请其加入').isVisible()
+    detail.push(`未加入会话的目标无法打开中继=${rejectedAction}`)
     ok &&= rejectedAction
+    const beforeRelay = await page.locator('.sp-msg').count()
+    await message.getByRole('link', { name: '请测试者复核' }).click()
+    const relayDialog = page.getByRole('dialog', { name: '审阅 Agent 中继任务' })
+    await relayDialog.waitFor({ state: 'visible', timeout: 3000 })
+    const relayInput = relayDialog.locator('textarea')
+    const relayOriginalText = await relayInput.inputValue()
+    const relayTarget = await relayDialog.locator('.el-select').innerText()
+    await relayInput.fill('重新核对验收口径并列出缺失项')
+    const relayEditedText = await relayInput.inputValue()
+    const relayConfirmButton = relayDialog.getByRole('button', { name: '确认发送' })
+    const relayConfirmation = await relayConfirmButton.isVisible() && await relayConfirmButton.isEnabled()
+    await relayDialog.getByRole('button', { name: '取消' }).click()
+    await relayDialog.waitFor({ state: 'hidden', timeout: 3000 })
+    const cancelledRelay = await page.locator('.sp-msg').count() === beforeRelay &&
+      await page.getByRole('dialog', { name: '审阅 Agent 中继任务' }).isHidden()
+    const selectedJoinedAgent = relayTarget.includes('测试者') && relayTarget.includes('agent.tester')
+    detail.push(`建议链接只打开可编辑审阅框=${relayOriginalText === '复核验收口径' && relayEditedText === '重新核对验收口径并列出缺失项' && relayConfirmation}`)
+    detail.push(`目标预选为当前会话已加入的 Agent=${selectedJoinedAgent}（${relayTarget}）`)
+    detail.push(`取消中继不新增会话消息=${cancelledRelay}`)
+    ok &&= relayOriginalText === '复核验收口径' && relayEditedText === '重新核对验收口径并列出缺失项' &&
+      relayConfirmation && selectedJoinedAgent && cancelledRelay
+    await message.getByRole('link', { name: '请测试者复核' }).click()
+    const reopenedRelay = page.getByRole('dialog', { name: '审阅 Agent 中继任务' })
+    await reopenedRelay.waitFor({ state: 'visible', timeout: 3000 })
+    await reopenedRelay.getByRole('button', { name: '改为团队讨论草稿' }).click()
+    await reopenedRelay.waitFor({ state: 'hidden', timeout: 3000 })
+    const discussionDraft = await page.locator('.sp-composer textarea').inputValue()
+    const discussionDraftOnly = discussionDraft === '复核验收口径' &&
+      await page.locator('.sp-msg').count() === beforeRelay &&
+      await page.getByText('已转为团队讨论草稿，尚未发送；不会触发 Agent').isVisible()
+    detail.push(`修改为团队讨论草稿后不派发 Agent=${discussionDraftOnly}`)
+    ok &&= discussionDraftOnly
+    await page.locator('.sp-composer textarea').fill('')
     await page.screenshot({ path: '/tmp/ui-decision-card.png' })
 
     await message.getByRole('button', { name: '通过', exact: true }).click()
-    const decisionDialog = page.locator('.el-dialog')
+    const decisionDialog = page.locator('.el-dialog').filter({ hasText: '处理 Agent 回复' })
     const directActionDialog = await decisionDialog.isVisible() &&
       (await decisionDialog.innerText()).includes('处理 Agent 回复')
     detail.push(`DRI 菜单打开结构化决策窗口=${directActionDialog}`)
@@ -1406,7 +1440,7 @@ console.log('== 断言区 ==')
     }, sessionId).catch(() => {})
     await page.goto(`${teamspaceBase}/teamspace?session=s_seed_demo`, { waitUntil: 'networkidle' }).catch(() => {})
   }
-    judge('AS11 Agent 回复卡片可直接发起 DRI 决策', ok, detail.join(' | '))
+    judge('AS11 DRI 决策与 Agent 中继均需要人类明确操作', ok, detail.join(' | '))
 }
 
 // AS15 group owners can rename a session in the UI and the new title persists.

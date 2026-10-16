@@ -175,6 +175,7 @@ interface TodoView { id: string; done: boolean; text: string; createdAt: string 
 type Menu = { kind: 'mention'; query: string } | null
 type DecisionAction = 'pass' | 'reject' | 'modify' | 'defer' | 'recall' | 'redo'
 interface DecisionDraft { eventId: string; action: DecisionAction; label: string }
+interface AgentRelayDraft { sessionId: string; sourceEventId: string; sourceAgentId: string; targetAgentId: string; task: string }
 
 const sessionStatus = (s: SessionLite) =>
   ({ label: s.status === 'closed' ? '已结束' : '进行中', tag: s.status === 'closed' ? 'info' : 'success' })
@@ -411,6 +412,8 @@ const TeamspacePage = defineComponent({
     const decisionDraft = ref(null) as { value: DecisionDraft | null }
     const decisionReason = ref('')
     const decisionSubmitting = ref(false)
+    const agentRelayDraft = ref(null) as { value: AgentRelayDraft | null }
+    const agentRelaySubmitting = ref(false)
     const summaryGenerating = ref(false)
     /** 引用回复（悬停消息点「引用」设置；发送时在文本前拼引用行，服务端原样落库）。 */
     const replyTo = ref(null) as { value: { author: string; summary: string; seq: number; id: string } | null }
@@ -886,23 +889,90 @@ const TeamspacePage = defineComponent({
       finally { summaryGenerating.value = false }
     }
 
-    function runAgentAction(targetId: string, task: string, sourceAgentId: string) {
+    function openAgentRelay(targetId: string, task: string, sourceAgentId: string, sourceEventId: string) {
       const target = String(targetId ?? '').trim()
       const instruction = String(task ?? '').trim()
       const isSessionAgent = agents.value.some((agent) => agent.id === target) &&
         members.value.some((member) => member.principalId === target)
       if (!isSessionAgent || target === sourceAgentId) {
-        showReply('此操作目标不是当前会话中可调用的 Agent', false)
+        showReply('目标 Agent 尚未加入当前会话，不能中继任务；请先邀请其加入', false)
         return
       }
       if (!instruction || instruction.length > 500) {
         showReply('Agent 操作内容为空或超过 500 个字符', false)
         return
       }
-      if (closed.value || sending.value) return
-      const message = `@${target} ${instruction}`
-      draft.value = message
-      void sendText(message)
+      const source = events.value.find((event) => event.id === sourceEventId)
+      if (!activeId.value || closed.value || !source || source.voided || source.kind !== 'message' ||
+        source.authorKind !== 'agent' || source.authorId !== sourceAgentId) {
+        showReply('原 Agent 回复已不可用，未创建中继', false)
+        return
+      }
+      agentRelayDraft.value = {
+        sessionId: activeId.value, sourceEventId, sourceAgentId, targetAgentId: target, task: instruction,
+      }
+    }
+
+    async function confirmAgentRelay() {
+      const pending = agentRelayDraft.value
+      if (!pending || agentRelaySubmitting.value || sending.value) return
+      const targetId = pending.targetAgentId.trim()
+      const task = pending.task.trim()
+      const currentMember = members.value.some((member) => member.principalId === targetId)
+      const currentAgent = agents.value.some((agent) => agent.id === targetId)
+      const source = events.value.find((event) => event.id === pending.sourceEventId)
+      if (activeId.value !== pending.sessionId || closed.value) {
+        showReply('会话已切换或结束，中继未发送', false)
+        return
+      }
+      if (!currentMember || !currentAgent || targetId === pending.sourceAgentId) {
+        showReply('目标 Agent 未加入当前会话或不可用；任务未发送', false)
+        return
+      }
+      if (!source || source.voided || source.authorKind !== 'agent' || source.authorId !== pending.sourceAgentId) {
+        showReply('原 Agent 回复已不可用；任务未发送', false)
+        return
+      }
+      if (!task || task.length > 500) {
+        showReply('请填写 1–500 个字符的中继任务', false)
+        return
+      }
+      agentRelaySubmitting.value = true
+      try {
+        const sent = await sendText(`@${targetId} ${task}`, pending.sourceEventId, [targetId], true)
+        if (sent) agentRelayDraft.value = null
+      } finally {
+        agentRelaySubmitting.value = false
+      }
+    }
+
+    function saveAgentRelayAsDiscussionDraft() {
+      const pending = agentRelayDraft.value
+      if (!pending || activeId.value !== pending.sessionId || closed.value) {
+        showReply('会话已切换或结束，未创建讨论草稿', false)
+        return
+      }
+      const source = events.value.find((event) => event.id === pending.sourceEventId)
+      if (!source || source.voided || source.authorKind !== 'agent' || source.authorId !== pending.sourceAgentId) {
+        showReply('原 Agent 回复已不可用，未创建讨论草稿', false)
+        return
+      }
+      const note = pending.task.trim()
+      if (!note) {
+        showReply('讨论说明不能为空', false)
+        return
+      }
+      draft.value = [draft.value.trim(), note].filter(Boolean).join('\n\n')
+      if (!replyTo.value) {
+        replyTo.value = {
+          author: authorLabel(source.authorId, members.value),
+          summary: source.text.slice(0, 50), seq: source.seq, id: source.id,
+        }
+      }
+      localStorage.setItem(`space_draft_${pending.sessionId}`, draft.value)
+      agentRelayDraft.value = null
+      showReply('已转为团队讨论草稿，尚未发送；不会触发 Agent', true)
+      void nextTick(() => inputEl.value?.focus())
     }
 
     // ── 表情回应：点同 emoji 再点一次 = 撤；响应就地更新汇总 ─────────────
@@ -1249,13 +1319,18 @@ const TeamspacePage = defineComponent({
       }
     }
 
-    async function sendText(text: string) {
-      if (!activeId.value) { showReply('请先选择或新建一个会议', false); return }
+    async function sendText(
+      text: string,
+      replyToId = replyTo.value?.id ?? null,
+      explicitMentions?: string[],
+      preserveComposer = false,
+    ): Promise<boolean> {
+      if (!activeId.value) { showReply('请先选择或新建一个会议', false); return false }
       // IM 化：空输入静默忽略（不再弹错误回执）。
-      if (!text.trim()) return
-      if (sending.value || closed.value) return
+      if (!text.trim()) return false
+      if (sending.value || closed.value) return false
       sending.value = true
-      const mentions = parseMentions()
+      const mentions = explicitMentions ?? parseMentions()
       // 引用系统化（2026-10-02）：引用关系走 replyTo 结构化字段，消息正文不再拼前缀。
       const fullText = text
       const localId = `__local_${++replySeq}`
@@ -1278,14 +1353,14 @@ const TeamspacePage = defineComponent({
       } as EventLite
       events.value = [...events.value, optimistic]
       try {
-        const result: SendResult = await rpc.value.send(getToken(), activeId.value, fullText, mentions, replyTo.value?.id ?? null)
-        if (isUnauth(result)) { unauthed(); return }
+        const result: SendResult = await rpc.value.send(getToken(), activeId.value, fullText, mentions, replyToId)
+        if (isUnauth(result)) { unauthed(); return false }
         if ('error' in result) {
           // 回滚乐观插入，显示错误。
           events.value = events.value.filter((e) => e.id !== localId)
           if (pendingReply) pendingReplies.value = pendingReplies.value.filter((item) => item.key !== localId)
           showReply(`出错了（${result.error}）：${result.detail}`, false)
-          return
+          return false
         }
         // 确认成功：去掉临时事件；真事件由响应或 socket 推送补上（两者按 id 去重）。
         events.value = events.value.filter((e) => e.id !== localId)
@@ -1299,17 +1374,20 @@ const TeamspacePage = defineComponent({
             else pendingReplies.value = pendingReplies.value.filter((item) => item.key !== localId)
           }
         }
-        draft.value = ''
-        replyTo.value = null
-        replyTo.value = null // 引用已随消息发出，清掉引用条
-        localStorage.removeItem(`space_draft_${activeId.value}`)
+        if (!preserveComposer) {
+          draft.value = ''
+          replyTo.value = null
+          localStorage.removeItem(`space_draft_${activeId.value}`)
+        }
         menu.value = null
         if (result.reply) showReply(result.reply, true)
         void load()
+        return true
       } catch {
         events.value = events.value.filter((e) => e.id !== localId)
         if (pendingReply) pendingReplies.value = pendingReplies.value.filter((item) => item.key !== localId)
         showReply(userFacingFailure('发送消息'), false)
+        return false
       } finally {
         sending.value = false
       }
@@ -2104,7 +2182,7 @@ const TeamspacePage = defineComponent({
                   const task = action.get('task')
                   if (targetId && task) {
                     event.preventDefault()
-                    runAgentAction(targetId, task, ev.authorId ?? '')
+                    openAgentRelay(targetId, task, ev.authorId ?? '', ev.id)
                     return
                   }
                 }
@@ -3048,6 +3126,68 @@ const TeamspacePage = defineComponent({
             composer,
           ]),
           collabPanel(),
+          h(ElDialog, {
+            modelValue: agentRelayDraft.value !== null,
+            'onUpdate:modelValue': (visible: boolean) => {
+              if (!visible && !agentRelaySubmitting.value) agentRelayDraft.value = null
+            },
+            title: '审阅 Agent 中继任务',
+            width: 'min(560px, 92vw)',
+            closeOnClickModal: false,
+            closeOnPressEscape: !agentRelaySubmitting.value,
+          }, {
+            default: () => {
+              const pending = agentRelayDraft.value
+              const sourceAgent = agents.value.find((agent) => agent.id === pending?.sourceAgentId)
+              const relayTargets = agents.value.filter((agent) => agent.id !== pending?.sourceAgentId &&
+                members.value.some((member) => member.principalId === agent.id))
+              const selectedTarget = relayTargets.find((agent) => agent.id === pending?.targetAgentId)
+              return [
+                h(ElText, { type: 'info' }, { default: () => `来源：${sourceAgent?.title ?? 'Agent'} 的回复。请核对接收 Agent 和任务内容；只有点击“确认发送”后，才会以你的身份在当前会话中 @该 Agent。` }),
+                h(ElSelect, {
+                  modelValue: pending?.targetAgentId ?? '',
+                  'onUpdate:modelValue': (value: string) => {
+                    if (agentRelayDraft.value) agentRelayDraft.value.targetAgentId = value
+                  },
+                  placeholder: '选择当前会话中已加入的 Agent',
+                  disabled: agentRelaySubmitting.value,
+                }, {
+                  default: () => relayTargets.map((agent) => h(ElOption, {
+                    key: agent.id, label: `${agent.title}（${agent.id}）`, value: agent.id,
+                  })),
+                }),
+                h(ElInput, {
+                  modelValue: pending?.task ?? '',
+                  'onUpdate:modelValue': (value: string) => {
+                    if (agentRelayDraft.value) agentRelayDraft.value.task = value
+                  },
+                  type: 'textarea', rows: 5, maxlength: 500, showWordLimit: true,
+                  disabled: agentRelaySubmitting.value,
+                  placeholder: '审阅并编辑要发送给 Agent 的任务（最多 500 字）',
+                }),
+                selectedTarget ? h(ElText, { type: 'info' }, { default: () => `发送预览：@${selectedTarget.title} ${pending?.task.trim() ?? ''}` })
+                  : h(ElText, { type: 'warning' }, { default: () => '原建议目标已不在当前会话；请选择一个已加入的 Agent。' }),
+              ]
+            },
+            footer: () => h(ElSpace, {}, {
+              default: () => [
+                h(ElButton, {
+                  disabled: agentRelaySubmitting.value,
+                  onClick: () => { agentRelayDraft.value = null },
+                }, { default: () => '取消' }),
+                h(ElButton, {
+                  disabled: agentRelaySubmitting.value || !agentRelayDraft.value?.task.trim(),
+                  onClick: saveAgentRelayAsDiscussionDraft,
+                }, { default: () => '改为团队讨论草稿' }),
+                h(ElButton, {
+                  type: 'primary', loading: agentRelaySubmitting.value,
+                  disabled: !agentRelayDraft.value?.targetAgentId || !agentRelayDraft.value?.task.trim() ||
+                    agentRelayDraft.value.task.trim().length > 500 || sending.value,
+                  onClick: () => void confirmAgentRelay(),
+                }, { default: () => agentRelaySubmitting.value ? '发送中…' : '确认发送' }),
+              ],
+            }),
+          }),
           h(ElDialog, {
             modelValue: decisionDraft.value !== null,
             'onUpdate:modelValue': (visible: boolean) => { if (!visible && !decisionSubmitting.value) decisionDraft.value = null },

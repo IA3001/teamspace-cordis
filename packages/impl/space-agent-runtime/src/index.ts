@@ -366,7 +366,7 @@ export class AgentRuntime extends AgentRuntimeService {
           })
           : []
         if (actionTargets.length) {
-          const actionSection = `交互式后续操作：当回复后确有必要交给另一位 Agent 继续处理时，可在最终 Markdown 回复中提供不超过 2 个操作链接。当前会话可调用的 Agent：${actionTargets.join('、')}。链接格式为 [按钮文案](#teamspace-agent?to=<AgentID>&task=<URL-encoded-task>)，例如 [请测试者验证](#teamspace-agent?to=a_tester&task=运行相关测试并反馈结果)。链接仅在用户主动点击后触发；会发送一条 @目标Agent 的任务消息。目标必须来自上方列表，任务应清楚具体；无必要时不要生成链接，不要把过程性推理放入链接。`
+          const actionSection = `交互式后续操作：当回复后确有必要建议另一位 Agent 继续处理时，可在最终 Markdown 回复中提供不超过 2 个操作链接。当前会话已加入且可作为目标的 Agent：${actionTargets.join('、')}。链接格式为 [按钮文案](#teamspace-agent?to=<AgentID>&task=<URL-encoded-task>)，例如 [请测试者验证](#teamspace-agent?to=agent.tester&task=运行相关测试并反馈结果)。点击链接只会打开人类中继审阅窗口，绝不会直接发送或启动任务；人类可以检查、修改接收 Agent 和任务文本，只有人类显式确认后才以其本人身份发送。不要建议未加入当前会话的 Agent；目标必须来自上方列表。任务应清楚具体；无必要时不要生成链接，不要把过程性推理放入链接。`
           dynamicContext += `\n\n${actionSection}`
           dynamicSections.push({ label: '交互式 Agent 委托选项', source: '当前会话成员列表 + Agent Runtime 规则', content: actionSection })
         }

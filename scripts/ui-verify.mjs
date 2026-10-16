@@ -1343,6 +1343,16 @@ console.log('== 断言区 ==')
       pendingText.includes('待 DRI 决策') && pendingText.includes('是否接受方案 A？')
     detail.push(`建议正文与待决问题分开展示=${pendingVisible}`)
     ok &&= pendingVisible
+    const identityDb = new DatabaseSync('data/database.db')
+    const viewerId = identityDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)?.user_id
+    identityDb.close()
+    const membersPanelText = await page.locator('.sp-context-members').innerText()
+    const memberDriNotice = await page.locator('.sp-context-section .el-alert').first().innerText()
+    const memberIdentityVisible = Boolean(viewerId) && membersPanelText.includes(viewerId) &&
+      memberDriNotice.includes(`当前 DRI：`) && memberDriNotice.includes(viewerId) &&
+      memberDriNotice.includes('「通过」') && memberDriNotice.includes('「其他处理」')
+    detail.push(`成员面板标明当前 DRI、账号 ID 和卡片操作入口=${memberIdentityVisible}`)
+    ok &&= memberIdentityVisible
     const authorName = await message.locator('.sp-msg-name').innerText()
     const namedAgent = authorName === '需求分析师'
     detail.push(`消息作者优先显示共享 Agent 名称=${namedAgent}（${authorName}）`)
@@ -1360,6 +1370,48 @@ console.log('== 断言区 ==')
     detail.push(`DRI 菜单打开结构化决策窗口=${directActionDialog}`)
     ok &&= directActionDialog
     await decisionDialog.getByText('取消', { exact: true }).click()
+
+    await page.locator('.sp-rail-item.active').getByRole('button', { name: '⋯' }).click()
+    await page.getByText('成员 / 角色管理', { exact: true }).click()
+    const memberManagementDialog = page.locator('.el-dialog').filter({ hasText: '会话成员管理' })
+    const managementText = await memberManagementDialog.innerText()
+    const independentAccountsExplained = managementText.includes('作为独立成员加入') &&
+      managementText.includes('不会替换或合并') && managementText.includes('成员 ID')
+    detail.push(`成员管理解释新邀请账号是独立身份并按 ID 区分=${independentAccountsExplained}`)
+    ok &&= independentAccountsExplained
+    await memberManagementDialog.getByText('完成', { exact: true }).click()
+
+    const accessDb = new DatabaseSync('data/database.db')
+    const currentViewerId = accessDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)?.user_id
+    try {
+      if (!currentViewerId) throw new Error('UI 验收 token 未关联 Team 账号')
+      accessDb.prepare(`UPDATE session_members SET role='成员' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, currentViewerId)
+      accessDb.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
+        VALUES (?, 'u_ui_dri_identity', 'DRI', 'active', ?, NULL, '')`)
+        .run(temporaryDecisionSession, new Date().toISOString())
+    } finally { accessDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+    const nonDriCard = message.locator('.el-alert')
+    const accessNotice = await nonDriCard.innerText()
+    const passButtonCount = await message.getByRole('button', { name: '通过', exact: true }).count()
+    detail.push(`非 DRI 看到实际 DRI 身份与决策路径=${accessNotice.includes('u_ui_dri_identity') && accessNotice.includes('「通过」')}；隐藏决策按钮=${passButtonCount === 0}`)
+    ok &&= accessNotice.includes('u_ui_dri_identity') && accessNotice.includes('「通过」') && passButtonCount === 0
+    await message.getByRole('button', { name: '⋯' }).click()
+    const nonDriMenuText = await page.locator('.el-dropdown-menu:visible').innerText()
+    const nonDriMenuExplained = !nonDriMenuText.includes('通过') && nonDriMenuText.includes('引用')
+    detail.push(`非 DRI 操作菜单不含决策项且卡片已解释原因=${nonDriMenuExplained}`)
+    ok &&= nonDriMenuExplained
+    await page.keyboard.press('Escape')
+
+    const restoreDb = new DatabaseSync('data/database.db')
+    try {
+      restoreDb.prepare(`UPDATE session_members SET role='DRI' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, currentViewerId)
+      restoreDb.prepare(`DELETE FROM session_members WHERE session_id=? AND principal_id='u_ui_dri_identity'`)
+        .run(temporaryDecisionSession)
+    } finally { restoreDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
 
     const decisionDb = new DatabaseSync('data/database.db')
     try {

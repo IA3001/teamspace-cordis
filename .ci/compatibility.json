@@ -178,6 +178,42 @@
         "scripts/verify-rag.ts",
         "scripts/verify-agent-teamspace.ts"
       ]
+    },
+    {
+      "path": "packages/seam/space-agent-catalog/src/index.ts",
+      "hash": "de2c04cc32744548d2e3427b00aa3c82385ad736e77b0c12b4e2076878bf6492",
+      "description": "docs/compatibility/session-todo-read-tool.md",
+      "oldVersion": "Starter template schema: coding v1; current catalog API.",
+      "upgrade": "New Agents from coding v2 receive the registered tool; existing Agent configurations are unchanged unless they are the built-in agent.coder updated by migration 0037.",
+      "rollback": "Revert template defaults only; existing templateOrigin values and Agent rows remain readable.",
+      "tests": [
+        "scripts/verify-agent-teamspace.ts",
+        "scripts/verify-agent-bootstrap.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_coder_todo_tool.up.sql",
+      "hash": "af7d92ada5ffd564e05344d4e3555e326d651440e99ec139c7a29c9cb6b4cba1",
+      "description": "docs/compatibility/session-todo-read-tool.md",
+      "oldVersion": "Database schema v36.",
+      "upgrade": "Apply migration 0037; it is guarded against duplicate IDs and only updates agent.coder.",
+      "rollback": "Down migration intentionally preserves editable Agent configuration; a rollback leaves a harmless unregistered ID until the tool-bearing release is restored.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-session-todo-tool.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_coder_todo_tool.down.sql",
+      "hash": "3f914ea375fd63f0b5953f15be9a5f6020be00012161bcbc3ad6670ec89fcc91",
+      "description": "docs/compatibility/session-todo-read-tool.md",
+      "oldVersion": "Database schema v37 with tool ID optionally present in agent.coder.tool_ids.",
+      "upgrade": "No action required; reapplying the forward migration is idempotent.",
+      "rollback": "Agent Catalog values remain intact; restore the tool-bearing release to make the ID resolvable again.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-session-todo-tool.ts"
+      ]
     }
   ]
 }

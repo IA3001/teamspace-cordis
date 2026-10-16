@@ -71,10 +71,10 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     },
   },
   {
-    id: 'coding', version: 1, title: '代码实现', summary: '在独立工作区内读写代码并运行受控验证。',
+    id: 'coding', version: 2, title: '代码实现', summary: '在独立工作区内读写代码、查询团队待办并运行受控验证。',
     input: {
       title: '编码助手', description: '分析任务，先检查相关代码，再在个人工作区内实现并运行必要验证。汇报改动和结果。',
-      promptRef: '', toolIds: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute'],
+      promptRef: '', toolIds: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.session.todos'],
       contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive', iconId: 'Monitor',
     },
   },

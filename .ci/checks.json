@@ -683,6 +683,19 @@
         "scripts/verify-upgrade-fixtures.mjs"
       ],
       "timeoutMs": 180000
+    },
+    {
+      "id": "static-session-todos",
+      "script": "verify:session-todos-tool",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "plugins/tool-session-todos/",
+        "packages/seam/space-agent-catalog/",
+        "packages/impl/space-store-sqlite/migrations/0037_agent_coder_todo_tool",
+        "scripts/verify-session-todo-tool.ts"
+      ],
+      "timeoutMs": 180000
     }
   ],
   "runtime": [

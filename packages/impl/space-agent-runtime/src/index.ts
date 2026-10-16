@@ -389,7 +389,11 @@ export class AgentRuntime extends AgentRuntimeService {
           onModelTrace: (trace) => { modelTrace.splice(0, modelTrace.length, ...trace) },
           onUsage: (usage) => {
             const value = (number: number | undefined) => number === undefined ? '供应商未报告' : String(number)
-            progress(currentPhase, undefined, undefined, undefined, {
+            // Usage is reported after streamed content by many providers. Do not
+            // label that metadata-only update as another text delta: downstream
+            // clients buffer text-delta events and would receive an empty frame.
+            const phase = currentPhase === 'text-delta' ? 'finalizing' : currentPhase
+            progress(phase, undefined, undefined, undefined, {
               label: '模型缓存与用量', durationMs: usage.durationMs,
               detail: `输入 ${value(usage.inputTokens)} tokens · 缓存命中 ${value(usage.cachedInputTokens)} tokens · 输出 ${value(usage.outputTokens)} tokens · 首段 ${value(usage.firstTokenMs)} ms · 总计 ${usage.durationMs} ms`,
             })

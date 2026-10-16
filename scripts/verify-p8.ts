@@ -737,7 +737,8 @@ async function partE(): Promise<void> {
       const longProgress = progressEvents.filter((event) => event.sourceEventId === longSource && event.phase === 'text-delta')
       const longDeltas = longProgress.map((event) => event.delta ?? '').join('')
       check('E4h 18,000 字符流式答复完整抵达运行时进度和最终回执',
-        longDeltas.length === 18_000 && longReceipt.receipt.includes(longDeltas) && longProgress.length === 3,
+        longDeltas.length === 18_000 && longReceipt.receipt.includes(longDeltas) &&
+          longProgress.length === 3 && longProgress.every((event) => typeof event.delta === 'string' && event.delta.length > 0),
         `delta=${longDeltas.length}，frames=${longProgress.length}，receipt=${longReceipt.receipt.length}`)
       check('E4i 超长答复完整写入工作区产物',
         readFileSync(join(longReceipt.root, longReceipt.files.at(-1)!), 'utf8').includes(longDeltas))

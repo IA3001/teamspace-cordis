@@ -143,7 +143,11 @@ export function apply(ctx: Context) {
     baseUrl: import.meta.url,
     source: '../client/index.ts',
     manifest: '../dist/manifest.json',
-    routes: ['/admin', '/admin/runtime', '/admin/models'],
+      // The Cordis shell's built-in `/` page exposes a `home` slot, but it is
+      // intentionally empty unless a client entry is loaded for the root path.
+      // Load this lightweight welcome slot there while retaining the existing
+      // admin routes unchanged.
+      routes: ['/', '/admin', '/admin/runtime', '/admin/models'],
   }, {
     async users(token: string) {
       if (!(await auth(ctx, token))) return null

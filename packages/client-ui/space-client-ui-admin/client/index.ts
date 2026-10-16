@@ -12,7 +12,7 @@
 // element-plus、零手写样式、零内联样式。
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, resolveComponent } from 'vue'
 import type { Component, VNodeChild } from 'vue'
-import { useRoute, useRpc } from '@cordisjs/client'
+import { useRoute, useRouter, useRpc } from '@cordisjs/client'
 import { ThemeStyle } from 'space-client-ui-shared/client/theme.ts'
 import { ICONS, pageHead, section, actionsRow } from 'space-client-ui-shared/client/console.ts'
 import { userFacingFailure } from 'space-client-ui-shared/client/errors.ts'
@@ -1475,11 +1475,46 @@ interface PageCtx {
   client: {
     router: {
       page(options: { path: string; name: string; order?: number; icon?: Component | string; component: unknown }): void
+      slot(options: { type: string; order?: number; component: Component }): void
     }
   }
 }
 
+const DebugHome = defineComponent({
+  name: 'DebugConsoleHome',
+  setup() {
+    const router = useRouter()
+    const ElButton = resolveComponent('el-button') as unknown as string
+    const ElCard = resolveComponent('el-card') as unknown as string
+    const ElSpace = resolveComponent('el-space') as unknown as string
+    const ElText = resolveComponent('el-text') as unknown as string
+
+    const open = (path: string) => { void router.push({ path }) }
+
+    return () => h(ElSpace, { direction: 'vertical', fill: true, size: 16 }, {
+      default: () => [
+        h(ElCard, { shadow: 'never' }, {
+          header: () => 'Cordis 调试控制台',
+          default: () => h(ElSpace, { direction: 'vertical', size: 8 }, {
+            default: () => [
+              h(ElText, null, { default: () => '服务已启动。选择一个页面查看当前运行状态。' }),
+              h(ElSpace, { wrap: true }, {
+                default: () => [
+                  h(ElButton, { type: 'primary', onClick: () => open('/plugins') }, { default: () => '插件管理' }),
+                  h(ElButton, { onClick: () => open('/logs') }, { default: () => '运行日志' }),
+                  h(ElButton, { onClick: () => open('/database') }, { default: () => '数据库' }),
+                ],
+              }),
+            ],
+          }),
+        }),
+      ],
+    })
+  },
+})
+
 export default function main(ctx: PageCtx) {
+  ctx.client.router.slot({ type: 'home', order: -1000, component: DebugHome })
   ctx.client.router.page({
     path: '/admin',
     name: 'Team 账号',

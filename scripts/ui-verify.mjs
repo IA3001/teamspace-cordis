@@ -806,6 +806,28 @@ console.log('== 断言区 ==')
   judge('AS1 Shift+Enter 恒换行(双路径)', ok, detail.join(' | '))
 }
 
+// G02: rejecting whitespace-only messages must explain why and preserve the draft.
+{
+  let ok = true; const detail = []
+  try {
+    await ta.fill('   ')
+    await page.getByRole('button', { name: '发送消息' }).click()
+    const emptyMessage = page.locator('.el-alert__title').filter({ hasText: '消息内容不能为空' })
+    await emptyMessage.waitFor({ timeout: 5000 })
+    const draftPreserved = await ta.inputValue() === '   '
+    const feedbackVisible = await emptyMessage.count() === 1
+    detail.push(`错误反馈可见=${feedbackVisible} 空白草稿保留=${draftPreserved}`)
+    ok &&= feedbackVisible && draftPreserved
+    await page.locator('.el-alert').filter({ has: emptyMessage }).locator('.el-alert__close-btn').click()
+    await emptyMessage.waitFor({ state: 'detached' })
+    await ta.fill('')
+  } catch (error) {
+    ok = false
+    detail.push(`异常=${String(error).slice(0, 120)}`)
+  }
+  judge('G02 纯空白消息拒绝并提示且保留草稿', ok, detail.join(' | '))
+}
+
 // AS2 时间线：消息行有稳定事件 ID，作者和时间元数据随消息可见。
 {
   let ok = true; const detail = []

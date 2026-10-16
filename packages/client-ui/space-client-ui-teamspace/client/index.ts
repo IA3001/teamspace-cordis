@@ -1326,8 +1326,8 @@ const TeamspacePage = defineComponent({
       preserveComposer = false,
     ): Promise<boolean> {
       if (!activeId.value) { showReply('请先选择或新建一个会议', false); return false }
-      // IM 化：空输入静默忽略（不再弹错误回执）。
-      if (!text.trim()) return false
+      // Keep the rejection visible and preserve the draft so the user can correct it.
+      if (!text.trim()) { showReply('消息内容不能为空', false); return false }
       if (sending.value || closed.value) return false
       sending.value = true
       const mentions = explicitMentions ?? parseMentions()

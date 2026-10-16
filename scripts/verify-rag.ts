@@ -11,6 +11,7 @@ import { ContextAssemblyServiceImpl } from '../plugins/space-context/index.ts'
 import { vectorRerank } from '../packages/seam/space-kb/src/index.ts'
 import { extractCitedAnswer, formatCitedAnswer } from '../packages/seam/space-retrieval/src/index.ts'
 import { RetrievalServiceImpl } from '../plugins/space-retrieval/index.ts'
+import { selectRelevantSearchHits } from '../packages/client-ui/space-client-ui-kb/src/search.ts'
 
 const db = new DatabaseSync(':memory:')
 db.exec('PRAGMA foreign_keys = ON')
@@ -54,6 +55,28 @@ const structuredDocument = await ctx.kb.addDocument('运维手册结构验收', 
   '## Restore',
   `Restore drills must verify the persistent SQLite volume and document the recovery duration. ${'Record the observed result after each restore drill. '.repeat(18)}`,
 ].join('\n\n'))
+const titleOnlyDocument = await ctx.kb.addDocument('唯一标题命中 QA', '正文讲的是红色自行车与天气预报。')
+const chineseSearchDocument = await ctx.kb.addDocument('发布知识库资料', '部署口径明确：中文搜索应返回包含部署口径的正文。')
+const numericSearchDocument = await ctx.kb.addDocument('HTTP 错误排查', '网关超时会显示状态码 404，请检查上游路由。')
+await ctx.kb.addDocument('无关设计笔记', '页面颜色使用深蓝色，组件布局采用双栏。')
+await ctx.kb.addDocument('无关值班手册', '发布窗口由值班人员确认，回滚前先备份数据库。')
+const titleOnlyHits = await ctx.kb.search('唯一标题命中 QA')
+assert(titleOnlyHits.some((hit) => hit.docId === titleOnlyDocument.id), 'a title-only query returns its own document')
+assert.equal(titleOnlyHits.some((hit) => hit.docId !== titleOnlyDocument.id), false,
+  'an exact title hit does not spill unrelated body matches into the result set')
+const bodyEnglishHits = await ctx.kb.search('persistent local volume')
+assert(bodyEnglishHits.some((hit) => hit.docId === document.id), 'English body terms retrieve the relevant chunk')
+assert.deepEqual(new Set(bodyEnglishHits.map((hit) => hit.docId)), new Set([document.id]),
+  'English body search excludes unrelated chunks')
+const bodyChineseHits = await ctx.kb.search('部署口径')
+assert(bodyChineseHits.some((hit) => hit.docId === chineseSearchDocument.id), 'Chinese body terms retrieve the relevant chunk')
+assert.deepEqual(new Set(bodyChineseHits.map((hit) => hit.docId)), new Set([chineseSearchDocument.id]),
+  'Chinese body search excludes unrelated chunks')
+assert.deepEqual(await ctx.kb.search('qa-nonexistent-20261016-xq'), [],
+  'a unique nonexistent identifier returns no keyword results')
+const numericHits = await ctx.kb.search('404', { topK: 8 })
+assert.deepEqual(new Set(numericHits.map((hit) => hit.docId)), new Set([numericSearchDocument.id]),
+  'numeric lookup returns only chunks containing the queried status code')
 const guideFolder = await ctx.kb.createFolder('团队资料')
 const nestedFolder = await ctx.kb.createFolder('发布', guideFolder.path)
 const editableDoc = await ctx.kb.addDocument('可编辑资料', '旧版专属口令蓝鲸七三一。', 'manual', nestedFolder.path)
@@ -212,6 +235,29 @@ const hybrid = await vectorRerank('semantic query', [
 assert.deepEqual(new Set(hybrid.map((hit) => hit.chunkId)), new Set(['c_keyword', 'c_semantic']),
   'hybrid ranking retains lexical evidence and adds semantically similar chunks')
 assert.equal(hybrid[0]?.chunkId, 'c_semantic', 'semantic match can outrank a weak-vector keyword hit')
+const exactVectorResults = await vectorRerank('404', [
+  { docId: 'd1', docTitle: 'Error guide', chunkId: 'c_404', text: 'HTTP 404', score: 1 },
+], {
+  chunks: [
+    { docId: 'd1', chunkId: 'c_404', text: 'HTTP 404', embedding: [1, 0], embeddingModel: 'test-model' },
+    { docId: 'd2', chunkId: 'c_unrelated', text: 'Unrelated guide', embedding: [1, 0], embeddingModel: 'test-model' },
+  ],
+  modelIdentity: 'test-model',
+  embed: async () => [[1, 0]],
+  topK: 8,
+  titles: new Map([['d1', 'Error guide'], ['d2', 'Unrelated guide']]),
+})
+assert.deepEqual(selectRelevantSearchHits('404', [
+  { docId: 'd1', docTitle: 'Error guide', chunkId: 'c_404', text: 'HTTP 404', score: 1 },
+], exactVectorResults, 8).map((hit) => hit.chunkId), ['c_404'],
+  'vector search never broadens an exact numeric lookup with semantic neighbors')
+assert.deepEqual(selectRelevantSearchHits('qa-nonexistent-20261016-xq', [], [
+  { docId: 'd2', docTitle: 'Unrelated guide', chunkId: 'c_unrelated', text: 'Unrelated guide', score: 0.55 },
+], 8), [], 'semantic reranking cannot invent results for an exact identifier with no lexical match')
+const weakSemanticResults = await vectorRerank('semantic query', [], {
+  chunks: [], modelIdentity: 'test-model', embed: async () => [[1, 0]], topK: 8, titles: new Map(),
+})
+assert.deepEqual(weakSemanticResults, [], 'an empty lexical result stays empty when no semantic evidence is indexed')
 
 ctx.eventLog.void(event.id, 'u_rag', 'retrieval withdrawal check')
 await ctx.memory.forgetBySource(event.id)

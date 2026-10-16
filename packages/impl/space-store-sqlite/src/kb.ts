@@ -38,6 +38,37 @@ function trigramQuery(query: string): string {
   return [...terms].map((term) => `"${term.replaceAll('"', '""')}"`).join(' OR ')
 }
 
+/**
+ * Return a lexical coverage score instead of treating one matching trigram as
+ * proof that an entire natural-language query is relevant. CJK terms are
+ * scored by overlapping trigram coverage; Latin/numeric terms must occur as
+ * whole tokens.
+ */
+function lexicalCoverage(query: string, haystack: string): number {
+  const terms = query
+    .split(/\s+/u)
+    .map((term) => term.replace(/[^\p{L}\p{N}_-]/gu, '').toLocaleLowerCase())
+    .filter(Boolean)
+  if (terms.length === 0) return 0
+  const text = haystack.toLocaleLowerCase()
+  let score = 0
+  for (const term of terms) {
+    const chars = [...term]
+    if (chars.some((char) => /\p{Script=Han}/u.test(char))) {
+      const grams = chars.length >= 3
+        ? Array.from({ length: chars.length - 2 }, (_, index) => chars.slice(index, index + 3).join(''))
+        : [term]
+      const unique = [...new Set(grams)]
+      const count = unique.filter((gram) => text.includes(gram)).length
+      score += count > 0 ? count / unique.length : 0
+    } else {
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+      if (new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}($|[^\\p{L}\\p{N}_])`, 'u').test(text)) score++
+    }
+  }
+  return score / terms.length
+}
+
 type MarkdownSection = { headings: string[]; blocks: string[] }
 
 function headingPrefix(headings: string[]): string {
@@ -274,6 +305,16 @@ export class SqliteKnowledgeStore extends KnowledgeService {
     // 双口径（照 eventlog.search 惯例）：FTS trigram 要求查询词 ≥ 3 字符，
     // 否则走 LIKE 兜底（2 字词如"敏捷""看板"）。
     let rows: Row[]
+    const escaped = q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
+    // Exact title hits are useful even when the title is not repeated in the
+    // body chunk. They are returned before body matches and do not dilute the
+    // query with unrelated chunks.
+    const titleRows = this.db.prepare(
+      `SELECT c.id AS chunk_id, c.doc_id, c.text, d.title AS doc_title
+       FROM kb_documents d JOIN kb_chunks c ON c.doc_id = d.id
+       WHERE d.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+       ORDER BY d.created_at ASC, c.idx ASC LIMIT ?`,
+    ).all(`%${escaped}%`, topK) as Row[]
     if ([...q].length >= 3) {
       const match = trigramQuery(q)
       if (match) {
@@ -287,9 +328,8 @@ export class SqliteKnowledgeStore extends KnowledgeService {
              ORDER BY rank
              LIMIT ?`,
           )
-          .all(match, topK) as Row[]
+          .all(match, 1000) as Row[]
       } else {
-        const escaped = q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
         rows = this.db
           .prepare(
             `SELECT c.id AS chunk_id, c.doc_id, c.text, d.title AS doc_title
@@ -299,10 +339,9 @@ export class SqliteKnowledgeStore extends KnowledgeService {
              ORDER BY c.created_at ASC
              LIMIT ?`,
           )
-          .all(`%${escaped}%`, topK) as Row[]
+          .all(`%${escaped}%`, 1000) as Row[]
       }
     } else {
-      const escaped = q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
       rows = this.db
         .prepare(
           `SELECT c.id AS chunk_id, c.doc_id, c.text, d.title AS doc_title
@@ -312,8 +351,35 @@ export class SqliteKnowledgeStore extends KnowledgeService {
            ORDER BY c.created_at ASC
            LIMIT ?`,
         )
-        .all(`%${escaped}%`, topK) as Row[]
+        .all(`%${escaped}%`, 1000) as Row[]
     }
+    const candidates = new Map<string, { row: Row; coverage: number; title: boolean }>()
+    const titleIds = new Set(titleRows.map((row) => row.chunk_id as string))
+    for (const row of [...titleRows, ...rows]) {
+      const title = titleIds.has(row.chunk_id as string)
+      const coverage = Math.max(
+        lexicalCoverage(q, row.text as string),
+        lexicalCoverage(q, row.doc_title as string),
+      )
+      // A title match is exact substring evidence. Body results must contain
+      // every Latin/numeric term; CJK phrases may be paraphrased, so rank them
+      // by trigram coverage and require at least one matching trigram.
+      const latinTerms = q.split(/\s+/u)
+        .map((term) => term.replace(/[^\p{L}\p{N}_-]/gu, ''))
+        .filter((term) => term && ![...term].some((char) => /\p{Script=Han}/u.test(char)))
+      const latinCoverage = latinTerms.length === 0
+        ? 1
+        : lexicalCoverage(latinTerms.join(' '), `${row.text as string}\n${row.doc_title as string}`)
+      const hasCjkQuery = /\p{Script=Han}/u.test(q)
+      if (!title && (latinCoverage < 1 || (hasCjkQuery ? coverage === 0 : coverage < 1))) continue
+      const key = row.chunk_id as string
+      const previous = candidates.get(key)
+      if (!previous || title || coverage > previous.coverage) candidates.set(key, { row, coverage, title })
+    }
+    rows = [...candidates.values()]
+      .sort((a, b) => Number(b.title) - Number(a.title) || b.coverage - a.coverage)
+      .slice(0, topK)
+      .map(({ row }) => row)
     // score 归一：FTS 无可信分数 → 常量 1.0 按命中顺序衰减 1.0/(1+rank)。
     // 向量重排在检索层做（space-retrieval 持有 embeddings 注入；本 impl 若
     // 依赖 embeddings 会成环 store→embeddings→settings→store，2026-10-06）。

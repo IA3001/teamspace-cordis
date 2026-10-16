@@ -448,6 +448,7 @@
         "plugins/space-retrieval/",
         "plugins/kb-embedder/",
         "packages/client-ui/space-client-ui-kb/",
+        "packages/impl/space-store-sqlite/src/kb.ts",
         "scripts/verify-rag.mjs",
         "scripts/verify-context-cache.ts",
         "packages/impl/space-agent-runtime/src/cache-context.ts",

@@ -8,6 +8,7 @@
 import type { Context } from 'cordis'
 import type {} from '@cordisjs/plugin-webui'
 import { vectorRerank } from 'space-kb'
+import { selectRelevantSearchHits } from './search.ts'
 
 export const name = 'space-client-ui-kb'
 // users 也在鉴权里摸到（cordis 严格注入，P4 教训：摸到的服务都要进 inject）。
@@ -97,7 +98,7 @@ export function apply(ctx: Context) {
             (await ctx.kb.listDocuments()).map((d) => [d.id, d.title]),
           )
           const identity = ctx.embeddings.identity
-          return await vectorRerank(q, keyword, {
+          const reranked = await vectorRerank(q, keyword, {
             modelIdentity: identity,
             currentModelIdentity: () => ctx.embeddings.identity,
             chunks: await ctx.kb.allChunks(),
@@ -105,6 +106,7 @@ export function apply(ctx: Context) {
             topK: 8,
             titles,
           })
+          return selectRelevantSearchHits(q, keyword, reranked, 8)
         } catch {
           return { error: 'search-failed' }
         }

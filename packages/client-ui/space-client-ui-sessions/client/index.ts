@@ -536,13 +536,26 @@ const SessionsRail = defineComponent({
     async function doSetMemberRole(row: MemberRow) {
       const role = roleDrafts.value[row.principalId]
       if (!role || role === row.role) return
+      const refreshAfterFailure = async () => {
+        // The select changes optimistically before the RPC settles. Restore from
+        // the server so a rejected request cannot make two members look like DRI.
+        roleDrafts.value = { ...roleDrafts.value, [row.principalId]: row.role }
+        await loadManagedMembers()
+      }
       try {
         const r = await rpc.value.setMemberRole(getToken(), removeSessionId.value, row.principalId, role)
         if (r === null) return unauthed()
-        if (isForbidden(r) || isError(r)) { error.value = (r as { detail?: string }).detail ?? '角色调整失败'; return }
+        if (isForbidden(r) || isError(r)) {
+          error.value = (r as { detail?: string }).detail ?? '角色调整失败'
+          await refreshAfterFailure()
+          return
+        }
         error.value = ''
         await loadManagedMembers()
-      } catch { error.value = userFacingFailure('调整角色') }
+      } catch {
+        error.value = userFacingFailure('调整角色')
+        await refreshAfterFailure()
+      }
     }
 
     /** 结束会议：close(token, sessionId)（幂等）。 */
@@ -940,13 +953,19 @@ const SessionsRail = defineComponent({
         closeOnClickModal: false,
       }, {
         default: () => [
-          h(ElAlert, {
-            title: 'DRI 负责处理 Agent 的待决事项',
-            description: '邀请已有账号会把它作为独立成员加入，不会替换或合并相似名称账号；成员 ID 才是唯一身份。在此调整角色或移出成员。群主角色固定；请将另一名人类成员设为 DRI，再由该 DRI 登录并在 Agent 回复卡片下方选择「通过」或「其他处理」。',
-            type: 'info',
-            showIcon: true,
-            closable: false,
-          }),
+          (() => {
+            const viewer = managedMembers.value.find((member) => member.principalId === me.value?.id)
+            const canManageMembers = viewer?.role === '群主' || viewer?.role === '管理员'
+            return h(ElAlert, {
+              title: 'DRI 负责处理 Agent 的待决事项',
+              description: `邀请已有账号会把它作为独立成员加入，不会替换或合并相似名称账号；成员 ID 才是唯一身份。${canManageMembers
+                ? '群主/管理员可在此调整角色或移出成员。群主角色固定；请将另一名人类成员设为 DRI，再由该 DRI 登录并在 Agent 回复卡片下方选择「通过」或「其他处理」。'
+                : '只有群主/管理员可以调整角色或移出成员；请由他们将目标人类成员设为 DRI，再由该 DRI 登录并在 Agent 回复卡片下方选择「通过」或「其他处理」。'}`,
+              type: 'info',
+              showIcon: true,
+              closable: false,
+            })
+          })(),
           membersLoadError.value
             ? h(ElAlert, { title: membersLoadError.value, type: 'error', showIcon: true, closable: false })
             : null,
@@ -969,7 +988,9 @@ const SessionsRail = defineComponent({
             h(ElTableColumn, { label: '会话角色', width: 220 }, {
               default: (scope: { row: MemberRow }) => {
                 const human = humans.value.some((item) => item.id === scope.row.principalId)
-                const fixed = scope.row.role === '群主' || !human
+                const viewer = managedMembers.value.find((member) => member.principalId === me.value?.id)
+                const canManageMembers = viewer?.role === '群主' || viewer?.role === '管理员'
+                const fixed = scope.row.role === '群主' || !human || !canManageMembers
                 return fixed
                   ? h(ElTag, { type: 'info', size: 'small' }, { default: () => scope.row.role })
                   : h(ElSelect, {
@@ -985,11 +1006,15 @@ const SessionsRail = defineComponent({
               },
             }),
             h(ElTableColumn, { label: '操作', width: 100 }, {
-              default: (scope: { row: MemberRow }) => scope.row.role === '群主'
-                ? h(ElTag, { type: 'info', size: 'small' }, { default: () => '创建者' })
-                : h(ElButton, { type: 'danger', link: true, onClick: () => { removeUserId.value = scope.row.principalId; void doRemove() } }, {
+              default: (scope: { row: MemberRow }) => {
+                const viewer = managedMembers.value.find((member) => member.principalId === me.value?.id)
+                const canManageMembers = viewer?.role === '群主' || viewer?.role === '管理员'
+                if (scope.row.role === '群主') return h(ElTag, { type: 'info', size: 'small' }, { default: () => '创建者' })
+                if (!canManageMembers) return h(ElText, { size: 'small', type: 'info' }, { default: () => '需群主/管理员' })
+                return h(ElButton, { type: 'danger', link: true, onClick: () => { removeUserId.value = scope.row.principalId; void doRemove() } }, {
                   default: () => '移出会话',
-                }),
+                })
+              },
             }),
           ],
         }) : null,

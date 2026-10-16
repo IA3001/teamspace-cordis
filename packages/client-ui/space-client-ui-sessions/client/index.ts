@@ -699,7 +699,7 @@ const SessionsRail = defineComponent({
             ],
           }),
           // 常显「⋯ 操作」下拉（2026-10-02 用户拍板：废弃悬停揭示 —— 悬停
-          // 插入节点会挤开布局惊吓用户）。结束会议 / 邀请 / 移除成员 / 置顶 /
+          // 插入节点会挤开布局惊吓用户）。结束会议 / 邀请 / 成员角色管理 / 置顶 /
           // 免打扰全部收进一个 el-dropdown（click 触发）。
           h(ElDropdown, {
                 trigger: 'click',
@@ -727,7 +727,7 @@ const SessionsRail = defineComponent({
                   open ? h(ElDropdownItem, { command: 'close' }, { default: () => '结束会议' }) : null,
                   h(ElDropdownItem, { command: 'rename' }, { default: () => '重命名' }),
                   h(ElDropdownItem, { command: 'invite' }, { default: () => '邀请' }),
-                  h(ElDropdownItem, { command: 'remove' }, { default: () => '移除成员' }),
+                  h(ElDropdownItem, { command: 'remove' }, { default: () => '成员 / 角色管理' }),
                   h(ElDropdownItem, { command: 'pinned', divided: true },
                     { default: () => (isPinned(s.id) ? '取消置顶' : '置顶') }),
                   h(ElDropdownItem, { command: 'muted' },
@@ -940,6 +940,13 @@ const SessionsRail = defineComponent({
         closeOnClickModal: false,
       }, {
         default: () => [
+          h(ElAlert, {
+            title: 'DRI 负责处理 Agent 的待决事项',
+            description: '邀请已有账号会把它作为独立成员加入，不会替换或合并相似名称账号；成员 ID 才是唯一身份。在此调整角色或移出成员。群主角色固定；请将另一名人类成员设为 DRI，再由该 DRI 登录并在 Agent 回复卡片下方选择「通过」或「其他处理」。',
+            type: 'info',
+            showIcon: true,
+            closable: false,
+          }),
           membersLoadError.value
             ? h(ElAlert, { title: membersLoadError.value, type: 'error', showIcon: true, closable: false })
             : null,

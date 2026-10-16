@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   agents.register({ id: 'a_sandbox_verify', kind: 'custom', title: '沙箱验收 Agent', capabilities: [] })
   const workdir = new LocalWorkdirService(ctx, sandbox)
   const eventLog = new VerifyEventLog(ctx)
-  const tools = new ToolRegistry(ctx, { allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.workspace.verify', 'tool.code.execute'] })
+  const tools = new ToolRegistry(ctx, { allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.workspace.verify', 'tool.workspace.run-cpp', 'tool.code.execute'] })
   new SqliteSandboxApproval(ctx, approvalDb)
   await applySandboxTools(ctx)
   await workdir.claim('a_sandbox_verify')
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
   const project = 'projects/qa-agent-collab/hello-cordis'
   const files = [
     ['CMakeLists.txt', 'cmake_minimum_required(VERSION 3.20)\nproject(hello_cordis LANGUAGES CXX)\nadd_executable(hello_cordis helloworld.cpp greeting.cpp)\n'],
-    ['greeting.cpp', '#include "greeting.hpp"\n#include <iostream>\nvoid greet() { std::cout << "Hello"; }\n'],
+    ['greeting.cpp', '#include "greeting.hpp"\n#include <iostream>\nvoid greet() { std::cout << "Hello\\n"; }\n'],
     ['greeting.hpp', '#pragma once\nvoid greet();\n'],
   ] as const
   for (const [path, content] of files) {
@@ -103,6 +103,38 @@ async function main(): Promise<void> {
   }
   const completeProject = await tools.invoke('tool.workspace.verify', JSON.stringify({ projectPath: project, requiredFiles }), invoker)
   assert.match(completeProject.output, /^工作区检查通过/u)
+  const compiled = await tools.invoke('tool.workspace.run-cpp', JSON.stringify({ projectPath: project }), invoker)
+  assert.equal(compiled.ok, true, compiled.output)
+  assert.match(compiled.output, /C\+\+ 程序运行通过/u)
+  assert.match(compiled.output, /原始 stdout：\nHello\n\n原始 stderr/u, 'the C++ executable stdout including its trailing newline must be returned verbatim')
+  assert.match(compiled.output, /原始 stderr：\n\(空\)/u)
+
+  await tools.invoke('tool.workspace.write', JSON.stringify({
+    path: `${project}/helloworld.cpp`, content: '#include "greeting.hpp"\nint main() { greet(); return 7; }\n',
+  }), invoker)
+  const nonzeroCpp = await tools.invoke('tool.workspace.run-cpp', JSON.stringify({ projectPath: project }), invoker)
+  assert.equal(nonzeroCpp.ok, true, 'completed execution checks report the program exit status in the result')
+  assert.match(nonzeroCpp.output, /运行失败（退出码 7）/u, 'nonzero process exits are reported honestly')
+  assert.match(nonzeroCpp.output, /原始 stdout：\nHello\n\n原始 stderr/u)
+
+  await tools.invoke('tool.workspace.write', JSON.stringify({
+    path: `${project}/helloworld.cpp`, content: '#include <thread>\n#include <chrono>\nint main() { for (;;) std::this_thread::sleep_for(std::chrono::seconds(1)); }\n',
+  }), invoker)
+  const timeoutCpp = await tools.invoke('tool.workspace.run-cpp', JSON.stringify({ projectPath: project, timeoutMs: 4_000 }), invoker)
+  assert.equal(timeoutCpp.ok, true, 'a bounded timeout is a reported process outcome, not a transport error')
+  assert.match(timeoutCpp.output, /编译运行超时（4000 毫秒）/u)
+
+  await tools.invoke('tool.workspace.write', JSON.stringify({
+    path: `${project}/CMakeLists.txt`, content: 'project(hello_cordis LANGUAGES CXX)\nadd_executable(hello_cordis helloworld.cpp missing.cpp)\n',
+  }), invoker)
+  const missingSourceCpp = await tools.invoke('tool.workspace.run-cpp', JSON.stringify({ projectPath: project }), invoker)
+  assert.equal(missingSourceCpp.ok, true, 'missing source is a failed build check, not a tool transport error')
+  assert.match(missingSourceCpp.output, /C\+\+ 构建失败：源文件缺失/u)
+  assert.match(missingSourceCpp.output, /missing\.cpp/u)
+  await tools.invoke('tool.workspace.write', JSON.stringify({ path: `${project}/CMakeLists.txt`, content: files[0][1] }), invoker)
+  const invalidTimeout = await tools.invoke('tool.workspace.run-cpp', JSON.stringify({ projectPath: project, timeoutMs: 999 }), invoker)
+  assert.equal(invalidTimeout.ok, false)
+  assert.match(invalidTimeout.output, /timeoutMs 必须是/u)
   const missingInclude = await tools.invoke('tool.workspace.write', JSON.stringify({
     path: `${project}/greeting.cpp`, content: '#include "missing.hpp"\nvoid greet() {}\n',
   }), invoker)
@@ -213,7 +245,7 @@ async function main(): Promise<void> {
   rmSync(sharedPath, { force: true })
   rmSync(sandbox, { recursive: true, force: true })
   rmSync(outside, { recursive: true, force: true })
-  console.log('✓ workspace boundaries, multi-file project completeness, CMake/include dependency checks, Docker limits, atomic approval delivery, and read-only shared mount passed')
+  console.log('✓ workspace boundaries, multi-file project completeness, controlled C++ compile/run, real stdout, exit/timeout/missing-source reporting, Docker limits, atomic approval delivery, and read-only shared mount passed')
 }
 
 try {

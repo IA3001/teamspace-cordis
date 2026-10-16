@@ -14,6 +14,9 @@ const MAX_CODE_BYTES = 128 * 1024
 const MAX_OUTPUT_CHARS = 16_000
 const SHARED_ROOT = resolve(process.cwd(), 'data/shared-workspace')
 const STALE_DELIVERY_TEMP_MS = 60 * 60 * 1000
+const CPP_SANDBOX_IMAGE = 'gcc:14-bookworm@sha256:5e927c284bf55a7dc796262e311a0703344f62f41f5621eb56843111b1d37e15'
+const CPP_DEFAULT_TIMEOUT_MS = 20_000
+const CPP_MAX_TIMEOUT_MS = 45_000
 
 export const name = 'sandbox-tools'
 export const inject = ['tools', 'workdir', 'sandboxApproval', 'eventLog']
@@ -133,17 +136,39 @@ function safeProjectRelativePath(root: string, projectRoot: string, value: unkno
   return projectRelative
 }
 
-function cmakeExecutableSources(text: string): string[] {
+type CmakeExecutable = { name: string; sources: string[] }
+
+function cmakeExecutableTargets(text: string): CmakeExecutable[] {
   const uncommented = text.replace(/#[^\r\n]*/gu, ' ')
-  const sources: string[] = []
+  const targets: CmakeExecutable[] = []
   for (const match of uncommented.matchAll(/\badd_executable\s*\(([^)]*)\)/giu)) {
     const tokens = match[1]!.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+/gu) ?? []
-    for (const token of tokens.slice(1)) {
-      const source = token.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, (_whole, doubleQuoted: string | undefined, singleQuoted: string | undefined) => doubleQuoted ?? singleQuoted ?? token)
-      if (/\.(?:c|cc|cpp|cxx|c\+\+|m|mm)$/iu.test(source) && !source.includes('$<')) sources.push(source.replace(/^\.\//u, ''))
-    }
+    const unquote = (token: string) => token.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u,
+      (_whole, doubleQuoted: string | undefined, singleQuoted: string | undefined) => doubleQuoted ?? singleQuoted ?? token)
+    const name = unquote(tokens[0] ?? '')
+    const sources = tokens.slice(1).map(unquote)
+      .filter((source) => /\.(?:c|cc|cpp|cxx|c\+\+|m|mm)$/iu.test(source) && !source.includes('$<'))
+      .map((source) => source.replace(/^\.\//u, ''))
+    if (name) targets.push({ name, sources })
   }
-  return sources
+  return targets
+}
+
+function cmakeExecutableSources(text: string): string[] {
+  return cmakeExecutableTargets(text).flatMap((target) => target.sources)
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function parseCppTimeout(value: unknown): number {
+  if (value === undefined) return CPP_DEFAULT_TIMEOUT_MS
+  const timeout = Number(value)
+  if (!Number.isInteger(timeout) || timeout < 1_000 || timeout > CPP_MAX_TIMEOUT_MS) {
+    throw new Error(`timeoutMs 必须是 1000 到 ${CPP_MAX_TIMEOUT_MS} 之间的整数`)
+  }
+  return timeout
 }
 
 function assertActive(invoker: { signal?: AbortSignal }): void {
@@ -330,6 +355,108 @@ export async function apply(ctx: Context) {
       const missingList = [...missing].sort()
       if (missingList.length) return `工作区检查未通过（缺少文件）：\n${missingList.map((path) => `- ${path}`).join('\n')}`
       return `工作区检查通过：${projectRelative}；已检查交付清单、CMake 目标源文件和本地 include 依赖。此检查只验证文件存在，不代表已编译或测试。`
+    },
+  })
+
+  ctx.tools.register({
+    id: 'tool.workspace.run-cpp', title: '在隔离容器中编译并运行 C++ 工程',
+    description: 'args: {"projectPath":"个人工作区内项目目录","target":"可选 CMake add_executable 目标名","timeoutMs":20000}；读取简单 CMakeLists.txt 中 add_executable 声明的 C/C++ 源文件，在固定 GCC 容器中编译并运行。源目录只读、容器无网络、产物仅写入容器临时目录。返回原始 stdout、stderr 和退出状态；不支持任意 CMake 配置/生成器表达式。',
+    capabilities: ['workspace.read', 'code.execute'],
+    parameters: { type: 'object', properties: {
+      projectPath: { type: 'string', description: '个人工作区内的项目目录' },
+      target: { type: 'string', description: '可选的 add_executable target；存在多个 target 时必须指定' },
+      timeoutMs: { type: 'integer', minimum: 1000, maximum: CPP_MAX_TIMEOUT_MS, description: '编译和运行总超时，默认 20000 毫秒' },
+    }, required: ['projectPath'], additionalProperties: false },
+    handler: async (raw, invoker) => {
+      assertActive(invoker)
+      const args = parseArgs<{ projectPath?: string; target?: string; timeoutMs?: unknown }>(raw)
+      const timeoutMs = parseCppTimeout(args.timeoutMs)
+      const root = (await claimWorkdir(ctx, invoker)).root
+      const requestedProject = within(root, String(args.projectPath ?? ''))
+      const projectRelative = assertOrganizedWorkspacePath(root, requestedProject, ['projects'])
+      let projectRoot: string
+      try { projectRoot = await realPathWithin(root, requestedProject) }
+      catch { return `C++ 构建失败：项目目录不存在或不可访问：${projectRelative}` }
+      if (!(await stat(projectRoot)).isDirectory()) throw new Error('projectPath 必须指向目录')
+
+      let cmake: string
+      try {
+        const cmakePath = within(projectRoot, 'CMakeLists.txt')
+        const realCmakePath = await realPathWithin(projectRoot, cmakePath)
+        const cmakeInfo = await stat(realCmakePath)
+        if (!cmakeInfo.isFile() || cmakeInfo.size > MAX_FILE_BYTES) return 'C++ 构建失败：CMakeLists.txt 不存在或超过 1 MB'
+        cmake = await readFile(realCmakePath, 'utf8')
+      } catch { return 'C++ 构建失败：CMakeLists.txt 不存在或不可访问' }
+
+      const targets = cmakeExecutableTargets(cmake)
+      const targetName = String(args.target ?? '')
+      if (targetName && !/^[A-Za-z0-9_.+-]{1,120}$/u.test(targetName)) throw new Error('target 名称格式无效')
+      const matchingTargets = targetName ? targets.filter((target) => target.name === targetName) : targets
+      if (!matchingTargets.length) return `C++ 构建失败：${targetName ? `找不到 add_executable 目标 ${targetName}` : 'CMakeLists.txt 中没有受支持的 add_executable 目标'}`
+      if (matchingTargets.length !== 1) return 'C++ 构建失败：存在多个 add_executable 目标，请指定 target'
+      const selected = matchingTargets[0]!
+      if (!selected.sources.length) return `C++ 构建失败：目标 ${selected.name} 没有显式 C/C++ 源文件`
+
+      const sources: string[] = []
+      for (const source of selected.sources) {
+        const safeRelative = safeProjectRelativePath(root, projectRoot, source)
+        try {
+          const realSource = await realPathWithin(projectRoot, within(projectRoot, safeRelative))
+          const info = await stat(realSource)
+          if (!info.isFile() || info.size > MAX_FILE_BYTES) return `C++ 构建失败：源文件缺失、不是普通文件或超过 1 MB：${safeRelative}`
+          sources.push(safeRelative)
+        } catch { return `C++ 构建失败：源文件缺失或不可访问：${safeRelative}` }
+      }
+      assertActive(invoker)
+      const uid = typeof process.getuid === 'function' ? process.getuid() : 1000
+      const gid = typeof process.getgid === 'function' ? process.getgid() : 1000
+      const containerName = `cordis-cpp-${randomUUID()}`
+      const binary = `/tmp/${randomUUID()}`
+      const compileArgs = ['-std=c++20', '-Wall', '-Wextra', '-O2', '-I', '/workspace/project', ...sources.map((source) => `/workspace/project/${source}`), '-o', binary]
+      const quotedArgs = compileArgs.map(shellQuote).join(' ')
+      const script = `g++ ${quotedArgs} 2>/tmp/cordis-build.stderr; compile_status=$?; if [ "$compile_status" -ne 0 ]; then printf '__CORDIS_COMPILE_EXIT=%s\\n' "$compile_status"; cat /tmp/cordis-build.stderr; exit 0; fi; ${shellQuote(binary)}; run_status=$?; printf '\\n__CORDIS_RUN_EXIT=%s\\n' "$run_status"; exit 0`
+      let timedOut = false
+      const killContainer = () => {
+        void execFileAsync('docker', ['kill', containerName], { timeout: 5_000, windowsHide: true }).catch(() => undefined)
+      }
+      const timeoutKill = setTimeout(() => {
+        timedOut = true
+        killContainer()
+      }, timeoutMs)
+      invoker.signal?.addEventListener('abort', killContainer, { once: true })
+      try {
+        const result = await execFileAsync('docker', [
+          'run', '--rm', `--name=${containerName}`, '--pull=never', '--user', `${uid}:${gid}`, '--network=none', '--memory=512m', '--cpus=0.75', '--pids-limit=64',
+          '--storage-opt', 'size=256m', '--ulimit', 'fsize=67108864:67108864', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+          '--read-only', '--tmpfs', '/tmp:rw,exec,size=64m',
+          '--mount', `type=bind,src=${projectRoot},dst=/workspace/project,readonly`,
+          '--mount', `type=bind,src=${SHARED_ROOT},dst=/shared,readonly`,
+          '--workdir', '/workspace/project', CPP_SANDBOX_IMAGE, '/bin/bash', '-lc', script,
+        ], { timeout: timeoutMs + 10_000, maxBuffer: 1024 * 1024, windowsHide: true, signal: invoker.signal })
+        const rawStdout = result.stdout
+        const runExit = rawStdout.match(/\n?__CORDIS_RUN_EXIT=(\d+)\s*$/u)
+        if (runExit) {
+          const stdout = rawStdout.slice(0, runExit.index).slice(0, MAX_OUTPUT_CHARS)
+          const stderr = result.stderr.slice(0, MAX_OUTPUT_CHARS)
+          const status = Number(runExit[1])
+          return `C++ 程序${status === 0 ? '运行通过' : `运行失败（退出码 ${status}）`}：${projectRelative}/${selected.name}\n原始 stdout：\n${stdout || '(空)'}\n原始 stderr：\n${stderr || '(空)'}`
+        }
+        const compileExit = rawStdout.match(/__CORDIS_COMPILE_EXIT=(\d+)\s*\n/u)
+        if (compileExit) {
+          const compileErrors = `${rawStdout.slice((compileExit.index ?? 0) + compileExit[0].length)}${result.stderr}`.slice(0, MAX_OUTPUT_CHARS)
+          return `C++ 编译失败（退出码 ${Number(compileExit[1])}）：${projectRelative}/${selected.name}\n原始 stdout：(程序未运行)\n编译器输出：\n${compileErrors || '(空)'}`
+        }
+        return `C++ 构建失败：容器未返回有效的编译运行状态\n${`${rawStdout}${result.stderr}`.slice(0, MAX_OUTPUT_CHARS)}`
+      } catch (error) {
+        reportQuotaFailure(ctx, invoker, error)
+        const commandError = error as Error & { stdout?: string; stderr?: string; killed?: boolean }
+        const output = `${commandError.stdout ?? ''}${commandError.stderr ?? ''}`.slice(0, MAX_OUTPUT_CHARS)
+        if (timedOut || commandError.killed) return `C++ 编译运行超时（${timeoutMs} 毫秒）；程序未能在限定时间内结束${output ? `\n容器输出：\n${output}` : ''}`
+        throw new Error(`C++ 隔离容器启动失败：${commandError.message}${output ? `\n${output}` : ''}`)
+      } finally {
+        clearTimeout(timeoutKill)
+        invoker.signal?.removeEventListener('abort', killContainer)
+      }
     },
   })
 

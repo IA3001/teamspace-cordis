@@ -356,7 +356,9 @@ export class AgentRuntime extends AgentRuntimeService {
         if (snap.descriptor.toolIds?.includes('tool.workspace.verify')) {
           systemSections.push({
             label: '多文件工程交付检查', source: 'Agent Runtime 固定规则',
-            content: '如果任务要求创建多文件工程并写出 CMakeLists.txt，先完成所有文件，再调用 tool.workspace.verify。projectPath 填工程目录；requiredFiles 必须包含用户逐一要求的每个文件。检查失败时修复缺项并重查；只有收到“工作区检查通过”才能报告文件交付完整。该检查只验证文件与 CMake 本地依赖存在，不能声称已编译或运行。若用户要求实际编译/运行，必须使用可执行环境真实验证；当前 tool.code.execute 只运行 Node.js。',
+            content: snap.descriptor.toolIds?.includes('tool.workspace.run-cpp')
+              ? '如果任务要求创建多文件工程并写出 CMakeLists.txt，先完成所有文件，再调用 tool.workspace.verify。projectPath 填工程目录；requiredFiles 必须包含用户逐一要求的每个文件。检查失败时修复缺项并重查。用户要求编译、运行或原始 stdout 时，在完整性检查通过后调用 tool.workspace.run-cpp；该工具会在受控 GCC 容器编译并真实运行简单 CMake add_executable 目标。查看返回的编译状态、进程退出码、原始 stdout 和 stderr；失败时修复后重跑，只有收到“C++ 程序运行通过”才能报告运行成功。该执行器不运行任意 CMake 配置或生成器表达式。'
+              : '如果任务要求创建多文件工程并写出 CMakeLists.txt，先完成所有文件，再调用 tool.workspace.verify。projectPath 填工程目录；requiredFiles 必须包含用户逐一要求的每个文件。检查失败时修复缺项并重查；只有收到“工作区检查通过”才能报告文件交付完整。用户要求真实编译运行时，若 C++ runner 不可用，不得声称已编译或运行。',
           })
         }
         systemSections.push({ label: '轻量消息与输出安全规则', source: 'Agent Runtime 固定规则', content: '轻量消息处理：如果人类只是在问候、确认你是否在线或问“在吗”，直接用一句简短自然语言回应；不要调用工具、检查工作区、分析项目或创建任务。只有消息明确要求执行工作时才调用工具。工具调用协议只用于系统解析，绝不能把工具 JSON、草稿或内部推理写进面向用户的最终回复。' })

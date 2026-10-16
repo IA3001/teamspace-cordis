@@ -15,8 +15,8 @@ try {
   Object.assign(context, { agentCatalog: catalog })
   applyAgentRegistry(context)
   const expected = new Map([
-    ['agent.coder', { tools: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.workspace.verify'], speech: 'proactive' }],
-    ['agent.tester', { tools: ['tool.workspace.read', 'tool.code.execute', 'tool.workspace.verify'], speech: 'proactive' }],
+    ['agent.coder', { tools: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.workspace.verify', 'tool.workspace.run-cpp'], speech: 'proactive' }],
+    ['agent.tester', { tools: ['tool.workspace.read', 'tool.code.execute', 'tool.workspace.verify', 'tool.workspace.run-cpp'], speech: 'proactive' }],
     ['agent.reviewer', { tools: ['tool.workspace.read'], speech: 'proactive' }],
     ['a_analyst', { tools: ['web.search'], speech: 'proactive' }],
     ['a_challenger', { tools: ['web.search'], speech: 'passive' }],
@@ -53,6 +53,26 @@ try {
     assert.deepEqual(JSON.parse(String(upgradeDb.prepare('SELECT tool_ids FROM agent_definitions WHERE id=?').get('agent.coder')?.tool_ids)),
       ['custom.tool', 'tool.workspace.read', 'tool.workspace.verify'], 'rollback preserves team configuration')
   } finally { upgradeDb.close() }
+  const cppMigration = migrations.find((item) => item.version === 38)
+  assert.ok(cppMigration, 'controlled C++ runner migration must be present')
+  const cppUpgradeDb = new DatabaseSync(':memory:')
+  try {
+    cppUpgradeDb.exec('PRAGMA foreign_keys = ON')
+    for (const item of migrations.filter((entry) => entry.version < 38)) cppUpgradeDb.exec(item.up)
+    cppUpgradeDb.prepare('UPDATE agent_definitions SET tool_ids=? WHERE id=?').run('[]', 'agent.coder')
+    cppUpgradeDb.prepare('UPDATE agent_definitions SET tool_ids=? WHERE id=?').run('["custom.tool","tool.workspace.verify"]', 'agent.tester')
+    cppUpgradeDb.exec(cppMigration.up)
+    assert.deepEqual(JSON.parse(String(cppUpgradeDb.prepare('SELECT tool_ids FROM agent_definitions WHERE id=?').get('agent.coder')?.tool_ids)),
+      ['tool.workspace.run-cpp'], 'upgrade adds the controlled runner to a customized Agent')
+    assert.deepEqual(JSON.parse(String(cppUpgradeDb.prepare('SELECT tool_ids FROM agent_definitions WHERE id=?').get('agent.tester')?.tool_ids)),
+      ['custom.tool', 'tool.workspace.verify', 'tool.workspace.run-cpp'], 'upgrade preserves existing tools and adds the runner once')
+    cppUpgradeDb.exec(cppMigration.up)
+    assert.deepEqual(JSON.parse(String(cppUpgradeDb.prepare('SELECT tool_ids FROM agent_definitions WHERE id=?').get('agent.tester')?.tool_ids)),
+      ['custom.tool', 'tool.workspace.verify', 'tool.workspace.run-cpp'], 'upgrade is safe to retry without duplicate tools')
+    cppUpgradeDb.exec(cppMigration.down)
+    assert.deepEqual(JSON.parse(String(cppUpgradeDb.prepare('SELECT tool_ids FROM agent_definitions WHERE id=?').get('agent.tester')?.tool_ids)),
+      ['custom.tool', 'tool.workspace.verify', 'tool.workspace.run-cpp'], 'rollback preserves team tool configuration')
+  } finally { cppUpgradeDb.close() }
   console.log('✓ Seeded roles share the generic catalog registry with no per-Agent plugin bootstrap')
 } finally {
   db.close()

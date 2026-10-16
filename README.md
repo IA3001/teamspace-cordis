@@ -116,6 +116,7 @@ CI 平台接入、变更预算与独立审批设置见 [CI 文档](docs/CI.md)�
 - 目标协作流程：Agent A 在个人工作区生成包含 `helloworld.cpp`、头文件、实现文件、`CMakeLists.txt` 和 `README.md` 的工程；A 显式调用 `tool.workspace.publish` 发布整个 `projects/<工程名>/`；Agent B 用 `tool.workspace.read` 且指定 `scope="shared"` 读取源码。仅发布者的个人工作区仍不可被 B 直接读取。
 - 添加了多文件共享的 Gherkin 场景，覆盖完整发布、Agent B 读取、个人区隔离，以及路径、符号链接、大小限制和目标冲突拒绝。
 - 知识库检索相关性修复 `78fc14b` 已合入：查询按标题/正文筛选，避免无关语义块被误报为命中。
+- Agent 中继人工确认 `2d3de78` 已合入：中继回复需经过人类审阅确认；独立分支报告 AS11 浏览器验收通过。
 - 本工作树通过：`npm run typecheck`、`verify:agent-bootstrap`、`verify:agent-teamspace`、`verify:upgrade-fixtures`、`verify:sandbox`、`verify:project-completeness`。其中沙箱验证实际运行了多文件 C++ 编译/执行和共享发布/读取检查。
 
 ### 其他已完成但尚未合入的本地分支
@@ -123,7 +124,6 @@ CI 平台接入、变更预算与独立审批设置见 [CI 文档](docs/CI.md)�
 下列提交仍只在本地独立工作树，尚未发布到默认分支，也未在当前运行服务上确认：
 
 - DRI 决策与指派：`aee9c02`（DRI 指派/转交）、`a4004a6`（无 DRI 时群主决策）、`4c091c8`（角色权限）；需要合并审查，分支之间有重叠。
-- Agent 中继人工确认：`2d3de78`；独立工作树的 AS11 浏览器验收报告通过，尚未并入此快照。
 - 会话工具与成员数：`ac03f0c`（会话历史搜索）、`226de27`（当前会话待办只读工具）、`98fda9b`（成员数与列表同步）；尚未并入此快照。
 - 消息校验提示：`d19de09`（空消息反馈）、`a5aeae4`（拒绝纯空白消息）、`6b15607`（超长消息提示）；尚未并入此快照。
 

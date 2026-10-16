@@ -38,10 +38,13 @@ const AuthPage = defineComponent({
     const rpc = useRpc<{
       login(username: string, password: string): Promise<AuthResult>
       register(username: string, password: string, displayName: string): Promise<AuthResult>
+      me(token: string): Promise<PublicUserView | null>
     }>()
 
     // me 探测：null = 还在探测；undefined = 未登录（出表单）；对象 = 已登录。
     const me = ref<PublicUserView | null | undefined>(null)
+    const expiredToken = ref(false)
+    const probeFailed = ref(false)
 
     // ── 登录表单状态 ────────────────────────────────────────────────────
     const loginName = ref(localStorage.getItem('space_last_username') ?? '')
@@ -58,17 +61,31 @@ const AuthPage = defineComponent({
     const regErr = ref('')
     const regOk = ref(false)
 
-    /**
-     * 登录态探测：localStorage 有 token 即视为已登录（token 失效会在目标页
-     * 被 me(token) 校验拦截并弹回本页）—— auth entry 未提供 me 方法，
-     * 避免一次多余往返。
-     */
-    function probe() {
-      me.value = localStorage.getItem(TOKEN_KEY)
-        ? { id: 'ok', username: '', displayName: '' }
-        : undefined
+    /** 验证存储的 token，只有服务端确认有效时才显示已登录。 */
+    async function probe() {
+      const token = localStorage.getItem(TOKEN_KEY)
+      expiredToken.value = false
+      probeFailed.value = false
+      if (!token) {
+        me.value = undefined
+        return
+      }
+      me.value = null
+      try {
+        const user = await rpc.value.me(token)
+        if (user) {
+          me.value = user
+        } else {
+          localStorage.removeItem(TOKEN_KEY)
+          expiredToken.value = true
+          me.value = undefined
+        }
+      } catch {
+        probeFailed.value = true
+        me.value = undefined
+      }
     }
-    onMounted(() => probe())
+    onMounted(() => { void probe() })
 
     /** 登录成功统一出口：存 token + 用户名 → 跳团队空间。 */
     function accept(user: PublicUserView, token: string) {
@@ -148,6 +165,29 @@ const AuthPage = defineComponent({
             ],
           }),
         })
+      }
+
+      const loginStateNotice = () => {
+        if (expiredToken.value) {
+          return h(ElAlert, {
+            title: '之前的登录凭证已失效，请重新登录。',
+            type: 'warning', closable: false,
+          })
+        }
+        if (probeFailed.value) {
+          return h(ElSpace, { direction: 'vertical', fill: true }, {
+            default: () => [
+              h(ElAlert, {
+                title: '暂时无法验证登录状态。请重试，或重新登录。',
+                type: 'warning', closable: false,
+              }),
+              h(ElButton, { onClick: () => { void probe() } }, {
+                default: () => '重试验证',
+              }),
+            ],
+          })
+        }
+        return null
       }
 
       const loginPane = () => h(ElForm, { labelPosition: 'top' }, {
@@ -237,6 +277,7 @@ const AuthPage = defineComponent({
 
       const card = () => h(ElCard, { class: 'sp-auth-card', shadow: 'hover' }, {
         default: () => [
+          loginStateNotice(),
           // 品牌区：名字 + 一句话定位（替代素 header）。
           h('div', { class: 'sp-login-brand' }, [
             h('div', { class: 'sp-login-logo' }, 'TS'),

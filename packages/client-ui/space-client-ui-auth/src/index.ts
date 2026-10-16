@@ -52,6 +52,15 @@ export function apply(ctx: Context) {
           return { error: 'login_failed', detail: String((e as Error).message ?? e) }
         }
       },
+      /** 验证登录页已有 token；无效 token 统一返回 null。 */
+      async me(token: string) {
+        if (typeof token !== 'string' || !token) return null
+        try {
+          return await ctx.users.verifyToken(token)
+        } catch {
+          return null
+        }
+      },
     },
   )
 }

@@ -17,6 +17,9 @@ const sandbox = mkdtempSync(join(tmpdir(), 'teamspace-sandbox-'))
 const outside = mkdtempSync(join(tmpdir(), 'teamspace-sandbox-outside-'))
 const sharedFile = `sandbox-verify-${randomUUID()}.txt`
 const sharedPath = resolve(process.cwd(), 'data/shared-workspace', sharedFile)
+const publishName = `qa-workspace-publish-${randomUUID()}`
+const personalProjectPath = `projects/${publishName}/hello-cordis`
+const sharedProjectPath = resolve(process.cwd(), 'data/shared-workspace', personalProjectPath)
 const approvalDb = new DatabaseSync(':memory:')
 approvalDb.exec(readFileSync(resolve(process.cwd(), 'packages/impl/space-store-sqlite/migrations/0023_sandbox_approval_requests.up.sql'), 'utf8'))
 approvalDb.exec(readFileSync(resolve(process.cwd(), 'packages/impl/space-store-sqlite/migrations/0031_sandbox_approval_claim.up.sql'), 'utf8'))
@@ -57,7 +60,7 @@ async function main(): Promise<void> {
   agents.register({ id: 'a_sandbox_verify', kind: 'custom', title: '沙箱验收 Agent', capabilities: [] })
   const workdir = new LocalWorkdirService(ctx, sandbox)
   const eventLog = new VerifyEventLog(ctx)
-  const tools = new ToolRegistry(ctx, { allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.workspace.verify', 'tool.workspace.run-cpp', 'tool.code.execute'] })
+  const tools = new ToolRegistry(ctx, { allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.workspace.verify', 'tool.workspace.run-cpp', 'tool.workspace.publish', 'tool.code.execute'] })
   new SqliteSandboxApproval(ctx, approvalDb)
   await applySandboxTools(ctx)
   await workdir.claim('a_sandbox_verify')
@@ -141,6 +144,36 @@ async function main(): Promise<void> {
   assert.equal(missingInclude.ok, true)
   const incompleteDependency = await tools.invoke('tool.workspace.verify', JSON.stringify({ projectPath: project, requiredFiles }), invoker)
   assert.match(incompleteDependency.output, /missing\.hpp/u, 'local quoted include dependencies must be checked')
+
+  await tools.invoke('tool.workspace.write', JSON.stringify({
+    path: `${personalProjectPath}/src/main.cpp`, content: '#include <iostream>\nint main() { std::cout << "hello cordis"; }\n',
+  }), invoker)
+  await tools.invoke('tool.workspace.write', JSON.stringify({
+    path: `${personalProjectPath}/README.md`, content: '# Hello Cordis\nA multi-file shared project.\n',
+  }), invoker)
+  const published = await tools.invoke('tool.workspace.publish', JSON.stringify({ path: personalProjectPath }), invoker)
+  assert.equal(published.ok, true, published.output)
+  assert.match(published.output, /2 个文件/u)
+  assert.equal(readFileSync(join(sharedProjectPath, 'src/main.cpp'), 'utf8'), '#include <iostream>\nint main() { std::cout << "hello cordis"; }\n')
+  assert.equal(readFileSync(join(sharedProjectPath, 'README.md'), 'utf8'), '# Hello Cordis\nA multi-file shared project.\n')
+  assert.equal(tools.list().some((tool) => tool.id === 'tool.workspace.publish'), true)
+  const readerId = 'a_sandbox_publish_reader'
+  agents.register({ id: readerId, kind: 'custom', title: '共享工程读取验收 Agent', capabilities: [] })
+  await workdir.claim(readerId)
+  const sharedProjectRead = await tools.invoke('tool.workspace.read', JSON.stringify({
+    path: `${personalProjectPath}/src/main.cpp`, scope: 'shared',
+  }), { id: readerId, sessionId: invoker.sessionId })
+  assert.equal(sharedProjectRead.ok, true, sharedProjectRead.output)
+  assert.match(sharedProjectRead.output, /hello cordis/u)
+  const privateRead = await tools.invoke('tool.workspace.read', JSON.stringify({ path: `${personalProjectPath}/src/main.cpp` }), {
+    id: readerId, sessionId: invoker.sessionId,
+  })
+  assert.equal(privateRead.ok, false, 'the reader cannot read the publisher personal workspace')
+  const conflict = await tools.invoke('tool.workspace.publish', JSON.stringify({ path: personalProjectPath }), invoker)
+  assert.equal(conflict.ok, false)
+  assert.match(conflict.output, /已存在，拒绝覆盖/u)
+  const invalidRoot = await tools.invoke('tool.workspace.publish', JSON.stringify({ path: 'notes' }), invoker)
+  assert.equal(invalidRoot.ok, false)
 
   writeFileSync(sharedPath, 'shared read only')
   const shared = await tools.invoke('tool.workspace.read', JSON.stringify({ path: sharedFile, scope: 'shared' }), invoker)
@@ -243,6 +276,7 @@ async function main(): Promise<void> {
   assert.equal(protectedWrite.ok, false, 'container cannot write the team-shared mount')
 
   rmSync(sharedPath, { force: true })
+  rmSync(sharedProjectPath, { recursive: true, force: true })
   rmSync(sandbox, { recursive: true, force: true })
   rmSync(outside, { recursive: true, force: true })
   console.log('✓ workspace boundaries, multi-file project completeness, controlled C++ compile/run, real stdout, exit/timeout/missing-source reporting, Docker limits, atomic approval delivery, and read-only shared mount passed')

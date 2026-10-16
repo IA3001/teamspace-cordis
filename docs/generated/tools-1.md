@@ -4,6 +4,7 @@
 - [plugins/sandbox-tools/index.ts](../../plugins/sandbox-tools/index.ts)：`tool.workspace.write` · 写入个人工作区文件 · descriptor 9d5bcf413dd498f5fffc9ba0e7208d521082479175a94693a4e1bf6bb84f3c04
 - [plugins/sandbox-tools/index.ts](../../plugins/sandbox-tools/index.ts)：`tool.workspace.verify` · 检查多文件工程完整性 · descriptor ba7a241fc1b555a09294715534c9700b0eef92f81f19b2fc6d5b842424166e4e
 - [plugins/sandbox-tools/index.ts](../../plugins/sandbox-tools/index.ts)：`tool.workspace.run-cpp` · 在隔离容器中编译并运行 C++ 工程 · descriptor 969c83c7ef3bda39d8bef9af21a930bf737384cb39c473a237d13fc7d14d7e5e
+- [plugins/sandbox-tools/index.ts](../../plugins/sandbox-tools/index.ts)：`tool.workspace.publish` · 发布个人工程到团队共享工作区 · descriptor f0c0d1aa26ac6c7e535ce2d86fa1253eec31fd5a15e588c0a2e9e8c813e24609
 - [plugins/sandbox-tools/index.ts](../../plugins/sandbox-tools/index.ts)：`tool.code.execute` · 在隔离容器中执行 Node.js · descriptor db73450bd151ce452ee86d4bafd3a657cd6dea022f102db27a04931123cc8ba1
 - [plugins/tool-web-search/index.ts](../../plugins/tool-web-search/index.ts)：`web.search` · 网页搜索 · descriptor f2aaaa4287f3d3e0571a2ea75cef23296e11cdc260bebb1cdc6569a0f8a556fe
 - [plugins/tool-workdir/index.ts](../../plugins/tool-workdir/index.ts)：`tool.workdir-perform` · 工作区任务执行 · descriptor d483c5dbd9218c076069281a49e8ca5dfc88a6c6ee1817aaaa875a6ada1394fa

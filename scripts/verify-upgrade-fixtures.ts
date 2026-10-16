@@ -34,5 +34,15 @@ try {
   assert.equal(db.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
   db.exec('BEGIN'); db.prepare('UPDATE kb_documents SET content=? WHERE id=?').run('partial write','legacy-doc'); db.exec('ROLLBACK')
   assert.equal(db.prepare('SELECT content FROM kb_documents WHERE id=?').get('legacy-doc')?.content, 'retained legacy text')
-  console.log(`✓ Actual v${oldVersion} fixture upgrades to v${migrations.at(-1)!.version}; citation migration upgrades/rolls back cleanly; content retained, interrupted transaction rolled back`)
+  const publishMigration = migrations.find((migration) => migration.version === 39)
+  assert(publishMigration, 'Agent workspace publishing migration 0039 exists')
+  const coderTools = () => JSON.parse(db.prepare('SELECT tool_ids FROM agent_definitions WHERE id=?').get('agent.coder')?.tool_ids ?? '[]')
+  assert(coderTools().includes('tool.workspace.publish'), 'upgrade grants the seeded coder the controlled publish capability')
+  db.exec(publishMigration.down)
+  assert(!coderTools().includes('tool.workspace.publish'), 'rollback removes the publish capability')
+  assert(coderTools().includes('tool.workspace.write') && coderTools().includes('tool.code.execute'),
+    'rollback preserves pre-existing coder capabilities')
+  db.exec(publishMigration.up)
+  assert(coderTools().includes('tool.workspace.publish'), 'publish capability migration can be reapplied')
+  console.log(`✓ Actual v${oldVersion} fixture upgrades to v${migrations.at(-1)!.version}; citation and workspace-publish migrations upgrade/roll back cleanly; content and existing Agent tools retained`)
 } finally { db.close() }

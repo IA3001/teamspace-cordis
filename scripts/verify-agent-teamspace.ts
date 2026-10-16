@@ -224,7 +224,7 @@ async function main() {
   assert.deepEqual(agentTemplates.map((template: { id: string }) => template.id), ['research', 'challenge', 'coding', 'review', 'testing', 'general'],
     'Team humans receive generic, reusable starter templates')
   assert.deepEqual(agentTemplates.find((template: { id: string }) => template.id === 'coding')?.input.toolIds,
-    ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.workspace.verify', 'tool.workspace.run-cpp'])
+    ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.workspace.verify', 'tool.workspace.run-cpp', 'tool.workspace.publish'])
   assert.equal(agentTemplates.find((template: { id: string }) => template.id === 'research')?.version, 1,
     'starter templates expose an explicit version')
   assert.equal(await rpc.agentTemplates('agent-token'), null, 'Agent identities cannot manage shared Agent templates')

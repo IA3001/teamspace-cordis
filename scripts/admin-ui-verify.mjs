@@ -148,6 +148,20 @@ const pageErrors = []
 page.on('pageerror', (error) => pageErrors.push(String(error)))
 
 try {
+  const debugOrigin = new URL(baseURL).origin
+  await page.goto(`${debugOrigin}/`, { waitUntil: 'networkidle', timeout: 20000 })
+  await page.getByText('Cordis 调试控制台', { exact: true }).waitFor({ timeout: 10000 })
+  await page.getByText('服务已启动。选择一个页面查看当前运行状态。', { exact: true }).waitFor()
+  await page.screenshot({ path: '/tmp/debug-console-home.png' })
+  for (const [label, path] of [['插件管理', '/plugins'], ['运行日志', '/logs'], ['数据库', '/database']]) {
+    await page.getByRole('button', { name: label, exact: true }).click()
+    await page.waitForURL(`**${path}**`, { timeout: 10000 })
+    assert.equal(new URL(page.url()).pathname, path, `首页“${label}”按钮应进入真实的 ${path} 页面`)
+    await page.goto(`${debugOrigin}/`, { waitUntil: 'networkidle', timeout: 20000 })
+    await page.getByText('Cordis 调试控制台', { exact: true }).waitFor({ timeout: 10000 })
+  }
+  console.log('✓ Debug console root shows a welcome panel and navigates to plugins, logs, and database')
+
   await page.goto(baseURL, { waitUntil: 'networkidle', timeout: 20000 })
   await page.locator('.sp-page-head').waitFor({ timeout: 10000 })
   assert.equal(await page.locator('.sp-login-gate').count(), 0, '后台无登录页，不会遮挡全局导航')

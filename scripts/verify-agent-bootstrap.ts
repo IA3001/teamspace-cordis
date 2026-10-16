@@ -15,7 +15,7 @@ try {
   Object.assign(context, { agentCatalog: catalog })
   applyAgentRegistry(context)
   const expected = new Map([
-    ['agent.coder', { tools: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute'], speech: 'proactive' }],
+    ['agent.coder', { tools: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.workspace.publish'], speech: 'proactive' }],
     ['agent.tester', { tools: ['tool.workspace.read', 'tool.code.execute'], speech: 'proactive' }],
     ['agent.reviewer', { tools: ['tool.workspace.read'], speech: 'proactive' }],
     ['a_analyst', { tools: ['web.search'], speech: 'proactive' }],

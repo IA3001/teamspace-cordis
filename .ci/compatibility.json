@@ -178,6 +178,33 @@
         "scripts/verify-rag.ts",
         "scripts/verify-agent-teamspace.ts"
       ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_workspace_publish.up.sql",
+      "hash": "eed66e0c2b390b1290bca25c9db8502807108ac7943b54eafb7ae54aedc5f37f",
+      "description": "docs/compatibility/agent-workspace-publish.md",
+      "oldVersion": "36",
+      "upgrade": "Apply migration 0037; append tool.workspace.publish to agent.coder only if absent. Existing published files and other Agent tool assignments are unchanged.",
+      "rollback": "Apply migration 0037 down; remove only tool.workspace.publish from agent.coder. Shared files remain intact.",
+      "tests": ["scripts/verify-upgrade-fixtures.ts", "scripts/verify-sandbox-tools.ts", "scripts/verify-agent-bootstrap.ts"]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_workspace_publish.down.sql",
+      "hash": "7c6b53b69e5b221c95d3ab0b4cf72013e49ae7e980f76e298724af6fdc361d88",
+      "description": "docs/compatibility/agent-workspace-publish.md",
+      "oldVersion": "36",
+      "upgrade": "Apply migration 0037 up to grant controlled publication to the seeded coding Agent.",
+      "rollback": "Apply migration 0037 down; remove only tool.workspace.publish from agent.coder. Shared files remain intact.",
+      "tests": ["scripts/verify-upgrade-fixtures.ts", "scripts/verify-sandbox-tools.ts", "scripts/verify-agent-bootstrap.ts"]
+    },
+    {
+      "path": "packages/seam/space-agent-catalog/src/index.ts",
+      "hash": "bea28d9de0c66330c53498d2162b3ccca8c57186201fe9985aee6c2fcd42773d",
+      "description": "docs/compatibility/agent-workspace-publish.md",
+      "oldVersion": "36",
+      "upgrade": "New coding templates include tool.workspace.publish. Existing Agent definitions are not silently altered except the seeded agent.coder migration.",
+      "rollback": "Restore the coding template tool list without tool.workspace.publish; existing persisted definitions are controlled by migration 0037 down.",
+      "tests": ["scripts/verify-agent-teamspace.ts", "scripts/verify-agent-bootstrap.ts"]
     }
   ]
 }

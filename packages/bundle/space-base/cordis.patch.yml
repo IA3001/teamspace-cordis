@@ -73,7 +73,7 @@
 - id: space-tool
   name: './plugins/space-tool/index.ts'
   config:
-    allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'web.search']
+    allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.workspace.publish', 'tool.code.execute', 'web.search']
 
 # Personal read/write, team-shared read-only, and Docker-isolated code execution.
 - id: sandbox-tools

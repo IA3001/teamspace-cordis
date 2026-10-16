@@ -79,6 +79,7 @@ await page.addInitScript(() => {
   const NativeWebSocket = window.WebSocket
   const sockets = []
   window.__uiVerifySockets = sockets
+  window.__uiVerifyRpcMethods = []
   const failureMethods = {
     uiVerifyFailAgentBootstrap: 'agentDefinitions',
     uiVerifyFailKbBootstrap: 'docs',
@@ -139,6 +140,9 @@ await page.addInitScript(() => {
       this.send = (data) => {
         let request
         try { request = JSON.parse(String(data)) } catch { /* Non-RPC frames pass through. */ }
+        if (request?.type === 'rpc:request' && typeof request.body?.method === 'string') {
+          window.__uiVerifyRpcMethods.push(request.body.method)
+        }
         if (request?.type === 'rpc:request' && request.body?.method === 'turn' && sessionStorage.getItem('uiVerifyUnknownPause') === '1') {
           const sn = request.body.sn
           setTimeout(() => this.dispatchEvent(new MessageEvent('message', {
@@ -644,6 +648,19 @@ const judge = (name, ok, detail) => { console.log(`[AS] ${name}: ${ok ? 'GREEN' 
   const ok = placeholder === '输入消息 · @提及成员' && slashPopupCount === 0 && slashRemainsText
   judge('AS12 输入区只提供成员提及；斜杠文本按普通消息处理', ok,
     `placeholder=${placeholder ?? 'null'} | slashPopup=${slashPopupCount} | slashText=${slashRemainsText}`)
+  const rows = page.locator('.sp-list .sp-msg[data-ev-id]')
+  const beforeRows = await rows.count()
+  const beforeSends = await page.evaluate(() => window.__uiVerifyRpcMethods.filter((method) => method === 'send').length)
+  await ta.fill('   ')
+  await page.getByRole('button', { name: '发送消息' }).click()
+  const emptyAlert = page.locator('.el-alert').filter({ hasText: '内容不能为空' })
+  await emptyAlert.waitFor({ state: 'visible', timeout: 2000 })
+  const whitespaceRetained = (await ta.inputValue()) === '   '
+  const rowsUnchanged = (await rows.count()) === beforeRows
+  const sendsUnchanged = await page.evaluate((count) => window.__uiVerifyRpcMethods.filter((method) => method === 'send').length === count, beforeSends)
+  judge('AS12a 纯空白消息显示原因且不入时间线、不调用发送 RPC',
+    whitespaceRetained && rowsUnchanged && sendsUnchanged,
+    `draftRetained=${whitespaceRetained} | timeline=${beforeRows}->${await rows.count()} | sendRpcUnchanged=${sendsUnchanged}`)
   await ta.fill('')
 }
 

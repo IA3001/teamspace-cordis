@@ -49,13 +49,18 @@ ctx.session.createSession({ id: 's_decisions', title: '决策验收' })
 const insertPrincipal = db.prepare(`INSERT INTO users(id, username, password_hash, display_name, kind, created_at, team_role)
   VALUES (?, ?, '!', ?, ?, ?, 'member')`)
 insertPrincipal.run('u_dec_dri', 'decision_dri', 'DRI', 'human', new Date().toISOString())
+insertPrincipal.run('u_dec_owner', 'decision_owner', 'Owner', 'human', new Date().toISOString())
 insertPrincipal.run('u_dec_member', 'decision_member', 'Member', 'human', new Date().toISOString())
 insertPrincipal.run('a_dec_writer', 'a_writer', 'Writer', 'agent', new Date().toISOString())
 insertPrincipal.run('a_dec_follower', 'a_follower', 'Follower', 'agent', new Date().toISOString())
 ctx.session.join({ sessionId: 's_decisions', principalId: 'u_dec_dri', role: 'DRI' })
+ctx.session.join({ sessionId: 's_decisions', principalId: 'u_dec_owner', role: '群主' })
 ctx.session.join({ sessionId: 's_decisions', principalId: 'u_dec_member', role: '成员' })
 ctx.session.join({ sessionId: 's_decisions', principalId: 'a_dec_writer', role: '成员' })
 ctx.session.join({ sessionId: 's_decisions', principalId: 'a_dec_follower', role: '成员' })
+ctx.session.createSession({ id: 's_owner_fallback', title: '群主代行验收' })
+ctx.session.join({ sessionId: 's_owner_fallback', principalId: 'u_dec_owner', role: '群主' })
+ctx.session.join({ sessionId: 's_owner_fallback', principalId: 'a_dec_writer', role: '成员' })
 applyDecisionCommands(ctx)
 let redoPlan: { mentions: string[]; event: { replyTo?: string | null } } | undefined
 ctx.on('space/plan', (signal) => { redoPlan = signal })
@@ -66,9 +71,9 @@ function agentAnswer(id: string, text: string) {
     authorKind: 'agent', kind: 'message', text, mentions: [], toolCalls: [], replyMode: '',
   })
 }
-async function decision(authorId: string, text: string): Promise<string> {
+async function decision(authorId: string, text: string, sessionId = 's_decisions'): Promise<string> {
   const result = await ctx.commands.dispatch(
-    { sessionId: 's_decisions', authorId, arg: '', args: [], raw: text },
+    { sessionId, authorId, arg: '', args: [], raw: text },
     { name: 'decision', rest: text.replace(/^\/decision\s+/, '') },
   )
   return result.text
@@ -79,6 +84,18 @@ async function finalDecision(authorId: string, text: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  const ownerOnlyAnswer = eventLog.append({
+    id: 'evt_owner_only', sessionId: 's_owner_fallback', authorId: 'a_dec_writer', phaseId: null,
+    authorKind: 'agent', kind: 'message', text: '单人会话待群主决策', mentions: [], toolCalls: [], replyMode: '',
+  })
+  assert.match(await decision('u_dec_owner', `/decision pass ${ownerOnlyAnswer.id}`, 's_owner_fallback'), /再次从回复卡片提交决策/,
+    'the group owner can open the decision review when no DRI is assigned')
+  ctx.session.join({ sessionId: 's_owner_fallback', principalId: 'u_dec_dri', role: 'DRI' })
+  assert.match(await decision('u_dec_owner', `/decision reject ${ownerOnlyAnswer.id} owner must yield`, 's_owner_fallback'), /只有本会话 DRI/,
+    'the group owner fallback is disabled as soon as a designated DRI joins')
+  assert.match(await decision('u_dec_dri', `/decision pass ${ownerOnlyAnswer.id}`, 's_owner_fallback'), /已通过/,
+    'the explicitly assigned DRI retains decision authority')
+
   const protectedAnswer = agentAnswer('evt_protected', '先暂缓发布。')
   assert.match(await decision('u_dec_member', `/decision pass ${protectedAnswer.id}`), /只有本会话 DRI/)
   assert.equal(eventLog.listBySession('s_decisions').find((event) => event.id === protectedAnswer.id)?.voided, false,

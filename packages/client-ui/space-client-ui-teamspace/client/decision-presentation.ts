@@ -16,6 +16,7 @@ export interface DecisionPresentation {
 
 export interface DecisionAccessContext {
   viewerIsDri: boolean
+  viewerIsOwnerFallback?: boolean
   viewerRole?: string
   driName?: string
   driPrincipalId?: string
@@ -67,6 +68,9 @@ export function decisionPresentation<T extends DecisionEventLike>(
 
 /** Explain why decision controls are or are not available, and point to their location. */
 export function decisionAccessGuidance(context: DecisionAccessContext): string {
+  if (context.viewerIsOwnerFallback) {
+    return '本会话未单独指派 DRI。你是群主，可直接在这张 Agent 回复卡片下方选择「通过」或「其他处理」；消息「⋯」菜单里没有决策入口。指派了专属 DRI 后，将由该 DRI 处理后续决策。'
+  }
   if (context.viewerIsDri) {
     return '当前登录账号是本会话 DRI；请在这张 Agent 回复卡片下方选择「通过」或「其他处理」。消息「⋯」菜单里没有决策入口。'
   }
@@ -78,7 +82,7 @@ export function decisionAccessGuidance(context: DecisionAccessContext): string {
     return `当前登录账号无通过权限。请使用 DRI「${context.driName}」${identity}登录；只有该 DRI 能在 Agent 回复卡片下方选择「通过」或「其他处理」，消息「⋯」菜单没有决策入口。${roleHelp}`
   }
   if (context.viewerRole === '群主') {
-    return '当前登录账号无通过权限，且本会话还没有 DRI。请从会话「⋯」→「成员 / 角色管理」将其他人类成员设为 DRI；群主角色固定，不能把自己改成 DRI。'
+    return '当前登录账号无通过权限；本会话尚未指派 DRI，且群主角色固定，不能把自己改成 DRI。请由群主在会话「⋯」→「成员 / 角色管理」将一名人类成员设为 DRI。'
   }
   return '当前登录账号无通过权限，且本会话还没有 DRI。请使用群主指定的 DRI 账号登录；或请群主从会话「⋯」→「成员 / 角色管理」指定人类成员为 DRI。'
 }

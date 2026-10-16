@@ -1385,18 +1385,49 @@ console.log('== 断言区 ==')
     const currentViewerId = accessDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)?.user_id
     try {
       if (!currentViewerId) throw new Error('UI 验收 token 未关联 Team 账号')
-      accessDb.prepare(`UPDATE session_members SET role='成员' WHERE session_id=? AND principal_id=?`)
+      accessDb.prepare(`UPDATE session_members SET role='群主' WHERE session_id=? AND principal_id=?`)
         .run(temporaryDecisionSession, currentViewerId)
-      accessDb.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
+    } finally { accessDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+    const ownerFallbackNotice = await message.locator('.el-alert').innerText()
+    const ownerFallbackButton = message.getByRole('button', { name: '通过', exact: true })
+    const ownerCanDecideWithoutDri = ownerFallbackNotice.includes('你是群主，可直接') &&
+      ownerFallbackNotice.includes('Agent 回复卡片下方') && await ownerFallbackButton.count() === 1
+    detail.push(`未指派 DRI 时群主可从回复卡片处理，并有明确说明=${ownerCanDecideWithoutDri}`)
+    ok &&= ownerCanDecideWithoutDri
+    await ownerFallbackButton.click()
+    const ownerDecisionDialog = page.locator('.el-dialog')
+    const ownerCanOpenDecision = await ownerDecisionDialog.isVisible() &&
+      (await ownerDecisionDialog.innerText()).includes('处理 Agent 回复')
+    detail.push(`群主后备权限能打开决策确认框=${ownerCanOpenDecision}`)
+    ok &&= ownerCanOpenDecision
+    await ownerDecisionDialog.getByText('取消', { exact: true }).click()
+
+    const memberDb = new DatabaseSync('data/database.db')
+    try {
+      memberDb.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
         VALUES (?, 'u_ui_dri_identity', 'DRI', 'active', ?, NULL, '')`)
         .run(temporaryDecisionSession, new Date().toISOString())
-    } finally { accessDb.close() }
+    } finally { memberDb.close() }
     await page.reload({ waitUntil: 'networkidle' })
     const nonDriCard = message.locator('.el-alert')
     const accessNotice = await nonDriCard.innerText()
     const passButtonCount = await message.getByRole('button', { name: '通过', exact: true }).count()
-    detail.push(`非 DRI 看到实际 DRI 身份与决策路径=${accessNotice.includes('u_ui_dri_identity') && accessNotice.includes('「通过」')}；隐藏决策按钮=${passButtonCount === 0}`)
-    ok &&= accessNotice.includes('u_ui_dri_identity') && accessNotice.includes('「通过」') && passButtonCount === 0
+    const ownerYieldsToDri = accessNotice.includes('u_ui_dri_identity') &&
+      accessNotice.includes('当前登录账号无通过权限') && passButtonCount === 0
+    detail.push(`有专属 DRI 时群主让出权限并看到 DRI 身份=${ownerYieldsToDri}`)
+    ok &&= ownerYieldsToDri
+
+    const demoteDb = new DatabaseSync('data/database.db')
+    try {
+      demoteDb.prepare(`UPDATE session_members SET role='成员' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, currentViewerId)
+    } finally { demoteDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+    const nonDriCardText = await message.locator('.el-alert').innerText()
+    const nonDriPassButtonCount = await message.getByRole('button', { name: '通过', exact: true }).count()
+    detail.push(`非 DRI 看到实际 DRI 身份与决策路径=${nonDriCardText.includes('u_ui_dri_identity') && nonDriCardText.includes('「通过」')}；隐藏决策按钮=${nonDriPassButtonCount === 0}`)
+    ok &&= nonDriCardText.includes('u_ui_dri_identity') && nonDriCardText.includes('「通过」') && nonDriPassButtonCount === 0
     const activeSession = page.locator('.sp-rail-item.active')
     await activeSession.locator('.el-dropdown').click()
     await page.getByText('成员 / 角色管理', { exact: true }).click()

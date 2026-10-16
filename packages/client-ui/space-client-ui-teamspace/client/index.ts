@@ -1847,8 +1847,11 @@ const TeamspacePage = defineComponent({
         // 撤回入口：仅自己的（authorKind='human'）未撤回消息悬停时出现，在「引用」旁。
         const canRecall = !ev.voided && ev.kind === 'message' &&
           ev.authorKind === 'human' && ev.authorId === me.value?.id
+        const hasAssignedDri = members.value.some((member) => member.role === 'DRI')
+        const currentMembership = members.value.find((member) => member.principalId === me.value?.id)
+        const ownerFallback = !hasAssignedDri && currentMembership?.role === '群主'
         const canDecide = ev.kind === 'message' && ev.authorKind === 'agent' &&
-          members.value.some((member) => member.principalId === me.value?.id && member.role === 'DRI')
+          (currentMembership?.role === 'DRI' || ownerFallback)
         const pendingDri = members.value.find((member) => member.role === 'DRI')
         const pendingDriHuman = pendingDri
           ? humans.value.find((human) => human.id === pendingDri.principalId)
@@ -1860,6 +1863,7 @@ const TeamspacePage = defineComponent({
         const accessGuidance = decision?.title === '待 DRI 决策'
           ? decisionAccessGuidance({
               viewerIsDri: canDecide,
+              viewerIsOwnerFallback: canDecide && ownerFallback,
               viewerRole,
               driName: pendingDriName,
               driPrincipalId: pendingDri?.principalId,
@@ -2607,10 +2611,10 @@ const TeamspacePage = defineComponent({
                   ? driHuman?.displayName || driHuman?.username || dri.duty?.trim() || dri.principalId
                   : ''
                 return h(ElAlert, {
-                  title: dri ? `当前 DRI：${driName}（${dri.principalId}）` : '当前未指派 DRI',
+                  title: dri ? `当前 DRI：${driName}（${dri.principalId}）` : '当前未单独指派 DRI',
                   description: dri
                     ? '只有这个 DRI 账号登录后，Agent 回复卡片下方才显示「通过」和「其他处理」；消息「⋯」菜单里没有决策入口。成员 ID 用来区分名称相近的不同账号。'
-                    : '需要决策时，请从左侧会话「⋯」→「成员 / 角色管理」指定另一名人类成员为 DRI；群主角色固定。成员 ID 用来区分名称相近的不同账号。',
+                    : '没有专属 DRI 时，群主可直接在 Agent 回复卡片下方选择「通过」或「其他处理」。如需指定专属 DRI，请从会话「⋯」→「成员 / 角色管理」将一名人类成员设为 DRI。成员 ID 用来区分名称相近的不同账号。',
                   type: dri ? 'warning' : 'info',
                   showIcon: true,
                   closable: false,

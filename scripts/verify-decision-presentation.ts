@@ -35,6 +35,7 @@ assert.equal(decisionPresentation({ ...target, text: '建议。\n【需要DRI决
 assert.equal(decisionAccessGuidance({ viewerIsDri: false, driName: 'dri', driPrincipalId: 'u_b926037d' }),
   '当前登录账号无通过权限。请使用 DRI「dri」（u_b926037d）登录；只有该 DRI 能在 Agent 回复卡片下方选择「通过」或「其他处理」，消息「⋯」菜单没有决策入口。请使用这个 DRI 账号登录，或请群主从会话「⋯」→「成员 / 角色管理」指定人类成员为 DRI。')
 assert.match(decisionAccessGuidance({ viewerIsDri: true }), /Agent 回复卡片下方选择「通过」或「其他处理」/u)
+assert.match(decisionAccessGuidance({ viewerIsDri: true, viewerIsOwnerFallback: true }), /你是群主，可直接在这张 Agent 回复卡片下方选择/u)
 assert.match(decisionAccessGuidance({ viewerIsDri: false, viewerRole: '群主' }), /不能把自己改成 DRI/u)
 assert.match(decisionAccessGuidance({ viewerIsDri: false }), /当前登录账号无通过权限/u)
 console.log('✓ Decision presentation separates Agent recommendations, pending questions, and latest DRI status')

@@ -171,6 +171,10 @@ export class OpenAiChatLlm extends LlmService {
         body: JSON.stringify({
           model,
           messages,
+          ...(options?.tools?.length ? {
+            tools: options.tools.map(({ toolId: _toolId, ...tool }) => tool),
+            tool_choice: 'auto',
+          } : {}),
           ...(maxTokens ? { max_tokens: maxTokens } : {}),
           ...(options?.onToken ? { stream: true, ...(this.cfg.streamUsage !== false ? { stream_options: { include_usage: true } } : {}) } : {}),
         }),
@@ -201,23 +205,34 @@ export class OpenAiChatLlm extends LlmService {
       const decoder = new TextDecoder()
       let pending = ''
       let content = ''
+      const streamedToolCalls: NativeToolCall[] = []
       const consume = (line: string) => {
         const trimmed = line.trim()
         if (!trimmed.startsWith('data:')) return
         const data = trimmed.slice(5).trim()
         if (!data || data === '[DONE]') return
-        let parsed: { choices?: Array<{ delta?: { content?: unknown } }>; usage?: unknown }
+        let parsed: { choices?: Array<{ delta?: { content?: unknown; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> } }>; usage?: unknown }
         try {
           parsed = JSON.parse(data) as typeof parsed
         } catch {
           throw new LlmError('http_error', 'LLM 流式响应包含无效事件')
         }
         recordUsage(parsed.usage)
-        const delta = parsed.choices?.[0]?.delta?.content
-        if (typeof delta !== 'string' || !delta) return
-        firstTokenMs ??= Date.now() - started
-        content += delta
-        try { options.onToken?.(delta) } catch { /* UI progress is best effort. */ }
+        const choice = parsed.choices?.[0]
+        for (const toolDelta of choice?.delta?.tool_calls ?? []) {
+          const index = Number.isSafeInteger(toolDelta.index) && (toolDelta.index ?? -1) >= 0 ? toolDelta.index! : streamedToolCalls.length
+          const current = streamedToolCalls[index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } }
+          current.function ??= { name: '', arguments: '' }
+          if (typeof toolDelta.id === 'string') current.id += toolDelta.id
+          if (typeof toolDelta.function?.name === 'string') current.function.name += toolDelta.function.name
+          if (typeof toolDelta.function?.arguments === 'string') current.function.arguments += toolDelta.function.arguments
+        }
+        const delta = choice?.delta?.content
+        if (typeof delta === 'string' && delta) {
+          firstTokenMs ??= Date.now() - started
+          content += delta
+          try { options.onToken?.(delta) } catch { /* UI progress is best effort. */ }
+        }
       }
       try {
         while (true) {
@@ -240,11 +255,11 @@ export class OpenAiChatLlm extends LlmService {
       } finally {
         reader.releaseLock()
       }
-      if (!content) throw new LlmError('empty_response', 'LLM 流式响应没有文本内容')
+      if (!content && !streamedToolCalls.length) throw new LlmError('empty_response', 'LLM 流式响应没有文本或工具调用')
       finishUsage()
-      return content
+      return streamedToolCalls.length ? nativeToolCallsEnvelope(streamedToolCalls, options?.tools) : content
     }
-    let payload: { choices?: { message?: { content?: unknown } }[]; usage?: unknown }
+    let payload: { choices?: { message?: { content?: unknown; tool_calls?: NativeToolCall[] } }[]; usage?: unknown }
     try {
       payload = (await res.json()) as typeof payload
     } catch (e) {
@@ -257,18 +272,39 @@ export class OpenAiChatLlm extends LlmService {
       }
       throw new LlmError('http_error', `LLM 响应不是有效 JSON：${err.message}`)
     }
-    const content = payload?.choices?.[0]?.message?.content
-    if (typeof content !== 'string') {
+    const message = payload?.choices?.[0]?.message
+    const content = message?.content
+    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : []
+    if (typeof content !== 'string' && !toolCalls.length) {
       throw new LlmError('empty_response', 'LLM 响应缺 choices[0].message.content')
     }
     recordUsage(payload.usage)
     if (content) firstTokenMs = Date.now() - started
-    if (content && options?.onToken) {
+    if (typeof content === 'string' && content && options?.onToken) {
       try { options.onToken(content) } catch { /* UI progress is best effort. */ }
     }
     finishUsage()
-    return content
+    return toolCalls.length ? nativeToolCallsEnvelope(toolCalls, options?.tools) : content as string
   }
+}
+
+interface NativeToolCall {
+  id?: string
+  type?: string
+  function?: { name?: string; arguments?: string }
+}
+
+/** Keep the provider wire protocol out of business layers; runtime gets the same
+ * private envelope it already routes through its allowlisted Tool executor. */
+function nativeToolCallsEnvelope(calls: readonly NativeToolCall[], definitions: ChatOptions['tools']): string {
+  return JSON.stringify({ toolCalls: calls.map((call) => {
+    const name = call.function?.name
+    const rawArgs = call.function?.arguments ?? '{}'
+    const toolId = definitions?.find((definition) => definition.function.name === name)?.toolId ?? name
+    let args: unknown
+    try { args = JSON.parse(rawArgs) } catch { args = rawArgs }
+    return { toolId, args }
+  }) })
 }
 
 export const name = 'space-llm-openai'

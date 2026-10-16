@@ -33,6 +33,23 @@ export interface ChatMessage {
   content: string
 }
 
+/** OpenAI-compatible function tool definition supplied by the Agent runtime. */
+export interface ChatToolDefinition {
+  type: 'function'
+  /** Runtime-only mapping; the provider adapter strips it from the wire body. */
+  toolId?: string
+  function: {
+    name: string
+    description?: string
+    parameters: {
+      type: 'object'
+      properties?: Record<string, unknown>
+      required?: string[]
+      additionalProperties?: boolean
+    }
+  }
+}
+
 export interface ChatUsage {
   inputTokens?: number
   outputTokens?: number
@@ -53,6 +70,8 @@ export interface ChatOptions {
   model?: string
   /** Cancel a request when its causal Agent run is withdrawn. */
   signal?: AbortSignal
+  /** Tool definitions for provider-native structured tool calling. */
+  tools?: readonly ChatToolDefinition[]
   /** Optional user-facing completion deltas; callers must not persist them as Agent context. */
   onToken?: (delta: string) => void
   /** Numerical provider statistics only; no prompt content or credentials. */
@@ -87,7 +106,8 @@ export class LlmError extends Error {
 // 实现层必须保证的语义：
 //   · configured：三件套齐且 key 非空（每次读取现算 —— 测试可在进程内翻转）。
 //   · chat：单次 POST {base}/chat/completions（Bearer key），返回
-//     choices[0].message.content 原文（可为空串）；不重试；超时/失败抛 LlmError。
+//     choices[0].message.content 原文（可为空串）；如传 tools，工具调用会编码为
+//     Agent Runtime 内部 toolCalls envelope；不重试；超时/失败抛 LlmError。
 export abstract class LlmService extends Service {
   constructor(ctx: Context) {
     super(ctx, 'llm')

@@ -168,6 +168,54 @@ try {
   assert.equal(result.answer, '最终回复')
   assert.deepEqual(progress, ['最终', '回复'])
 
+  let nativeRound = 0
+  const nativeBodies: Record<string, unknown>[] = []
+  let nativeInvocation = ''
+  const nativeLlm = new OpenAiChatLlm(new Context(), {
+    apiKey: 'native-tool-key', baseURL: 'https://llm.example/v1', model: 'native-tool-model',
+  })
+  globalThis.fetch = async (_url, init) => {
+    nativeBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    nativeRound++
+    const frames = nativeRound === 1 ? [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'cordis_tool_0', arguments: '{"path":"projects/demo/' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'src/main.cpp","content":"int main() {}"}' } }] } }] },
+    ] : [
+      { choices: [{ delta: { content: '已写入' } }] },
+      { choices: [{ delta: { content: '多文件工程。' } }] },
+    ]
+    const body = `${frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('')}data: [DONE]\n\n`
+    return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
+  }
+  const nativeCtx = Object.assign(new Context(), {
+    llm: nativeLlm,
+    tools: {
+      list: () => [{ id: 'tool.workdir.write', title: '写入文件', capabilities: ['workdir'] }],
+      invoke: async (toolId: string, args: string) => {
+        nativeInvocation = `${toolId}:${args}`
+        return { toolId, ok: true, output: '文件已写入', costMs: 2 }
+      },
+    },
+    eventLog: { append: () => {} },
+  })
+  const nativeResult = await runAgentExecutionGraph({
+    ctx: nativeCtx as never, agentId: 'a_native_tool_test', allowedToolIds: ['tool.workdir.write'],
+    messages: [{ role: 'user', content: '创建 C++ 工程文件' }],
+  })
+  assert.equal(nativeRound, 2, 'native tool_calls trigger execution and then a final model round')
+  assert.match(nativeInvocation, /^tool\.workdir\.write:/u, 'provider function name maps to the registered Cordis tool ID')
+  assert.deepEqual(JSON.parse(nativeInvocation.slice(nativeInvocation.indexOf(':') + 1)), {
+    path: 'projects/demo/src/main.cpp', content: 'int main() {}',
+  })
+  const sentTools = nativeBodies[0]?.tools as Array<{ type: string; function: { name: string; parameters: unknown } }>
+  assert.equal(sentTools[0]?.type, 'function')
+  assert.equal(sentTools[0]?.function.name, 'cordis_tool_0')
+  assert.equal('toolId' in sentTools[0]!, false, 'Cordis-only routing metadata is never sent to the provider')
+  assert.deepEqual(nativeResult.toolResults.map((item) => item.ok), [true])
+  assert.equal(nativeResult.modelTrace[0]?.toolCalls[0]?.status, 'success')
+  assert.equal(nativeResult.answer, '已写入多文件工程。')
+  console.log('✓ provider-native structured calls reach the Cordis allowlisted executor and return a final answer')
+
   let preview = { text: '', totalCharacters: 0, truncated: false }
   preview = appendProgressDelta(preview, '长回复：')
   preview = appendProgressDelta(preview, '甲'.repeat(MAX_PROGRESS_PREVIEW_CHARACTERS + 5))
@@ -194,13 +242,13 @@ try {
     tools: { invoke: async () => { throw new Error('invalid tool must not run') } },
     eventLog: { append: () => { throw new Error('tool JSON must stay ephemeral') } },
   })
-  await runAgentExecutionGraph({
+  await assert.rejects(runAgentExecutionGraph({
     ctx: privateCtx as never,
     agentId: 'a_stream_test',
     allowedToolIds: [],
     messages: [{ role: 'user', content: 'test' }],
     onProgress: (phase, _toolId, _ok, delta) => { if (phase === 'text-delta' && delta) privateChunks.push(delta) },
-  })
+  }), /参数格式无效/u)
   assert.deepEqual(privateChunks, [], 'structured tool requests must not reach the human token stream')
   console.log('✓ OpenAI SSE deltas stream to ephemeral human progress; structured tool payloads stay private')
 
@@ -351,9 +399,7 @@ try {
     llm: {
       chat: async (_messages: unknown, options?: { onToken?: (delta: string) => void }) => {
         repeatedRound++
-        const response = repeatedRound === 1
-          ? `${repeatedEnvelope}\n${repeatedEnvelope}`
-          : repeatedEnvelope
+        const response = repeatedEnvelope
         options?.onToken?.(response)
         return response
       },
@@ -361,17 +407,15 @@ try {
     tools: { invoke: async (toolId: string) => { repeatedInvocations++; return { toolId, ok: true, output: 'status', costMs: 1 } } },
     eventLog: { append: () => { throw new Error('test does not persist tool events') } },
   })
-  const repeatedResult = await runAgentExecutionGraph({
+  await assert.rejects(runAgentExecutionGraph({
     ctx: repeatedCtx as never,
     agentId: 'a_stream_test',
     allowedToolIds: ['tool.workspace.read'],
     messages: [{ role: 'user', content: '在吗' }],
     onProgress: (phase, _toolId, _ok, delta) => { if (phase === 'text-delta' && delta) fencedChunks.push(delta) },
-  })
+  }), /重复请求工具/u)
   assert.equal(repeatedInvocations, 1, 'duplicate tool requests in one response and later rounds execute only once')
-  assert.match(repeatedResult.answer, /停止循环调用/u)
-  assert.doesNotMatch(repeatedResult.answer, /toolCalls|tool\.workspace/u, 'tool protocol is never returned as the user answer')
-  console.log('✓ concatenated and repeated tool envelopes are deduplicated and the loop is stopped')
+  console.log('✓ repeated requests across model rounds fail without reporting a completed Agent answer')
 
   const malformedCtx = Object.assign(new Context(), {
     llm: { chat: async (_messages: unknown, options?: { onToken?: (delta: string) => void }) => {
@@ -382,15 +426,52 @@ try {
     tools: { invoke: async () => { throw new Error('malformed request must not run') } },
     eventLog: { append: () => { throw new Error('test does not persist tool events') } },
   })
-  const malformedResult = await runAgentExecutionGraph({
+  await assert.rejects(runAgentExecutionGraph({
     ctx: malformedCtx as never,
     agentId: 'a_stream_test',
     allowedToolIds: ['tool.workspace.read'],
     messages: [{ role: 'user', content: '在吗' }],
+  }), /格式无效|格式异常/u)
+  console.log('✓ malformed tool protocol fails the Agent run instead of returning a completed answer')
+
+  let failedToolRound = 0
+  const failedToolCtx = Object.assign(new Context(), {
+    llm: { chat: async () => ++failedToolRound === 1
+      ? '{"toolCalls":[{"toolId":"tool.workspace.read","args":{"path":"missing.cpp"}}]}'
+      : '文件已成功读取。' },
+    tools: { invoke: async (toolId: string) => ({ toolId, ok: false, code: 'not_found', output: '文件不存在', costMs: 1 }) },
+    eventLog: { append: () => {} },
   })
-  assert.match(malformedResult.answer, /格式异常/u)
-  assert.doesNotMatch(malformedResult.answer, /toolCalls|tool\.workspace/u)
-  console.log('✓ malformed tool protocol is converted into a concise user-facing error')
+  await assert.rejects(runAgentExecutionGraph({
+    ctx: failedToolCtx as never,
+    agentId: 'a_stream_test',
+    allowedToolIds: ['tool.workspace.read'],
+    messages: [{ role: 'user', content: '读取 missing.cpp' }],
+  }), /工具调用未成功执行/u)
+  console.log('✓ a model cannot report completion after a failed tool call')
+
+  let roundLimitCalls = 0
+  let roundLimitExecutions = 0
+  const roundLimitCtx = Object.assign(new Context(), {
+    llm: { chat: async () => {
+      roundLimitCalls++
+      return JSON.stringify({ toolCalls: [{ toolId: 'tool.workspace.read', args: { path: `file-${roundLimitCalls}.cpp` } }] })
+    } },
+    tools: { invoke: async (toolId: string) => {
+      roundLimitExecutions++
+      return { toolId, ok: true, output: 'read', costMs: 1 }
+    } },
+    eventLog: { append: () => {} },
+  })
+  await assert.rejects(runAgentExecutionGraph({
+    ctx: roundLimitCtx as never,
+    agentId: 'a_stream_test',
+    allowedToolIds: ['tool.workspace.read'],
+    messages: [{ role: 'user', content: '持续读取工程文件' }],
+  }), /工具调用轮数已达安全上限/u)
+  assert.equal(roundLimitCalls, 6)
+  assert.equal(roundLimitExecutions, 5, 'the sixth unexecuted tool request is rejected before dispatch')
+  console.log('✓ tool-round limits reject the pending call instead of returning a completed answer')
 } finally {
   globalThis.fetch = originalFetch
 }

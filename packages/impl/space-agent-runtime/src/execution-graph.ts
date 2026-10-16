@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph'
 import type { Context } from 'cordis'
-import type { ChatMessage, ChatUsage } from 'space-llm'
+import type { ChatMessage, ChatToolDefinition, ChatUsage } from 'space-llm'
 import type { ToolResult } from 'space-tool'
 import { AgentRunCancelledError } from 'space-agent-runtime'
 import type { AgentModelInteraction, AgentWorklogStep } from 'space-agent-runtime'
@@ -155,7 +155,7 @@ function containsToolProtocol(text: string): boolean {
 }
 
 function toRequests(envelope: ToolEnvelope): ToolRequest[] {
-  return (envelope.toolCalls ?? []).slice(0, MAX_TOOL_CALLS_PER_ROUND).flatMap((call) => {
+  return (envelope.toolCalls ?? []).flatMap((call) => {
     if (typeof call.toolId !== 'string' || !call.toolId.trim()) return []
     return [{ toolId: call.toolId, args: typeof call.args === 'string' ? call.args : JSON.stringify(call.args ?? {}) }]
   })
@@ -215,6 +215,18 @@ export async function runAgentExecutionGraph(input: {
   const modelTrace: AgentModelInteraction[] = []
   const publishTrace = () => input.onModelTrace?.(structuredClone(modelTrace))
   const seenToolRequests = new Set<string>()
+  const toolDefinitions: ChatToolDefinition[] = (input.ctx.tools?.list?.() ?? [])
+    .filter((tool) => input.allowedToolIds.includes(tool.id))
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((tool, index) => ({
+      type: 'function',
+      toolId: tool.id,
+      function: {
+        name: `cordis_tool_${index}`,
+        description: `${tool.id} — ${tool.title}：${tool.description ?? tool.capabilities.join('、')}`,
+        parameters: tool.parameters ?? { type: 'object', additionalProperties: true },
+      },
+    }))
   const model = async (state: typeof State.State) => {
     if (input.signal?.aborted) throw new AgentRunCancelledError('execution graph')
     input.onProgress?.('waiting-model', undefined, undefined, undefined, {
@@ -256,6 +268,7 @@ export async function runAgentExecutionGraph(input: {
         profileRef: input.profileRef,
         signal: input.signal,
         onUsage: input.onUsage,
+        ...(toolDefinitions.length ? { tools: toolDefinitions } : {}),
         onToken: (delta) => {
           buffered += delta
           // Keep tool protocol (including fenced JSON) private. Ordinary Markdown
@@ -296,8 +309,20 @@ export async function runAgentExecutionGraph(input: {
       return true
     })
     const availableToolSlots = Math.max(0, MAX_TOOL_CALLS_PER_RUN - toolResults.length)
+    if (envelope && parsedRequests.length !== (envelope.toolCalls?.length ?? 0)) {
+      throw new Error('Agent 工具调用参数格式无效，系统已拦截未执行的请求。请检查工具名称与 JSON 参数。')
+    }
+    if (parsedRequests.length > MAX_TOOL_CALLS_PER_ROUND || parsedRequests.length > availableToolSlots) {
+      throw new Error('本轮工具调用超过安全上限，系统已拦截全部未执行请求。请缩小任务范围后重试。')
+    }
+    if (freshRequests.length !== parsedRequests.length) {
+      throw new Error('检测到 Agent 重复请求工具，系统已停止并拦截未执行的重复请求。请明确下一步目标后重试。')
+    }
     const requests = freshRequests.slice(0, Math.min(MAX_TOOL_CALLS_PER_ROUND, availableToolSlots))
     if (!requests.length) {
+      if (toolResults.some((result) => !result.ok)) {
+        throw new Error('至少一个工具调用未成功执行，系统已阻止 Agent 将本轮标记为完成。请查看失败的工具记录并重试。')
+      }
       const finalText = envelope?.final == null ? null : String(envelope.final)
       const answer = finalText !== null
         ? containsToolProtocol(finalText) ? 'Agent 最终答复中包含未处理的工具协议，系统已拦截该内容。请重试并检查 Agent 的工具配置。' : finalText
@@ -307,6 +332,11 @@ export async function runAgentExecutionGraph(input: {
             ? '本轮工具调用已达到安全上限，系统已停止继续调用。请缩小任务范围后重试。'
           : envelope || stream.state === 'tool' ? 'Agent 工具调用格式异常，系统已拦截未执行的请求。请重试；若重复发生，请检查 Agent 的工具配置与提示词。'
           : containsToolProtocol(raw) ? 'Agent 返回了未处理的工具协议，系统已拦截该内容。请重试并检查 Agent 的工具配置。' : raw
+      if (containsToolProtocol(finalText === null ? raw : String(finalText)) ||
+          (envelope && (parsedRequests.length === 0 || freshRequests.length === 0)) ||
+          (freshRequests.length > 0 && availableToolSlots === 0)) {
+        throw new Error(answer)
+      }
       // A structured final field is also private until validated; replay its
       // human-facing contents once if it was held back as JSON.
       if (stream.state === 'tool' && answer && envelope?.final != null) streamToHuman(answer)
@@ -314,7 +344,7 @@ export async function runAgentExecutionGraph(input: {
       return { answer, pending: [], iterations: state.iterations + 1 }
     }
     if (state.iterations >= MAX_TOOL_ROUNDS || toolResults.length >= MAX_TOOL_CALLS_PER_RUN) {
-      return { answer: '工具调用轮数已达上限；请基于现有结果给出结论或缩小任务。', pending: [], iterations: state.iterations + 1 }
+      throw new Error('Agent 工具调用轮数已达安全上限，系统已拦截未执行请求；本轮未完成。请缩小任务范围后重试。')
     }
     return {
       answer: '', pending: requests, iterations: state.iterations + 1,

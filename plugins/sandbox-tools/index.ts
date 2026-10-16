@@ -160,6 +160,11 @@ export async function apply(ctx: Context) {
   new SharedApprovalDelivery(ctx)
   ctx.tools.register({
     id: 'tool.workspace.read', title: '读取工作区文件', description: 'args: {"path":"相对路径","scope":"personal|shared"}；shared 只读。', capabilities: ['workspace.read'],
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: '工作区内相对文件路径' },
+      scope: { type: 'string', enum: ['personal', 'shared'], description: '读取个人或全局共享工作区' },
+      reason: { type: 'string', description: '读取越界个人文件时的审批原因' },
+    }, required: ['path'], additionalProperties: false },
     handler: async (raw, invoker) => {
       assertActive(invoker)
       const args = parseArgs<{ path?: string; scope?: string; reason?: string }>(raw)
@@ -204,6 +209,10 @@ export async function apply(ctx: Context) {
 
   ctx.tools.register({
     id: 'tool.workspace.write', title: '写入个人工作区文件', description: 'args: {"path":"相对路径","content":"文本"}；只写个人工作区。根目录保持整洁：项目放 projects/<项目名>/{src,tests,docs}，任务材料放 tasks/<任务目录>，脚本放 scripts/，笔记放 notes/。', capabilities: ['workspace.write'],
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: '工作区内相对文件路径' },
+      content: { type: 'string', description: '要写入的完整 UTF-8 文件内容' },
+    }, required: ['path', 'content'], additionalProperties: false },
     handler: async (raw, invoker) => {
       assertActive(invoker)
       const args = parseArgs<{ path?: string; content?: string }>(raw)
@@ -233,6 +242,10 @@ export async function apply(ctx: Context) {
 
   ctx.tools.register({
     id: 'tool.code.execute', title: '在隔离容器中执行 Node.js', description: 'args: {"code":"Node.js ES module 源码","filename":"可选相对路径 .mjs"}；默认写入 scripts/，容器可联网，个人区可读写，共享区只读。', capabilities: ['code.execute', 'network'],
+    parameters: { type: 'object', properties: {
+      code: { type: 'string', description: '隔离容器执行的 Node.js ES module 源码' },
+      filename: { type: 'string', description: '可选、工作区内相对 .mjs 路径' },
+    }, required: ['code'], additionalProperties: false },
     handler: async (raw, invoker) => {
       assertActive(invoker)
       const args = parseArgs<{ code?: string; filename?: string }>(raw)

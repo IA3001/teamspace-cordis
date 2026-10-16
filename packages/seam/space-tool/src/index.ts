@@ -27,6 +27,13 @@ export interface ToolDescriptor {
   title: string
   /** Agent 端工具目录中显示的用途与 JSON 参数说明。 */
   description?: string
+  /** Optional JSON Schema for provider-native function calling. */
+  parameters?: {
+    type: 'object'
+    properties?: Record<string, unknown>
+    required?: string[]
+    additionalProperties?: boolean
+  }
   /** 能力域开放词表：'workdir' / 'llm' / 'search' / 'notify' …。 */
   capabilities: readonly string[]
   /**

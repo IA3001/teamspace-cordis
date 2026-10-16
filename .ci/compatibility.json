@@ -178,6 +178,30 @@
         "scripts/verify-rag.ts",
         "scripts/verify-agent-teamspace.ts"
       ]
+    },
+    {
+      "path": "packages/seam/space-llm/src/index.ts",
+      "hash": "14395660d926f7bac8d53cf836a0c19aac02bf9e1a96910e4a6cb14bb6c6baa3",
+      "description": "docs/compatibility/agent-tool-calling.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format changes; deploy the updated LLM adapter and Agent runtime together. Existing DSML parsing remains available.",
+      "rollback": "Revert the LLM seam/adapter and Agent runtime as one change, then restart; the old build does not send native function definitions and does not require data rollback.",
+      "tests": [
+        "scripts/verify-llm-stream.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/seam/space-tool/src/index.ts",
+      "hash": "41ec8270900cce28b6f9bf83a09439df926a0b7cba9c1c4402206f1c66ba7bf4",
+      "description": "docs/compatibility/agent-tool-calling.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format changes; deploy the updated LLM adapter and Agent runtime together. Existing DSML parsing remains available.",
+      "rollback": "Revert the LLM seam/adapter and Agent runtime as one change, then restart; the old build does not send native function definitions and does not require data rollback.",
+      "tests": [
+        "scripts/verify-llm-stream.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
     }
   ]
 }

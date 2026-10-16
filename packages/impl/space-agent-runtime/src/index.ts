@@ -351,7 +351,7 @@ export class AgentRuntime extends AgentRuntimeService {
         if (configuredTools.length) {
           systemSections.push({ label: '本 Agent 可用工具清单', source: 'Agent 配置 · toolIds', content: `允许使用的工具（只能选以下 ID，参数必须是 JSON）：\n${configuredTools.map((tool) =>
             `- ${tool.id} — ${tool.title}：${tool.description ?? tool.capabilities.join('、')}`,
-          ).join('\n')}\n需要工具时只返回 {"toolCalls":[{"toolId":"...","args":{...}}]}；完成时返回普通 Markdown 答案。` })
+          ).join('\n')}\n需要工具时优先通过模型原生结构化函数调用；若当前模型只会输出文本协议，则仅可返回 DSML 工具调用块作为兼容格式。工具执行结果由系统回传；完成时返回普通 Markdown 答案。不要把工具调用或 DSML 标签写进最终回复。` })
         }
         systemSections.push({ label: '轻量消息与输出安全规则', source: 'Agent Runtime 固定规则', content: '轻量消息处理：如果人类只是在问候、确认你是否在线或问“在吗”，直接用一句简短自然语言回应；不要调用工具、检查工作区、分析项目或创建任务。只有消息明确要求执行工作时才调用工具。工具调用协议只用于系统解析，绝不能把工具 JSON、草稿或内部推理写进面向用户的最终回复。' })
         systemSections.push({ label: 'DRI 决策标记规则', source: 'Agent Runtime 固定规则', content: '若最终建议需要团队负责人（DRI）作业务决定，请在最终回复中单独加入标记「【需要DRI决策】」，并明确列出待决定事项；不需要 DRI 决定时不要输出该标记。输出此标记会暂停本会话后续 Agent 工作，直到 DRI 通过回复卡片上的操作完成处理。' })

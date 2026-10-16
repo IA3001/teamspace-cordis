@@ -120,6 +120,7 @@ CI 平台接入、变更预算与独立审批设置见 [CI 文档](docs/CI.md)�
 - Agent 中继人工确认 `2d3de78` 已合入：中继回复需经过人类审阅确认；独立分支报告 AS11 浏览器验收通过。
 - Apache-2.0 元数据已对齐，并补齐 migration 0036/0039 与 6 个 seam 的兼容性说明；`npm run verify:compatibility` 通过（0 项违规）。
 - 本次交接整合登录 token 实际校验、空/超长消息提示、会话成员总数一致性修复，以及流式用量回调不再生成空文本帧的修复。
+- 调试控制台首页现在有服务入口卡片，三个入口可分别跳转插件、日志和数据库；Browser Use 已逐一点击确认，`verify:admin-ui` 通过。
 - 定向检查已通过：`npm run typecheck`、`npm run verify:p8`（69 过 / 0 红）、`npm run verify:compatibility`，以及 `verify:agent-bootstrap`、`verify:agent-teamspace`、`verify:upgrade-fixtures`、`verify:sandbox`、`verify:project-completeness`。其中沙箱验证实际运行了多文件 C++ 编译/执行和共享发布/读取检查。
 
 ### 尚未合入的本地分支
@@ -131,7 +132,7 @@ CI 平台接入、变更预算与独立审批设置见 [CI 文档](docs/CI.md)�
 
 ### 仍待处理
 
-- 在隔离运行环境执行完整 `npm run gate` 和 `npm run verify:ui`；专项修复正在复测 UI 门禁中的活动分页、初始滚动、工作区滚动和文件树轮询断言。Browser Use 另发现 `5172/` 控制台首页主内容为空（`/plugins` 正常），已委派独立修复。
+- 在隔离运行环境执行完整 `npm run gate` 和 `npm run verify:ui`；专项修复正在重建 UI 门禁中活动分页、作者显示、工作区滚动和文件树轮询场景的有效前置条件，并修复复现出的作者 ID 显示问题。
 - 用已配置的真实模型凭据，在浏览器中按 Gherkin 完成 Agent A 发布多文件工程、Agent B 拉取并读取的端到端演示，留存聊天和工作区截图。当前已通过机制层沙箱测试，但隔离 UI 烟测使用无模型配置环境。
 - 会话历史搜索、待办只读工具及 DRI 权限收尾分支由接手人评审后再集成。
 

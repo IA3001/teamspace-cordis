@@ -1251,8 +1251,8 @@ const TeamspacePage = defineComponent({
 
     async function sendText(text: string) {
       if (!activeId.value) { showReply('请先选择或新建一个会议', false); return }
-      // IM 化：空输入静默忽略（不再弹错误回执）。
-      if (!text.trim()) return
+      // Keep the rejection visible and preserve the draft so the user can correct it.
+      if (!text.trim()) { showReply('消息内容不能为空', false); return }
       if (sending.value || closed.value) return
       sending.value = true
       const mentions = parseMentions()

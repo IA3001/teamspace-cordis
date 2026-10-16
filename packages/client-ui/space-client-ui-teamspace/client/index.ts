@@ -2683,7 +2683,7 @@ const TeamspacePage = defineComponent({
           : t?.state === 'static' && t.stopReason && t.stopReason !== 'completed'
             ? h('div', { class: 'sp-context-notice sp-context-notice--paused' }, userFacingPause(t.stopReason))
             : null,
-        contextSection('成员', `${mentionCandidates().length}`, mentionCandidates().length
+        contextSection('成员', `${members.value.length}`, members.value.length
           ? h('div', {}, [
               (() => {
                 const dri = members.value.find((member) => member.role === 'DRI')
@@ -2701,32 +2701,34 @@ const TeamspacePage = defineComponent({
                   closable: false,
                 })
               })(),
-              h('div', { class: 'sp-context-members' }, mentionCandidates().map((m) => {
-              const ag = agents.value.find((a) => a.id === m.principalId)
-              const human = humans.value.find((item) => item.id === m.principalId)
-              const name = ag?.title || human?.displayName || human?.username || m.duty?.trim() || m.role
-              const status = ag
-                ? ag.status === 'working' ? '工作中' : ag.status === 'done' ? '刚完成' : '空闲'
-                : m.role === '群主' ? '会议创建者' : m.role === 'DRI' ? '当前 DRI' : m.role === '成员' ? '团队成员' : m.role
-              const identityStatus = ag ? status : `${status} · ${m.principalId}`
-              return h(ElButton, {
-                key: m.principalId,
-                text: true,
-                class: 'sp-context-member',
-                title: `${name} · ${identityStatus} · 点击 @ 提及`,
-                onClick: () => { insertMention(m.principalId); inputEl.value?.focus() },
-              }, {
-                default: () => [
-                  h(ElAvatar, { size: 30, class: 'sp-context-avatar' }, { default: () => ag
-                    ? h(SvgIcon, { name: ag.iconId ?? DEFAULT_AGENT_ICON })
-                    : name.charAt(0) }),
-                  h('span', { class: 'sp-context-member-copy' }, [
-                    h('span', { class: 'sp-context-member-name' }, name),
-                    h('span', { class: 'sp-context-member-role' }, identityStatus),
-                  ]),
-                  h('span', { class: 'sp-context-mention-mark', 'aria-hidden': 'true' }, '@'),
-                ],
-              })
+              h('div', { class: 'sp-context-members' }, members.value.map((m) => {
+                const ag = agents.value.find((a) => a.id === m.principalId)
+                const human = humans.value.find((item) => item.id === m.principalId)
+                const name = ag?.title || human?.displayName || human?.username || m.duty?.trim() || m.role
+                const mentionable = MENTION_ROLES.has(m.role)
+                const status = ag
+                  ? ag.status === 'working' ? '工作中' : ag.status === 'done' ? '刚完成' : '空闲'
+                  : m.role === '群主' ? '会议创建者' : m.role === 'DRI' ? '当前 DRI' : m.role === '成员' ? '团队成员' : m.role
+                const identityStatus = ag ? status : `${status} · ${m.principalId}`
+                return h(ElButton, {
+                  key: m.principalId,
+                  text: true,
+                  disabled: !mentionable,
+                  class: 'sp-context-member',
+                  title: `${name} · ${identityStatus}${mentionable ? ' · 点击 @ 提及' : ' · 不可提及'}`,
+                  onClick: mentionable ? () => { insertMention(m.principalId); inputEl.value?.focus() } : undefined,
+                }, {
+                  default: () => [
+                    h(ElAvatar, { size: 30, class: 'sp-context-avatar' }, { default: () => ag
+                      ? h(SvgIcon, { name: ag.iconId ?? DEFAULT_AGENT_ICON })
+                      : name.charAt(0) }),
+                    h('span', { class: 'sp-context-member-copy' }, [
+                      h('span', { class: 'sp-context-member-name' }, name),
+                      h('span', { class: 'sp-context-member-role' }, identityStatus),
+                    ]),
+                    mentionable ? h('span', { class: 'sp-context-mention-mark', 'aria-hidden': 'true' }, '@') : null,
+                  ],
+                })
             }))
             ])
           : h('div', { class: 'sp-context-empty' }, '暂无可提及的会话成员')),

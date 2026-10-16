@@ -262,6 +262,126 @@
       "tests": [
         "scripts/verify-agent-bootstrap.ts"
       ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0036_agent_icons.up.sql",
+      "description": "docs/compatibility/agent-icons.md",
+      "oldVersion": "35",
+      "upgrade": "Apply migration 0036; existing Agent definitions receive icon_id=UserFilled and may subsequently store a selected icon.",
+      "rollback": "Apply migration 0036 down; only icon_id and its selections are removed, while Agent definitions and other fields remain.",
+      "tests": [
+        "scripts/verify-agent-catalog.ts",
+        "scripts/verify-upgrade-fixtures.ts"
+      ],
+      "hash": "03e4cf4444ac426b898af946209eeb4a060d415029102995d00d48254242916e"
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0036_agent_icons.down.sql",
+      "description": "docs/compatibility/agent-icons.md",
+      "oldVersion": "35",
+      "upgrade": "Apply migration 0036; existing Agent definitions receive icon_id=UserFilled and may subsequently store a selected icon.",
+      "rollback": "Apply migration 0036 down; only icon_id and its selections are removed, while Agent definitions and other fields remain.",
+      "tests": [
+        "scripts/verify-agent-catalog.ts",
+        "scripts/verify-upgrade-fixtures.ts"
+      ],
+      "hash": "ad61cbb0243ce07d0fb468d52a1c8f3ca4328bf774e8f4dd931f0129308142b7"
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0039_agent_workspace_publish.up.sql",
+      "description": "docs/compatibility/agent-workspace-publish.md",
+      "oldVersion": "38",
+      "upgrade": "Apply migration 0039; tool.workspace.publish is appended once to the seeded coder tool list without changing other Agent tools.",
+      "rollback": "Apply migration 0039 down; only tool.workspace.publish is removed from the seeded coder list. Already published shared files remain.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-sandbox-tools.ts",
+        "scripts/verify-agent-bootstrap.ts"
+      ],
+      "hash": "71da666df3a2bab7b5c7b69e36022b3ff0a31956b0257b6166a23cc9d82e955b"
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0039_agent_workspace_publish.down.sql",
+      "description": "docs/compatibility/agent-workspace-publish.md",
+      "oldVersion": "38",
+      "upgrade": "Apply migration 0039; tool.workspace.publish is appended once to the seeded coder tool list without changing other Agent tools.",
+      "rollback": "Apply migration 0039 down; only tool.workspace.publish is removed from the seeded coder list. Already published shared files remain.",
+      "tests": [
+        "scripts/verify-upgrade-fixtures.ts",
+        "scripts/verify-sandbox-tools.ts",
+        "scripts/verify-agent-bootstrap.ts"
+      ],
+      "hash": "7c6b53b69e5b221c95d3ab0b4cf72013e49ae7e980f76e298724af6fdc361d88"
+    },
+    {
+      "path": "packages/seam/space-agent/src/index.ts",
+      "description": "docs/compatibility/seam-contract-updates.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format change. Deploy the corresponding implementation and consumers together. Agent descriptor modelRef is removed as a supported API in favor of llmProfileRef; legacy persisted overrides are discarded by catalog writes.",
+      "rollback": "Revert consumers and implementations together with the seam change; no database rollback or persisted user-data conversion is required.",
+      "tests": [
+        "scripts/verify-agent-catalog.ts"
+      ],
+      "hash": "92385016759c737928dc98f7e11ae5a00be64a92e921d640e1de53666702d137"
+    },
+    {
+      "path": "packages/seam/space-agent-catalog/src/index.ts",
+      "description": "docs/compatibility/seam-contract-updates.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format change. Deploy the corresponding implementation and consumers together. The default coding template advertises tool.workspace.publish for explicit publication of a personal project into shared workspace.",
+      "rollback": "Revert consumers and implementations together with the seam change; no database rollback or persisted user-data conversion is required.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ],
+      "hash": "0367ca3c0b85ae4ea766b2dbf151f9d404eb7ea751d337ce2e538510af75c770"
+    },
+    {
+      "path": "packages/seam/space-agent-inbox/src/index.ts",
+      "description": "docs/compatibility/seam-contract-updates.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format change. Deploy the corresponding implementation and consumers together. Background ingestion status is exposed to callers and the obsolete onboarding-history phase is removed from its public phase vocabulary.",
+      "rollback": "Revert consumers and implementations together with the seam change; no database rollback or persisted user-data conversion is required.",
+      "tests": [
+        "scripts/verify-agent-inbox.ts"
+      ],
+      "hash": "718aa5067d66e39d3b2bd7b603458ce41f23973be5fe2865700ba22fccae2934"
+    },
+    {
+      "path": "packages/seam/space-context/src/index.ts",
+      "description": "docs/compatibility/seam-contract-updates.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format change. Deploy the corresponding implementation and consumers together. Optional stable/dynamic context sections, cache-block history mode, and per-Agent tool filtering are added while legacy defaults remain available.",
+      "rollback": "Revert consumers and implementations together with the seam change; no database rollback or persisted user-data conversion is required.",
+      "tests": [
+        "scripts/verify-context-cache.ts",
+        "scripts/verify-p8.ts"
+      ],
+      "hash": "920ded1469fda1c6cd119ecc175ce98b141a94ac32cf7ccd4eb6ac966a9d0d73"
+    },
+    {
+      "path": "packages/seam/space-orchestrator/src/index.ts",
+      "description": "docs/compatibility/seam-contract-updates.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format change. Deploy the corresponding implementation and consumers together. Explicit single-Agent mentions are documented as direct routing; result receipts can include citations and model interaction traces.",
+      "rollback": "Revert consumers and implementations together with the seam change; no database rollback or persisted user-data conversion is required.",
+      "tests": [
+        "scripts/verify-orchestrator.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ],
+      "hash": "820d998127ba987f4b4422fd9373ce7d96bf0c06545a1cf5ed53609b604e7578"
+    },
+    {
+      "path": "packages/seam/space-workdir/src/index.ts",
+      "description": "docs/compatibility/seam-contract-updates.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "No persisted format change. Deploy the corresponding implementation and consumers together. Typed private/shared transfer targets and bounded file operations are added alongside existing browse/read APIs.",
+      "rollback": "Revert consumers and implementations together with the seam change; no database rollback or persisted user-data conversion is required.",
+      "tests": [
+        "scripts/verify-agent-explorer.ts",
+        "scripts/verify-sandbox-tools.ts"
+      ],
+      "hash": "0d87317cf9a5a3ee8731bc62355f388aa92fafcb52d56c545c264791449a49cb"
     }
   ]
 }

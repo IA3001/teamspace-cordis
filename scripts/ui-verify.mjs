@@ -19,6 +19,7 @@ if (!teamspacePort || Number(teamspacePort) < 1 || Number(teamspacePort) > 65535
 const teamspaceBase = `http://127.0.0.1:${teamspacePort}`
 let temporaryDemoMember = null
 let temporaryDecisionSession = null
+let temporaryDecisionUserId = null
 let temporaryRenameSession = null
 function cleanTemporaryDemoMember() {
   if (!temporaryDemoMember) return true
@@ -1316,14 +1317,19 @@ console.log('== 断言区 ==')
       const agent = db.prepare('SELECT id FROM agent_definitions WHERE id=?').get('a_analyst')
       if (!user?.user_id || !agent?.id) throw new Error('缺少 UI 验收账号或共享 Agent')
       temporaryDecisionSession = `s_ui_decision_${randomUUID().replaceAll('-', '')}`
+      temporaryDecisionUserId = `u_ui_dri_candidate_${randomUUID().replaceAll('-', '').slice(0, 12)}`
       eventId = `e_ui_decision_${randomUUID().replaceAll('-', '')}`
       const now = new Date().toISOString()
+      db.prepare(`INSERT INTO users(id,username,password_hash,display_name,kind,created_at)
+        VALUES (?, ?, '!', 'DRI 验收候选人', 'human', ?)`)
+        .run(temporaryDecisionUserId, temporaryDecisionUserId, now)
       db.prepare(`INSERT INTO sessions(id,title,status,created_at,updated_at)
         VALUES (?, 'UI 决策卡片验收', 'open', ?, ?)`).run(temporaryDecisionSession, now, now)
       db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
         VALUES (?, ?, 'DRI', 'active', ?, NULL, ''), (?, 'a_analyst', '成员', 'active', ?, NULL, ''),
-          (?, 'agent.tester', '成员', 'active', ?, NULL, '')`)
-        .run(temporaryDecisionSession, user.user_id, now, temporaryDecisionSession, now, temporaryDecisionSession, now)
+          (?, 'agent.tester', '成员', 'active', ?, NULL, ''), (?, ?, '成员', 'active', ?, NULL, 'DRI 验收候选人')`)
+        .run(temporaryDecisionSession, user.user_id, now, temporaryDecisionSession, now,
+          temporaryDecisionSession, now, temporaryDecisionSession, temporaryDecisionUserId, now)
       const addEvent = (id, seq, authorId, authorKind, kind, text, replyTo = null) =>
         db.prepare(`INSERT INTO events(id,session_id,seq,phase_id,ts,author_id,author_kind,kind,text,
           mentions,tool_calls,reply_mode,reply_to) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, '[]', '[]', '', ?)`)
@@ -1344,6 +1350,16 @@ console.log('== 断言区 ==')
       pendingText.includes('待 DRI 决策') && pendingText.includes('是否接受方案 A？')
     detail.push(`建议正文与待决问题分开展示=${pendingVisible}`)
     ok &&= pendingVisible
+    const identityDb = new DatabaseSync('data/database.db')
+    const viewerId = identityDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)?.user_id
+    identityDb.close()
+    const membersPanelText = await page.locator('.sp-context-members').innerText()
+    const memberDriNotice = await page.locator('.sp-context-section .el-alert').first().innerText()
+    const memberIdentityVisible = Boolean(viewerId) && membersPanelText.includes(viewerId) &&
+      memberDriNotice.includes(`当前 DRI：`) && memberDriNotice.includes(viewerId) &&
+      memberDriNotice.includes('「通过」') && memberDriNotice.includes('「其他处理」')
+    detail.push(`成员面板标明当前 DRI、账号 ID 和卡片操作入口=${memberIdentityVisible}`)
+    ok &&= memberIdentityVisible
     const authorName = await message.locator('.sp-msg-name').innerText()
     const namedAgent = authorName === '需求分析师'
     detail.push(`消息作者优先显示共享 Agent 名称=${namedAgent}（${authorName}）`)
@@ -1395,6 +1411,123 @@ console.log('== 断言区 ==')
     ok &&= directActionDialog
     await decisionDialog.getByText('取消', { exact: true }).click()
 
+    const ownerSetupDb = new DatabaseSync('data/database.db')
+    try {
+      ownerSetupDb.prepare(`UPDATE session_members SET role='群主' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, viewerId)
+    } finally { ownerSetupDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+
+    await page.locator('.sp-rail-item.active').getByRole('button', { name: '⋯' }).click()
+    await page.locator('.el-dropdown-menu__item:visible').filter({ hasText: '成员 / 角色管理' }).click()
+    const memberManagementDialog = page.locator('.el-dialog').filter({ hasText: '会话成员管理' })
+    const managementText = await memberManagementDialog.innerText()
+    const independentAccountsExplained = managementText.includes('作为独立成员加入') &&
+      managementText.includes('不会替换或合并') && managementText.includes('成员 ID')
+    detail.push(`成员管理解释新邀请账号是独立身份并按 ID 区分=${independentAccountsExplained}`)
+    ok &&= independentAccountsExplained
+    const transferGuidance = managementText.includes('设为 DRI') && managementText.includes('原子转交决策权')
+    detail.push(`成员管理明确展示 DRI 指派与转交入口=${transferGuidance}`)
+    ok &&= transferGuidance
+    const candidateRow = memberManagementDialog.locator('.el-table__row').filter({ hasText: temporaryDecisionUserId })
+    await candidateRow.locator('.el-select').click()
+    await page.getByText('DRI（设为/转交决策负责人）', { exact: true }).click()
+    await candidateRow.locator('.el-select').filter({ hasText: 'DRI' }).waitFor({ timeout: 5000 })
+    let assignedDri
+    let previousDriRole
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const transferDb = new DatabaseSync('data/database.db')
+      assignedDri = transferDb.prepare(`SELECT principal_id FROM session_members
+        WHERE session_id=? AND status='active' AND role='DRI'`).get(temporaryDecisionSession)?.principal_id
+      previousDriRole = transferDb.prepare(`SELECT role FROM session_members
+        WHERE session_id=? AND principal_id=? AND status='active'`).get(temporaryDecisionSession, viewerId)?.role
+      transferDb.close()
+      if (assignedDri === temporaryDecisionUserId && previousDriRole === '群主') break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const assignedFromUi = assignedDri === temporaryDecisionUserId && previousDriRole === '群主'
+    detail.push(`从成员管理指派后候选人成为唯一 DRI，创建者仍保留群主角色=${assignedFromUi}`)
+    ok &&= assignedFromUi
+    await page.reload({ waitUntil: 'networkidle' })
+    await page.locator('.sp-rail-item.active').getByRole('button', { name: '⋯' }).click()
+    await page.locator('.el-dropdown-menu__item:visible').filter({ hasText: '成员 / 角色管理' }).click()
+    const assignedDialog = page.getByRole('dialog', { name: '会话成员管理' })
+    await assignedDialog.locator('.el-table__row').filter({ hasText: temporaryDecisionUserId })
+      .locator('.el-select').filter({ hasText: 'DRI' }).waitFor({ timeout: 5000 })
+    await page.screenshot({ path: '/tmp/ui-dri-assignment.png' })
+    const assignedCandidateRow = assignedDialog.locator('.el-table__row').filter({ hasText: temporaryDecisionUserId })
+    await assignedCandidateRow.locator('.el-select').click()
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
+      .filter({ hasText: '普通成员' }).click()
+    await assignedCandidateRow.locator('.el-select').filter({ hasText: '成员' }).waitFor({ timeout: 5000 })
+    await assignedDialog.getByText('完成', { exact: true }).click()
+
+    const accessDb = new DatabaseSync('data/database.db')
+    const currentViewerId = accessDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)?.user_id
+    try {
+      if (!currentViewerId) throw new Error('UI 验收 token 未关联 Team 账号')
+      accessDb.prepare(`UPDATE session_members SET role='群主' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, currentViewerId)
+    } finally { accessDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+    const ownerFallbackNotice = await message.locator('.el-alert').innerText()
+    const ownerFallbackButton = message.getByRole('button', { name: '通过', exact: true })
+    const ownerCanDecideWithoutDri = ownerFallbackNotice.includes('你是群主，可直接') &&
+      ownerFallbackNotice.includes('Agent 回复卡片下方') && await ownerFallbackButton.count() === 1
+    detail.push(`未指派 DRI 时群主可从回复卡片处理，并有明确说明=${ownerCanDecideWithoutDri}`)
+    ok &&= ownerCanDecideWithoutDri
+    await ownerFallbackButton.click()
+    const ownerDecisionDialog = page.locator('.el-dialog')
+    const ownerCanOpenDecision = await ownerDecisionDialog.isVisible() &&
+      (await ownerDecisionDialog.innerText()).includes('处理 Agent 回复')
+    detail.push(`群主后备权限能打开决策确认框=${ownerCanOpenDecision}`)
+    ok &&= ownerCanOpenDecision
+    await ownerDecisionDialog.getByText('取消', { exact: true }).click()
+
+    const memberDb = new DatabaseSync('data/database.db')
+    try {
+      memberDb.prepare(`UPDATE session_members SET role='DRI' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, temporaryDecisionUserId)
+    } finally { memberDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+    const nonDriCard = message.locator('.el-alert')
+    const accessNotice = await nonDriCard.innerText()
+    const passButtonCount = await message.getByRole('button', { name: '通过', exact: true }).count()
+    const ownerYieldsToDri = accessNotice.includes(temporaryDecisionUserId) &&
+      accessNotice.includes('当前登录账号无通过权限') && passButtonCount === 0
+    detail.push(`有专属 DRI 时群主让出权限并看到 DRI 身份=${ownerYieldsToDri}`)
+    ok &&= ownerYieldsToDri
+
+    const demoteDb = new DatabaseSync('data/database.db')
+    try {
+      demoteDb.prepare(`UPDATE session_members SET role='成员' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, currentViewerId)
+    } finally { demoteDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+    const nonDriCardText = await message.locator('.el-alert').innerText()
+    const nonDriPassButtonCount = await message.getByRole('button', { name: '通过', exact: true }).count()
+    detail.push(`非 DRI 看到实际 DRI 身份与决策路径=${nonDriCardText.includes(temporaryDecisionUserId) && nonDriCardText.includes('「通过」')}；隐藏决策按钮=${nonDriPassButtonCount === 0}`)
+    ok &&= nonDriCardText.includes(temporaryDecisionUserId) && nonDriCardText.includes('「通过」') && nonDriPassButtonCount === 0
+    const activeSession = page.locator('.sp-rail-item.active')
+    await activeSession.locator('.el-dropdown').click()
+    await page.locator('.el-dropdown-menu__item:visible').filter({ hasText: '成员 / 角色管理' }).click()
+    const readOnlyManagement = page.getByRole('dialog', { name: '会话成员管理' })
+    const roleEditorCount = await readOnlyManagement.locator('.el-select').count()
+    const roleControlRestricted = roleEditorCount === 0 &&
+      (await readOnlyManagement.innerText()).includes('只有群主/管理员可以调整角色或移出成员')
+    detail.push(`普通成员只能查看角色、不能调整或移出会话成员=${roleControlRestricted}`)
+    ok &&= roleControlRestricted
+    await readOnlyManagement.getByText('完成', { exact: true }).click()
+
+    const restoreDb = new DatabaseSync('data/database.db')
+    try {
+      restoreDb.prepare(`UPDATE session_members SET role='成员' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, temporaryDecisionUserId)
+      restoreDb.prepare(`UPDATE session_members SET role='DRI' WHERE session_id=? AND principal_id=?`)
+        .run(temporaryDecisionSession, currentViewerId)
+    } finally { restoreDb.close() }
+    await page.reload({ waitUntil: 'networkidle' })
+
     const decisionDb = new DatabaseSync('data/database.db')
     try {
       const addEvent = (id, seq, authorId, authorKind, kind, text, replyTo = null) =>
@@ -1403,21 +1536,23 @@ console.log('== 断言区 ==')
           .run(id, temporaryDecisionSession, seq, new Date(Date.now() + seq).toISOString(), authorId,
             authorKind, kind, text, replyTo)
       const reviewId = `e_ui_review_${randomUUID().replaceAll('-', '')}`
-      addEvent(reviewId, 2, (decisionDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)).user_id,
+      const nextSeq = decisionDb.prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events WHERE session_id=?')
+        .get(temporaryDecisionSession).seq
+      addEvent(reviewId, nextSeq, (decisionDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)).user_id,
         'human', 'decision', '【撤回复核请求】\n拟决策：pass', eventId)
       await page.reload({ waitUntil: 'networkidle' })
       const reviewing = await message.locator('.el-alert').innerText()
       detail.push(`正在复核状态显示=${reviewing.includes('正在收集复核意见')}`)
       ok &&= reviewing.includes('正在收集复核意见')
 
-      addEvent(`e_ui_review_done_${randomUUID().replaceAll('-', '')}`, 3, null, 'system', 'system',
+      addEvent(`e_ui_review_done_${randomUUID().replaceAll('-', '')}`, nextSeq + 1, null, 'system', 'system',
         '【复核完成】1 个 Agent 提出问题。', reviewId)
       await page.reload({ waitUntil: 'networkidle' })
       const reviewDone = await message.locator('.el-alert').innerText()
       detail.push(`复核完成待定案状态显示=${reviewDone.includes('复核完成，待 DRI 定案')}`)
       ok &&= reviewDone.includes('复核完成，待 DRI 定案')
 
-      addEvent(`e_ui_decision_done_${randomUUID().replaceAll('-', '')}`, 4,
+      addEvent(`e_ui_decision_done_${randomUUID().replaceAll('-', '')}`, nextSeq + 2,
         (decisionDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)).user_id,
         'human', 'approval', 'DRI 决策：通过\n目标事件：' + eventId, eventId)
     } finally { decisionDb.close() }
@@ -1434,6 +1569,12 @@ console.log('== 断言区 ==')
     const cleaned = cleanTemporaryDecisionSession()
     detail.push(`验收会话及全文索引已清理=${cleaned}`)
     ok &&= cleaned
+    if (cleaned && temporaryDecisionUserId) {
+      const cleanupDb = new DatabaseSync('data/database.db')
+      try { cleanupDb.prepare('DELETE FROM users WHERE id=?').run(temporaryDecisionUserId) }
+      finally { cleanupDb.close() }
+      temporaryDecisionUserId = null
+    }
     if (sessionId) await page.evaluate((id) => {
       localStorage.removeItem(`space_seen_${id}`)
       localStorage.removeItem(`space_draft_${id}`)
@@ -1840,7 +1981,7 @@ console.log('== 断言区 ==')
     const activeSession = page.locator('.sp-rail-item.active')
     await activeSession.waitFor({ state: 'visible', timeout: 5000 })
     await activeSession.locator('.el-dropdown').click()
-    await page.locator('.el-dropdown-menu__item:visible').filter({ hasText: '移除成员' }).click()
+    await page.locator('.el-dropdown-menu__item:visible').filter({ hasText: '成员 / 角色管理' }).click()
     const dialog = page.getByRole('dialog', { name: '会话成员管理' })
     await dialog.waitFor({ state: 'visible', timeout: 5000 })
     const emptyState = dialog.locator('.el-table__empty-text')

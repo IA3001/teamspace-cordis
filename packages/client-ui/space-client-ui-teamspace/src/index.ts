@@ -703,8 +703,11 @@ export function apply(ctx: Context) {
       async decide(token: string, sessionId: string, action: string, eventId: string, reason = '') {
         const user = await sessionMember(ctx, String(token ?? ''), String(sessionId ?? ''))
         if (!user) return { error: 'not_member', detail: '请登录并加入此会话后再操作' }
-        if (ctx.session.listMembers(sessionId, true).find((member) => member.principalId === user.id)?.role !== 'DRI') {
-          return { error: 'forbidden', detail: '只有本会话 DRI 可以处理 Agent 回复' }
+        const activeMembers = ctx.session.listMembers(sessionId, true)
+        const caller = activeMembers.find((member) => member.principalId === user.id)
+        const hasAssignedDri = activeMembers.some((member) => member.role === 'DRI')
+        if (caller?.role !== 'DRI' && !(caller?.role === '群主' && !hasAssignedDri)) {
+          return { error: 'forbidden', detail: '只有本会话 DRI 可以处理 Agent 回复；未指派 DRI 时群主可以代为处理' }
         }
         const allowed = new Set(['pass', 'reject', 'modify', 'defer', 'recall', 'redo'])
         if (!allowed.has(action)) return { error: 'invalid_action', detail: '不支持此决策操作' }

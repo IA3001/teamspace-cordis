@@ -47,7 +47,7 @@ import {
   progressRunHasOutcome, progressRunsForTimelineEvent, settlesPendingReply, shouldWarnAboutSocketSilence,
 } from './progress.ts'
 import { groupActivityEvents } from './activity-groups.ts'
-import { decisionPresentation } from './decision-presentation.ts'
+import { decisionAccessGuidance, decisionPresentation } from './decision-presentation.ts'
 
 interface SessionLite { id: string; title: string; status: string; updatedAt?: string }
 interface SessionWorkLite {
@@ -1925,8 +1925,28 @@ const TeamspacePage = defineComponent({
         // 撤回入口：仅自己的（authorKind='human'）未撤回消息悬停时出现，在「引用」旁。
         const canRecall = !ev.voided && ev.kind === 'message' &&
           ev.authorKind === 'human' && ev.authorId === me.value?.id
+        const hasAssignedDri = members.value.some((member) => member.role === 'DRI')
+        const currentMembership = members.value.find((member) => member.principalId === me.value?.id)
+        const ownerFallback = !hasAssignedDri && currentMembership?.role === '群主'
         const canDecide = ev.kind === 'message' && ev.authorKind === 'agent' &&
-          members.value.some((member) => member.principalId === me.value?.id && member.role === 'DRI')
+          (currentMembership?.role === 'DRI' || ownerFallback)
+        const pendingDri = members.value.find((member) => member.role === 'DRI')
+        const pendingDriHuman = pendingDri
+          ? humans.value.find((human) => human.id === pendingDri.principalId)
+          : undefined
+        const pendingDriName = pendingDri
+          ? pendingDriHuman?.displayName || pendingDriHuman?.username || pendingDri.duty?.trim() || pendingDri.principalId
+          : undefined
+        const viewerRole = members.value.find((member) => member.principalId === me.value?.id)?.role
+        const accessGuidance = decision?.title === '待 DRI 决策'
+          ? decisionAccessGuidance({
+              viewerIsDri: canDecide,
+              viewerIsOwnerFallback: canDecide && ownerFallback,
+              viewerRole,
+              driName: pendingDriName,
+              driPrincipalId: pendingDri?.principalId,
+            })
+          : ''
         const downstreamCount = canDecide ? (causalCounts.get(ev.id) ?? 0) : 0
         const decisionActions = canDecide && ev.voided ? [
           { action: 'redo', label: '重新执行此历史影响项' },
@@ -2199,7 +2219,9 @@ const TeamspacePage = defineComponent({
             decision
               ? h(ElAlert, {
                   title: decision.title,
-                  description: decision.question,
+                  description: accessGuidance
+                    ? `${decision.question}\n${accessGuidance}`
+                    : decision.question,
                   type: decision.type,
                   showIcon: true,
                   closable: false,
@@ -2659,18 +2681,36 @@ const TeamspacePage = defineComponent({
             ? h('div', { class: 'sp-context-notice sp-context-notice--paused' }, userFacingPause(t.stopReason))
             : null,
         contextSection('成员', `${mentionCandidates().length}`, mentionCandidates().length
-          ? h('div', { class: 'sp-context-members' }, mentionCandidates().map((m) => {
+          ? h('div', {}, [
+              (() => {
+                const dri = members.value.find((member) => member.role === 'DRI')
+                const driHuman = dri ? humans.value.find((item) => item.id === dri.principalId) : undefined
+                const driName = dri
+                  ? driHuman?.displayName || driHuman?.username || dri.duty?.trim() || dri.principalId
+                  : ''
+                return h(ElAlert, {
+                  title: dri ? `当前 DRI：${driName}（${dri.principalId}）` : '当前未单独指派 DRI',
+                  description: dri
+                    ? '只有这个 DRI 账号登录后，Agent 回复卡片下方才显示「通过」和「其他处理」；消息「⋯」菜单里没有决策入口。成员 ID 用来区分名称相近的不同账号。'
+                    : '没有专属 DRI 时，群主可直接在 Agent 回复卡片下方选择「通过」或「其他处理」。如需指定专属 DRI，请从会话「⋯」→「成员 / 角色管理」将一名人类成员设为 DRI。成员 ID 用来区分名称相近的不同账号。',
+                  type: dri ? 'warning' : 'info',
+                  showIcon: true,
+                  closable: false,
+                })
+              })(),
+              h('div', { class: 'sp-context-members' }, mentionCandidates().map((m) => {
               const ag = agents.value.find((a) => a.id === m.principalId)
               const human = humans.value.find((item) => item.id === m.principalId)
               const name = ag?.title || human?.displayName || human?.username || m.duty?.trim() || m.role
               const status = ag
                 ? ag.status === 'working' ? '工作中' : ag.status === 'done' ? '刚完成' : '空闲'
-                : m.role === '群主' ? '会议创建者' : m.role === '成员' ? '团队成员' : m.role
+                : m.role === '群主' ? '会议创建者' : m.role === 'DRI' ? '当前 DRI' : m.role === '成员' ? '团队成员' : m.role
+              const identityStatus = ag ? status : `${status} · ${m.principalId}`
               return h(ElButton, {
                 key: m.principalId,
                 text: true,
                 class: 'sp-context-member',
-                title: `${name} · ${status} · 点击 @ 提及`,
+                title: `${name} · ${identityStatus} · 点击 @ 提及`,
                 onClick: () => { insertMention(m.principalId); inputEl.value?.focus() },
               }, {
                 default: () => [
@@ -2679,12 +2719,13 @@ const TeamspacePage = defineComponent({
                     : name.charAt(0) }),
                   h('span', { class: 'sp-context-member-copy' }, [
                     h('span', { class: 'sp-context-member-name' }, name),
-                    h('span', { class: 'sp-context-member-role' }, status),
+                    h('span', { class: 'sp-context-member-role' }, identityStatus),
                   ]),
                   h('span', { class: 'sp-context-mention-mark', 'aria-hidden': 'true' }, '@'),
                 ],
               })
             }))
+            ])
           : h('div', { class: 'sp-context-empty' }, '暂无可提及的会话成员')),
         contextSection('待办', `${todos.value.filter((todo) => !todo.done).length} 项未完成`, h('div', { class: 'sp-context-todos' }, [
           todos.value.length

@@ -220,9 +220,13 @@ export function apply(ctx: Context) {
         return { text: '用法：/decision <pass|reject|modify|defer|recall|redo> <event-id> [原因或新要求]' }
       }
       const action = actionRaw as Action
-      const member = ctx.session.listMembers(c.sessionId, true)
-        .find((candidate) => candidate.principalId === c.authorId)
-      if (member?.role !== 'DRI') return { text: '只有本会话 DRI 可以执行该决策命令。' }
+      const activeMembers = ctx.session.listMembers(c.sessionId, true)
+      const member = activeMembers.find((candidate) => candidate.principalId === c.authorId)
+      const hasAssignedDri = activeMembers.some((candidate) => candidate.role === 'DRI')
+      const ownerFallback = member?.role === '群主' && !hasAssignedDri
+      if (member?.role !== 'DRI' && !ownerFallback) {
+        return { text: '只有本会话 DRI 可以执行该决策命令；尚未指派 DRI 时，群主可以代为处理。' }
+      }
 
       const target = ctx.eventLog.listBySession(c.sessionId).find((event) => event.id === targetId)
       if (!target) return { text: '目标事件不存在或属于其他会话。' }

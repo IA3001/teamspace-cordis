@@ -59,19 +59,32 @@ async function main() {
   assert.equal(after.duty, original.duty, 'role changes preserve member duty')
   const changeEvent = eventLog.listBySession(session.id).at(-1)!
   assert.equal(changeEvent.authorKind, 'system')
-  assert.match(changeEvent.text, /Owner（u_owner）将 Member（u_member）的会话角色从「成员」调整为「DRI」/)
+  assert.match(changeEvent.text, /Owner（u_owner）将 Member（u_member）设为本会话 DRI/)
 
   const count = eventLog.listBySession(session.id).length
-  const conflict = await rpc.setMemberRole('owner-session', session.id, 'u_second_dri', 'DRI')
-  assert.equal(conflict.error, 'dri_already_set', 'the single active DRI invariant is enforced by storage')
-  assert.equal(eventLog.listBySession(session.id).length, count, 'failed role change leaves no false timeline event')
-  await rpc.setMemberRole('owner-session', session.id, 'u_member', 'DRI')
-  assert.equal(eventLog.listBySession(session.id).length, count, 'a no-op role update is idempotent and does not duplicate audit events')
-  assert.equal((await rpc.setMemberRole('owner-session', session.id, 'u_member', '群主')).error, 'invalid_role')
+  const transferred = await rpc.setMemberRole('owner-session', session.id, 'u_second_dri', 'DRI')
+  assert.equal(transferred.find((member: { principalId: string }) => member.principalId === 'u_second_dri')?.role, 'DRI')
+  assert.equal(transferred.find((member: { principalId: string }) => member.principalId === 'u_member')?.role, '成员',
+    'assigning a new DRI atomically transfers the sole assignment')
+  assert.match(eventLog.listBySession(session.id).at(-1)!.text, /将会话 DRI 从 Member（u_member）转交给 Second DRI（u_second_dri）/)
+  assert.equal(eventLog.listBySession(session.id).length, count + 1)
+  const noOpCount = eventLog.listBySession(session.id).length
+  await rpc.setMemberRole('owner-session', session.id, 'u_second_dri', 'DRI')
+  assert.equal(eventLog.listBySession(session.id).length, noOpCount, 'a no-op role update is idempotent and does not duplicate audit events')
   assert.equal((await rpc.setMemberRole('owner-session', session.id, 'u_owner', 'DRI')).error, 'forbidden',
-    'the session creator keeps the immutable group-owner role')
+    'the session creator keeps the immutable group-owner role and may use the no-DRI fallback')
+  assert.equal((await rpc.setMemberRole('owner-session', session.id, 'u_member', '群主')).error, 'invalid_role')
   assert.equal((await rpc.removeMember('owner-session', session.id, 'u_owner')).error, 'forbidden',
     'the session creator cannot be removed')
+
+  const removeDri = await rpc.removeMember('owner-session', session.id, 'u_second_dri')
+  assert.equal(removeDri.some((member: { principalId: string }) => member.principalId === 'u_second_dri'), false,
+    'removed members disappear from the active roster')
+  assert.equal(ctx.session.listMembers(session.id, false).find((member: { principalId: string }) =>
+    member.principalId === 'u_second_dri')?.status, 'left')
+  assert.equal(ctx.session.listMembers(session.id, true).some((member: { role: string }) => member.role === 'DRI'), false)
+  assert.match(eventLog.listBySession(session.id).at(-1)!.text, /现在没有专属 DRI，群主可继续处理 Agent 待决事项/,
+    'removing the assigned DRI explicitly leaves the owner fallback and asks for reassignment')
 
   assert.equal((await rpc.rename('member-session', session.id, '成员不能改名')).error, 'forbidden',
     'only group owners/admins may rename a session')

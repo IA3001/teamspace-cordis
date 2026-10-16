@@ -77,6 +77,7 @@
     "verify:author-recall": "tsx scripts/verify-author-recall.ts && node scripts/record-action.mjs verify-author-recall",
     "verify:empty-message": "tsx scripts/verify-empty-message.ts && node scripts/record-action.mjs verify-empty-message",
     "verify:session-todos-tool": "tsx scripts/verify-session-todo-tool.ts && node scripts/record-action.mjs verify-session-todos-tool",
+    "verify:session-history-search-tool": "tsx scripts/verify-session-history-search.ts",
     "verify:sandbox": "tsx scripts/verify-sandbox-tools.ts && node scripts/record-action.mjs verify-sandbox",
     "verify:web-search": "tsx scripts/verify-web-search.ts",
     "evaluate:rag-project": "tsx scripts/evaluate-rag-project.ts",

@@ -184,6 +184,8 @@
   `value`
 - [plugins/staging-commands/index.ts](../../plugins/staging-commands/index.ts)：`space-event`
   `type`
+- [plugins/tool-session-history-search/index.ts](../../plugins/tool-session-history-search/index.ts)：`space-event`
+  `value`
 - [plugins/ui-registry/index.ts](../../plugins/ui-registry/index.ts)：`space-ui`
   `value`
 - [plugins/ui-registry/index.ts](../../plugins/ui-registry/index.ts)：`space-ui`

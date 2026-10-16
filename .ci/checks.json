@@ -696,6 +696,19 @@
         "scripts/verify-session-todo-tool.ts"
       ],
       "timeoutMs": 180000
+    },
+    {
+      "id": "static-session-history-search",
+      "script": "verify:session-history-search-tool",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "plugins/tool-session-history-search/",
+        "packages/seam/space-agent-catalog/",
+        "packages/impl/space-store-sqlite/migrations/0038_agent_coder_history_search_tool",
+        "scripts/verify-session-history-search.ts"
+      ],
+      "timeoutMs": 180000
     }
   ],
   "runtime": [

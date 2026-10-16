@@ -214,6 +214,42 @@
         "scripts/verify-agent-bootstrap.ts",
         "scripts/verify-session-todo-tool.ts"
       ]
+    },
+    {
+      "path": "packages/seam/space-agent-catalog/src/index.ts",
+      "hash": "2fc6be334c94c803e022e94960ac1aa1da2a2ba1e55eeecf4f7474750da29205",
+      "description": "docs/compatibility/session-history-search-tool.md",
+      "oldVersion": "coding Agent template v2",
+      "upgrade": "New Agents created from coding template v3 receive the current-session history-search tool; existing template copies remain unchanged except the built-in agent.coder migration.",
+      "rollback": "Revert the template defaults; existing Agent rows and templateOrigin values remain readable.",
+      "tests": [
+        "scripts/verify-agent-teamspace.ts",
+        "scripts/verify-agent-bootstrap.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0038_agent_coder_history_search_tool.up.sql",
+      "hash": "10bcf9f43b50ecde5f14144861e1d69e17cfabe5503ea9d7ea8dad12c860507d",
+      "description": "docs/compatibility/session-history-search-tool.md",
+      "oldVersion": "Database schema v37.",
+      "upgrade": "Migration 0038 appends the tool ID to agent.coder only when absent.",
+      "rollback": "The down migration preserves editable Agent configuration; the tool ID remains harmless until the plugin-bearing release is restored.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-session-history-search.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0038_agent_coder_history_search_tool.down.sql",
+      "hash": "f9436514a54fc810221fa74796ff35d1bf95165b41acb589f5130b855b563872",
+      "description": "docs/compatibility/session-history-search-tool.md",
+      "oldVersion": "Database schema v38 with optional tool ID in agent.coder.",
+      "upgrade": "No action required; the forward migration is guarded against duplicates.",
+      "rollback": "Agent Catalog values remain intact.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-session-history-search.ts"
+      ]
     }
   ]
 }

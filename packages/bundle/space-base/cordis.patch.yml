@@ -73,7 +73,7 @@
 - id: space-tool
   name: './plugins/space-tool/index.ts'
   config:
-    allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.session.todos', 'web.search']
+    allow: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.session.todos', 'tool.session.history-search', 'web.search']
 
 # Personal read/write, team-shared read-only, and Docker-isolated code execution.
 - id: sandbox-tools
@@ -203,6 +203,10 @@
 # 会话待办只读查询能力：Agent 工具通过当前 invoker.sessionId 限定范围。
 - id: tool-session-todos
   name: './plugins/tool-session-todos/index.ts'
+
+# 当前会话历史只读检索能力：范围从 ToolInvoker.sessionId 取得。
+- id: tool-session-history-search
+  name: './plugins/tool-session-history-search/index.ts'
 
 # 账号管理页（2026-10-01）：挂 5172 调试控制台（debug webui 的 webui 服务是
 # 无名默认实例 —— 不写 webui isolate 即消费它，同 debug-loader-webui 口径）。

@@ -97,6 +97,7 @@ npm run verify:ui          # 浏览器交互验收；需要服务和可用 Chrom
 
 ## 继续了解
 
+- [`docs/HANDOFF.md`](docs/HANDOFF.md)：交接给协作者的当前状态、启动步骤、验证结果与待办
 - [`AGENTS.md`](AGENTS.md)：仓库入口与开发指引
 - [`.rules/IRON-RULES.md`](.rules/IRON-RULES.md)：不可绕过的项目约束
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)：分层模型与依赖方向

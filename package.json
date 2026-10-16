@@ -59,6 +59,7 @@
     "verify:admin-auth": "tsx scripts/verify-admin-auth.ts",
     "verify:admin-ui": "node scripts/admin-ui-verify.mjs && node scripts/record-action.mjs verify-admin-ui",
     "verify:llm-stream": "tsx scripts/verify-llm-stream.ts && node scripts/record-action.mjs verify-llm-stream",
+    "verify:project-completeness": "tsx scripts/verify-project-completeness.ts && node scripts/record-action.mjs verify-project-completeness",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts && node scripts/record-action.mjs verify-backup-restore",
     "verify:release-start": "node scripts/verify-production-start.mjs && node scripts/record-action.mjs verify-release-start",
     "verify:admin-plugins": "tsx scripts/verify-admin-plugins.ts",

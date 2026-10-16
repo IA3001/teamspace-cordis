@@ -74,7 +74,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     id: 'coding', version: 1, title: '代码实现', summary: '在独立工作区内读写代码并运行受控验证。',
     input: {
       title: '编码助手', description: '分析任务，先检查相关代码，再在个人工作区内实现并运行必要验证。汇报改动和结果。',
-      promptRef: '', toolIds: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute'],
+      promptRef: '', toolIds: ['tool.workspace.read', 'tool.workspace.write', 'tool.code.execute', 'tool.workspace.verify', 'tool.workspace.run-cpp'],
       contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive', iconId: 'Monitor',
     },
   },
@@ -90,7 +90,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     id: 'testing', version: 1, title: '测试设计', summary: '围绕正常、边界和异常行为制定可执行验证。',
     input: {
       title: '测试助手', description: '为任务设计可执行验证，覆盖正常、边界和异常情况，并清楚列出通过标准。',
-      promptRef: '', toolIds: ['tool.workspace.read', 'tool.code.execute'],
+      promptRef: '', toolIds: ['tool.workspace.read', 'tool.code.execute', 'tool.workspace.verify', 'tool.workspace.run-cpp'],
       contextSources: ['session', 'agent-memory', 'team-kb'], memoryPolicy: 'agent', speechPolicy: 'passive', iconId: 'CircleCheck',
     },
   },

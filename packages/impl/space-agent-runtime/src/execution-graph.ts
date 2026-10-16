@@ -161,6 +161,26 @@ function toRequests(envelope: ToolEnvelope): ToolRequest[] {
   })
 }
 
+function workspaceWritePath(args: string): string | undefined {
+  try {
+    const parsed = JSON.parse(args) as { path?: unknown }
+    return typeof parsed.path === 'string' ? parsed.path.replace(/\\/gu, '/') : undefined
+  } catch { return undefined }
+}
+
+function workspaceProjectPath(args: string): string | undefined {
+  try {
+    const parsed = JSON.parse(args) as { projectPath?: unknown }
+    return typeof parsed.projectPath === 'string' ? parsed.projectPath.replace(/\\/gu, '/').replace(/\/+$/u, '') : undefined
+  } catch { return undefined }
+}
+
+function requestedProjectFiles(messages: ChatMessage[]): string[] {
+  const request = [...messages].reverse().find((message) => message.role === 'user')?.content ?? ''
+  const files = request.match(/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:cpp|cxx|cc|c|hpp|hxx|h|md|txt|cmake|json|yaml|yml|toml|rs|go|py|js|ts|tsx|jsx)/giu) ?? []
+  return [...new Set(files.map((file) => file.replace(/^\.\//u, '')))]
+}
+
 function activityArgs(args: string): string {
   try {
     const summarize = (value: unknown, depth = 0, key = ''): unknown => {
@@ -215,6 +235,11 @@ export async function runAgentExecutionGraph(input: {
   const modelTrace: AgentModelInteraction[] = []
   const publishTrace = () => input.onModelTrace?.(structuredClone(modelTrace))
   const seenToolRequests = new Set<string>()
+  const projectChecks = new Map<string, 'pending' | 'failed' | 'passed'>()
+  const requestedFiles = requestedProjectFiles(input.messages)
+  const requiresCppExecution = input.messages.some((message) => message.role === 'user' &&
+    /(?:\bC\+\+\b|C\+\+|CMakeLists\.txt)/iu.test(message.content) && /(?:编译|运行|stdout|compile|run)/iu.test(message.content))
+  const cppRunChecks = new Map<string, 'pending' | 'failed' | 'passed'>()
   const toolDefinitions: ChatToolDefinition[] = (input.ctx.tools?.list?.() ?? [])
     .filter((tool) => input.allowedToolIds.includes(tool.id))
     .sort((a, b) => a.id.localeCompare(b.id))
@@ -320,6 +345,14 @@ export async function runAgentExecutionGraph(input: {
     }
     const requests = freshRequests.slice(0, Math.min(MAX_TOOL_CALLS_PER_ROUND, availableToolSlots))
     if (!requests.length) {
+      const unverifiedProjects = [...projectChecks].filter(([, status]) => status !== 'passed').map(([path]) => path)
+      if (unverifiedProjects.length) {
+        throw new Error(`多文件 CMake 工程尚未通过工作区完整性检查：${unverifiedProjects.join('、')}。请先调用 tool.workspace.verify，修复缺失文件并再次检查。`)
+      }
+      const unrunProjects = [...cppRunChecks].filter(([, status]) => status !== 'passed').map(([path]) => path)
+      if (unrunProjects.length) {
+        throw new Error(`C++ 工程尚未通过真实编译运行：${unrunProjects.join('、')}。请调用 tool.workspace.run-cpp，并根据原始 stdout、stderr 和退出状态修复后重试。`)
+      }
       if (toolResults.some((result) => !result.ok)) {
         throw new Error('至少一个工具调用未成功执行，系统已阻止 Agent 将本轮标记为完成。请查看失败的工具记录并重试。')
       }
@@ -362,17 +395,66 @@ export async function runAgentExecutionGraph(input: {
       })
       const started = Date.now()
       let result: ToolResult
+      let executedArgs = request.args
       if (!input.allowedToolIds.includes(request.toolId)) {
         result = { toolId: request.toolId, ok: false, code: 'not_configured', output: '该工具未在此 Agent 的工具配置中启用', costMs: 0 }
       } else {
         try {
-          result = await input.ctx.tools.invoke(request.toolId, request.args, {
+          let args = executedArgs
+          if (request.toolId === 'tool.workspace.verify') {
+            const projectPath = workspaceProjectPath(args)
+            if (projectPath) {
+              const parsed = JSON.parse(args) as { requiredFiles?: unknown }
+              const required = Array.isArray(parsed.requiredFiles) ? parsed.requiredFiles.filter((file): file is string => typeof file === 'string') : []
+              const missingFromPlan = requestedFiles.filter((file) => !required.includes(file))
+              if (missingFromPlan.length) args = JSON.stringify({ ...parsed, requiredFiles: [...required, ...missingFromPlan] })
+            }
+          }
+          executedArgs = args
+          result = await input.ctx.tools.invoke(request.toolId, args, {
             id: input.agentId,
             sessionId: input.sessionId,
             signal: input.signal,
           })
         } catch (error) {
           result = { toolId: request.toolId, ok: false, code: 'tool_error', output: (error as Error).message, costMs: Date.now() - started }
+        }
+      }
+      if (request.toolId === 'tool.workspace.write') {
+        const path = workspaceWritePath(request.args)
+        if (path) {
+          const projectPath = [...projectChecks.keys()].find((candidate) => path.startsWith(`${candidate}/`))
+          if (projectPath) {
+            for (const signature of seenToolRequests) {
+              if (!signature.startsWith('tool.workspace.verify\n') && !signature.startsWith('tool.workspace.run-cpp\n')) continue
+              const args = signature.slice(signature.indexOf('\n') + 1)
+              if (workspaceProjectPath(args) === projectPath) seenToolRequests.delete(signature)
+            }
+          }
+        }
+        if (input.allowedToolIds.includes('tool.workspace.verify') && path?.startsWith('projects/') && /(?:^|\/)CMakeLists\.txt$/iu.test(path)) {
+          const projectPath = path.slice(0, path.lastIndexOf('/'))
+          projectChecks.set(projectPath, 'pending')
+          if (requiresCppExecution) cppRunChecks.set(projectPath, 'pending')
+        } else if (path) {
+          for (const [projectPath, status] of projectChecks) {
+            if (status === 'passed' && path.startsWith(`${projectPath}/`)) projectChecks.set(projectPath, 'pending')
+          }
+          for (const [projectPath, status] of cppRunChecks) {
+            if (status === 'passed' && path.startsWith(`${projectPath}/`)) cppRunChecks.set(projectPath, 'pending')
+          }
+        }
+      }
+      if (request.toolId === 'tool.workspace.verify') {
+        const projectPath = workspaceProjectPath(request.args)
+        if (projectPath && projectChecks.has(projectPath)) {
+          projectChecks.set(projectPath, result.ok && result.output.startsWith('工作区检查通过：') ? 'passed' : 'failed')
+        }
+      }
+      if (request.toolId === 'tool.workspace.run-cpp') {
+        const projectPath = workspaceProjectPath(request.args)
+        if (projectPath && cppRunChecks.has(projectPath)) {
+          cppRunChecks.set(projectPath, result.ok && result.output.startsWith('C++ 程序运行通过：') ? 'passed' : 'failed')
         }
       }
       if (input.signal?.aborted) throw new AgentRunCancelledError('execution graph')
@@ -388,6 +470,7 @@ export async function runAgentExecutionGraph(input: {
       })
       const traceCall = modelTrace[state.traceIndex]?.toolCalls.find((call) => call.toolId === request.toolId && !call.status)
       if (traceCall) Object.assign(traceCall, {
+        args: safeAuditText(executedArgs),
         status: result.ok ? 'success' as const : 'failed' as const,
         ...(result.ok ? { result: safeAuditText(result.output) } : { error: `${result.code ?? 'error'}：${safeAuditText(result.output)}` }),
         durationMs: result.costMs,
@@ -401,7 +484,7 @@ export async function runAgentExecutionGraph(input: {
           mentions: [], replyMode: '',
           toolCalls: [{
             name: result.toolId,
-            args: activityArgs(request.args),
+            args: activityArgs(executedArgs),
             result: result.ok ? safeActivityText(result.output, 1200) : undefined,
             err: result.ok ? undefined : `${result.code ?? 'error'}：${safeActivityText(result.output, 400)}`,
           }],

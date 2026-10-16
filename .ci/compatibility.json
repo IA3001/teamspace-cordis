@@ -129,14 +129,13 @@
     },
     {
       "path": "packages/seam/space-agent-runtime/src/index.ts",
-      "hash": "8d6acef031fa36de42b6760870518c1a49da4cfa0cb3e2e6bbcebebd7c0b502d",
-      "description": "docs/compatibility/event-citations.md",
-      "oldVersion": "34",
-      "upgrade": "Apply migration 0035; existing events receive citations=[] and old API clients may ignore the optional field.",
-      "rollback": "Apply migration 0035 down; only structured citation metadata is discarded, event bodies remain unchanged.",
+      "hash": "585d5d1d5a7b06f1bbfbfbf9d66e04346a30f8134d6800e42ee0f6c0a528fcc1",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "Agent runtime instructions now require controlled C++ compile/run evidence when the task asks for compilation, execution or raw stdout.",
+      "rollback": "Revert the prompt change with the runner registration and execution gate; existing stored conversations remain unchanged.",
       "tests": [
-        "scripts/verify-upgrade-fixtures.ts",
-        "scripts/verify-rag.ts",
+        "scripts/verify-project-completeness.ts",
         "scripts/verify-agent-teamspace.ts"
       ]
     },
@@ -201,6 +200,67 @@
       "tests": [
         "scripts/verify-llm-stream.ts",
         "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_workspace_verify.up.sql",
+      "hash": "09d6310aadde3ae5dd9e67e158105c2d6f9b597df2bcfef730ec9c84e736c649",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "36",
+      "upgrade": "Apply migration 0037; built-in coder and tester Agents gain the workspace verifier while existing tool selections are preserved.",
+      "rollback": "Apply migration 0037 down; stored Agent tool selections remain unchanged and older runtimes ignore the unregistered optional tool.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-project-completeness.ts",
+        "scripts/verify-sandbox-tools.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0037_agent_workspace_verify.down.sql",
+      "hash": "8939f3560ad29471fdfe79fe7ff21d4616f9ac3c1bb041646a20efabb49275ab",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "36",
+      "upgrade": "Apply migration 0037; built-in coder and tester Agents gain the workspace verifier while existing tool selections are preserved.",
+      "rollback": "The down migration intentionally preserves Agent configuration; no user-authored tool selection is removed.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-project-completeness.ts"
+      ]
+    },
+    {
+      "path": "packages/seam/space-agent-catalog/src/index.ts",
+      "hash": "3a79dc88da9a98861b4870bdb7cec878a224d4fdc6de4f27d6bc203c651259b2",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "0.1.0",
+      "upgrade": "New coding and testing Agent templates advertise tool.workspace.run-cpp; existing Agent definitions receive it through migration 0038.",
+      "rollback": "Revert the catalog default together with migration 0038; user-edited Agent definitions remain unchanged.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-agent-teamspace.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0038_agent_cpp_runner.up.sql",
+      "hash": "3bec10e4223acddf3e83834f42a089d910cde17b92f9fdb9cb2dfed6941d8243",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "37",
+      "upgrade": "Migration 0038 adds tool.workspace.run-cpp to built-in coding and testing Agents while preserving their configured tools.",
+      "rollback": "The down migration intentionally preserves Agent configuration; older runtimes ignore this optional tool ID.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts",
+        "scripts/verify-project-completeness.ts",
+        "scripts/verify-sandbox-tools.ts"
+      ]
+    },
+    {
+      "path": "packages/impl/space-store-sqlite/migrations/0038_agent_cpp_runner.down.sql",
+      "hash": "8939f3560ad29471fdfe79fe7ff21d4616f9ac3c1bb041646a20efabb49275ab",
+      "description": "docs/compatibility/agent-workspace-verification.md",
+      "oldVersion": "37",
+      "upgrade": "Migration 0038 adds tool.workspace.run-cpp to built-in coding and testing Agents while preserving their configured tools.",
+      "rollback": "The down migration intentionally preserves Agent configuration; no user-authored tool selection is removed.",
+      "tests": [
+        "scripts/verify-agent-bootstrap.ts"
       ]
     }
   ]

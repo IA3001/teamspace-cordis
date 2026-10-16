@@ -48,6 +48,7 @@ import {
 } from './progress.ts'
 import { groupActivityEvents } from './activity-groups.ts'
 import { decisionPresentation } from './decision-presentation.ts'
+import { messageLengthNotice } from './message-validation.ts'
 
 interface SessionLite { id: string; title: string; status: string; updatedAt?: string }
 interface SessionWorkLite {
@@ -1253,6 +1254,8 @@ const TeamspacePage = defineComponent({
       if (!activeId.value) { showReply('请先选择或新建一个会议', false); return }
       // IM 化：空输入静默忽略（不再弹错误回执）。
       if (!text.trim()) return
+      const lengthNotice = messageLengthNotice(text)
+      if (lengthNotice) { showReply(lengthNotice, false); return }
       if (sending.value || closed.value) return
       sending.value = true
       const mentions = parseMentions()
@@ -2897,6 +2900,7 @@ const TeamspacePage = defineComponent({
 
       // ── composer 悬浮卡片（贴底居中；已结束会话禁用）────────────────────
       const replySnapshot = replyTo.value
+      const lengthNotice = messageLengthNotice(draft.value)
       const composer = activeId.value ? h('div', [
         h('div', {
           class: CENTERED,
@@ -2954,6 +2958,13 @@ const TeamspacePage = defineComponent({
               type: 'textarea',
               placeholder: closed.value ? '会话已结束，不能继续发言' : '输入消息 · @提及成员',
             }),
+            lengthNotice ? h(ElAlert, {
+              key: 'message-length-warning',
+              title: lengthNotice,
+              type: 'warning',
+              showIcon: true,
+              closable: false,
+            }) : null,
             h(ElRow, { justify: 'space-between', align: 'middle' }, {
               default: () => [
                 // 文件消息入口：选文件 → 上传（20MB 上限）→ 成功后自动发文件消息。
@@ -2979,7 +2990,7 @@ const TeamspacePage = defineComponent({
                 ]),
                 h(ElButton, {
                   key: 'send-btn', class: 'sp-send-icon',
-                  type: 'primary', loading: sending.value, disabled: closed.value,
+                  type: 'primary', loading: sending.value, disabled: closed.value || !!lengthNotice,
                   'aria-label': '发送消息',
                   title: '发送（Enter）',
                   onClick: () => void sendText(draft.value),

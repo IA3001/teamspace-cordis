@@ -92,7 +92,11 @@ await page.addInitScript(() => {
     },
     uiVerifySeedKbSearch: {
       method: 'searchKb',
-      value: [{ docTitle: '旧查询结果', text: '这条旧结果只应在旧查询中显示。', score: 1, documentId: 'ui-stub', chunkIndex: 0 }],
+      value: [{ docTitle: '旧查询结果', text: '这条旧结果只应在旧查询中显示。', source: 'manual', score: 1, docId: 'ui-stub', chunkId: 'ui-stub-chunk' }],
+    },
+    uiVerifyEmptyKbSearch: {
+      method: 'searchKb',
+      value: { error: 'empty_query', detail: '检索词不能为空' },
     },
   }
   const delayedResponseMethods = {
@@ -1685,10 +1689,23 @@ console.log('== 断言区 ==')
     const retrievalWorkspace = await retrievalTab.getAttribute('aria-selected') === 'true' && await searchInput.isVisible()
     detail.push(`检索验证独立工作区=${retrievalWorkspace}`)
     ok &&= retrievalWorkspace
+    await page.evaluate(() => sessionStorage.setItem('uiVerifyEmptyKbSearch', '1'))
+    await searchInput.fill('   ')
+    const blankSearchEnabled = !(await page.getByRole('button', { name: '搜索', exact: true }).isDisabled())
+    await page.getByRole('button', { name: '搜索', exact: true }).click()
+    const blankSearchError = page.getByText('检索词不能为空，请输入关键词后重试。', { exact: true })
+    await blankSearchError.waitFor({ timeout: 5000 })
+    const blankSearchRetainsInput = await searchInput.inputValue() === '   '
+    const blankSearchNotMisreportedAsNoHits = !(await page.getByText(/没有命中/).count())
+    detail.push(`空白检索可提交并显示明确错误=${blankSearchEnabled && blankSearchRetainsInput && blankSearchNotMisreportedAsNoHits}`)
+    ok &&= blankSearchEnabled && blankSearchRetainsInput && blankSearchNotMisreportedAsNoHits
     await page.evaluate(() => sessionStorage.setItem('uiVerifySeedKbSearch', '1'))
     await searchInput.fill('旧查询')
     await page.getByRole('button', { name: '搜索', exact: true }).click()
     await page.getByText('旧查询结果', { exact: true }).waitFor({ timeout: 5000 })
+    const sourceVisible = await page.getByText('来源：manual', { exact: true }).isVisible()
+    detail.push(`检索命中展示来源标记=${sourceVisible}`)
+    ok &&= sourceVisible
     await page.evaluate(() => sessionStorage.setItem('uiVerifyDelayKbSearch', '1'))
     await searchInput.fill('新查询加载中')
     await page.getByRole('button', { name: '搜索', exact: true }).click()
@@ -1718,7 +1735,7 @@ console.log('== 断言区 ==')
     detail.push(`异常=${String(error).slice(0, 160)}`)
   } finally {
     await page.evaluate(() => {
-      for (const key of ['uiVerifyFailKbBootstrap', 'uiVerifyFailKbSearch', 'uiVerifySeedKbSearch', 'uiVerifyDelayKbSearch', 'uiVerifyDelayKbAdd']) sessionStorage.removeItem(key)
+      for (const key of ['uiVerifyFailKbBootstrap', 'uiVerifyFailKbSearch', 'uiVerifySeedKbSearch', 'uiVerifyEmptyKbSearch', 'uiVerifyDelayKbSearch', 'uiVerifyDelayKbAdd']) sessionStorage.removeItem(key)
     }).catch(() => {})
     await page.goto(`${teamspaceBase}/teamspace?session=s_seed_demo`, { waitUntil: 'networkidle' }).catch(() => {})
   }

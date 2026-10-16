@@ -24,7 +24,7 @@ import { SvgIcon } from 'space-client-ui-shared/client/icon-library.ts'
 type DocRow = KbDocument
 
 /** 检索命中视图，与 knowledge seam 的 KbHit 保持一致。 */
-type HitRow = KbHit
+type HitRow = KbHit & { source?: string }
 type KbFolderNode = KbFolder & { children: KbFolderNode[] }
 
 /** 登录 token 的 localStorage 键（/login 页与各 RPC 共用）。 */
@@ -228,7 +228,7 @@ const KbPage = defineComponent({
 
     /** 检索：结果进 hits；null（未登录）跳 /login。 */
     async function doSearch() {
-      if (searchBusy.value || !query.value.trim()) return
+      if (searchBusy.value) return
       const submittedQuery = query.value.trim()
       searchBusy.value = true
       searchErr.value = ''
@@ -241,7 +241,9 @@ const KbPage = defineComponent({
           return
         }
         if (!Array.isArray(res)) {
-          searchErr.value = userFacingFailure('搜索知识库')
+          searchErr.value = res && res.error === 'empty_query'
+            ? '检索词不能为空，请输入关键词后重试。'
+            : userFacingFailure('搜索知识库')
           return
         }
         hits.value = res
@@ -258,6 +260,9 @@ const KbPage = defineComponent({
     }
     function hitText(hit: HitRow) {
       return hit.text
+    }
+    function hitSource(hit: HitRow) {
+      return hit.source || docs.value.find((doc) => doc.id === hit.docId)?.source || '手动添加'
     }
 
     return () => {
@@ -431,7 +436,7 @@ const KbPage = defineComponent({
                 onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') void doSearch() },
               }),
               h(ElButton, {
-                type: 'primary', loading: searchBusy.value, disabled: !query.value.trim(), onClick: () => void doSearch(),
+                type: 'primary', loading: searchBusy.value, disabled: searchBusy.value, onClick: () => void doSearch(),
               }, { default: () => '搜索' }),
             ]),
             hits.value === null && !searchBusy.value && !query.value.trim()
@@ -471,6 +476,7 @@ const KbPage = defineComponent({
                 }, [
                   h('div', { class: 'sp-kb-hit-title' }, hitTitle(hit)),
                   h('div', { class: 'sp-kb-hit-text' }, hitText(hit)),
+                  h(ElText, { type: 'info', size: 'small' }, { default: () => `来源：${hitSource(hit)}` }),
                 ])))
               : null,
           ]),

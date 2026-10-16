@@ -11,6 +11,7 @@ import { ContextAssemblyServiceImpl } from '../plugins/space-context/index.ts'
 import { vectorRerank } from '../packages/seam/space-kb/src/index.ts'
 import { extractCitedAnswer, formatCitedAnswer } from '../packages/seam/space-retrieval/src/index.ts'
 import { RetrievalServiceImpl } from '../plugins/space-retrieval/index.ts'
+import { apply as applyKbClient } from '../packages/client-ui/space-client-ui-kb/src/index.ts'
 
 const db = new DatabaseSync(':memory:')
 db.exec('PRAGMA foreign_keys = ON')
@@ -24,6 +25,12 @@ new SqliteMemoryStore(ctx, db)
 new SqliteKnowledgeStore(ctx, db)
 Object.assign(ctx, { embeddings: { configured: false } })
 new RetrievalServiceImpl(ctx)
+let kbRpc: Record<string, (...args: any[]) => Promise<any>> | null = null
+Object.assign(ctx, {
+  webui: { addEntry: (_entry: unknown, methods: Record<string, (...args: any[]) => Promise<any>>) => { kbRpc = methods } },
+  users: { verifyToken: async (token: string) => token ? { id: 'u_rag' } : null },
+})
+applyKbClient(ctx)
 Object.assign(ctx, { prompts: { get: () => ({ body: 'Team Agent system prompt' }) }, tools: { list: () => [] } })
 new ContextAssemblyServiceImpl(ctx)
 ctx.session.createSession({ id: 's_rag', title: 'RAG verification' })
@@ -47,6 +54,25 @@ const document = await ctx.kb.addDocument(
   'Bluebird 部署手册',
   'Bluebird deployment should keep SQLite on the persistent local volume and run one application process.',
 )
+const kbCountsBeforeBlankSearch = {
+  documents: (db.prepare('SELECT COUNT(*) AS count FROM kb_documents').get() as { count: number }).count,
+  chunks: (db.prepare('SELECT COUNT(*) AS count FROM kb_chunks').get() as { count: number }).count,
+}
+await assert.rejects(ctx.kb.search(' \t\n'), (error: { code?: string }) => error.code === 'empty_query',
+  'knowledge search rejects a whitespace-only query with the empty_query error')
+assert.deepEqual({
+  documents: (db.prepare('SELECT COUNT(*) AS count FROM kb_documents').get() as { count: number }).count,
+  chunks: (db.prepare('SELECT COUNT(*) AS count FROM kb_chunks').get() as { count: number }).count,
+}, kbCountsBeforeBlankSearch, 'a rejected blank search does not write knowledge documents or chunks')
+assert.deepEqual(await kbRpc!.searchKb('token-rag', ' \t\n'), { error: 'empty_query', detail: '检索词不能为空' },
+  'the knowledge page RPC returns a stable empty_query error for whitespace-only input')
+assert.deepEqual({
+  documents: (db.prepare('SELECT COUNT(*) AS count FROM kb_documents').get() as { count: number }).count,
+  chunks: (db.prepare('SELECT COUNT(*) AS count FROM kb_chunks').get() as { count: number }).count,
+}, kbCountsBeforeBlankSearch, 'the rejected RPC search leaves the knowledge store unchanged')
+const kbRpcHits = await kbRpc!.searchKb('token-rag', 'Bluebird') as Array<{ docId: string; source: string }>
+assert(kbRpcHits.some((hit) => hit.docId === document.id && hit.source === 'manual'),
+  'knowledge page search results carry the document source marker for presentation')
 const structuredDocument = await ctx.kb.addDocument('运维手册结构验收', [
   '# Operations',
   '## Backup',

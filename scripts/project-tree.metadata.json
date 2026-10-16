@@ -1,0 +1,273 @@
+{
+  "rootDescription": "项目根目录。结构由 Git 跟踪文件和未忽略的新文件自动生成；选择条目查看职责说明。",
+  "exclude": {
+    "directoryNames": [
+      ".git",
+      ".cordis",
+      ".cache",
+      ".vite",
+      "node_modules",
+      "data",
+      "dist",
+      "coverage",
+      "cache",
+      "tmp",
+      "temp"
+    ],
+    "exactPaths": [],
+    "fileSuffixes": [
+      ".sqlite",
+      ".sqlite3",
+      ".db",
+      ".log"
+    ]
+  },
+  "modules": [
+    {
+      "id": "ci",
+      "label": "CI 与项目规则",
+      "color": "#91a1b5",
+      "paths": [
+        ".ci",
+        ".github",
+        ".githooks",
+        ".rules",
+        ".agents"
+      ],
+      "description": "开发约束、Agent 技能、Git hooks 与持续集成配置。"
+    },
+    {
+      "id": "startup",
+      "label": "启动入口",
+      "color": "#91a9ff",
+      "paths": [
+        "src"
+      ],
+      "description": "Cordis 启动入口与插件清单合成；这里负责启动和组合，不放产品业务。"
+    },
+    {
+      "id": "orchestrator",
+      "label": "编排器",
+      "color": "#cf9aff",
+      "paths": [
+        "plugins/orchestrator"
+      ],
+      "description": "管理 Agent 协作回合、委托、恢复和自治预算；决定下一步由谁处理。"
+    },
+    {
+      "id": "agent-inbox",
+      "label": "Agent 收件箱",
+      "color": "#ffbf78",
+      "paths": [
+        "plugins/agent-inbox"
+      ],
+      "description": "接收 Agent 委托、管理执行队列、分发运行任务并处理结果回流。"
+    },
+    {
+      "id": "api",
+      "label": "API 与认证",
+      "color": "#7bd5ff",
+      "paths": [
+        "plugins/space-api",
+        "plugins/space-auth"
+      ],
+      "description": "为客户端提供 RPC/API，并处理身份认证。"
+    },
+    {
+      "id": "plugins",
+      "label": "服务端插件",
+      "color": "#68d8c0",
+      "paths": [
+        "plugins"
+      ],
+      "description": "可组合的服务端行为插件，例如消息、检索、工具、上传和知识库。"
+    },
+    {
+      "id": "bundle",
+      "label": "功能组合 bundle",
+      "color": "#db9cff",
+      "paths": [
+        "packages/bundle"
+      ],
+      "description": "按产品功能面组合插件清单；基础 bundle 先加载，surface bundle 再叠加。"
+    },
+    {
+      "id": "seam",
+      "label": "能力契约 seam",
+      "color": "#80b8ff",
+      "paths": [
+        "packages/seam"
+      ],
+      "description": "定义服务接口、数据形状和错误分类，不负责具体 IO。"
+    },
+    {
+      "id": "impl",
+      "label": "能力实现 impl",
+      "color": "#ff9d77",
+      "paths": [
+        "packages/impl"
+      ],
+      "description": "实现 seam 契约的技术包，例如 SQLite、OpenAI、Agent runtime 和工作区。"
+    },
+    {
+      "id": "policy",
+      "label": "策略 policy",
+      "color": "#ff83a5",
+      "paths": [
+        "packages/policy"
+      ],
+      "description": "封装可替换的纯策略规则，例如授权判定和 Agent 发言策略。"
+    },
+    {
+      "id": "client-ui",
+      "label": "前端 client-ui",
+      "color": "#a8dc79",
+      "paths": [
+        "packages/client-ui"
+      ],
+      "description": "服务端页面插件与浏览器客户端代码；页面通过 RPC 和实时事件连接服务端。"
+    },
+    {
+      "id": "packages",
+      "label": "扩展包",
+      "color": "#74c7ce",
+      "paths": [
+        "packages"
+      ],
+      "description": "按职责组织的扩展包：bundle、seam、impl、policy 和 client-ui。"
+    },
+    {
+      "id": "scripts",
+      "label": "脚本与验证",
+      "color": "#e7c56f",
+      "paths": [
+        "scripts"
+      ],
+      "description": "开发、启动、验证、迁移、构建、备份与 CI 辅助脚本。"
+    },
+    {
+      "id": "research",
+      "label": "研究资料",
+      "color": "#ed9cc6",
+      "paths": [
+        "docs/research"
+      ],
+      "description": "产品和架构研究资料，以及相关的证据记录。"
+    },
+    {
+      "id": "docs",
+      "label": "文档",
+      "color": "#c3a1ff",
+      "paths": [
+        "docs"
+      ],
+      "description": "架构、开发流程、运维、产品研究和评审文档。"
+    },
+    {
+      "id": "profiles",
+      "label": "运行配置",
+      "color": "#83a8e8",
+      "paths": [
+        "profiles"
+      ],
+      "description": "运行表面配置层；在基础 bundle 上选择或覆盖插件组合。"
+    },
+    {
+      "id": "config",
+      "label": "应用配置",
+      "color": "#c2d07d",
+      "paths": [
+        "config"
+      ],
+      "description": "Cordis 应用名和 loader 等应用级基础设置。"
+    },
+    {
+      "id": "deploy",
+      "label": "部署",
+      "color": "#ff8f87",
+      "paths": [
+        "deploy"
+      ],
+      "description": "服务部署单元与工作区配额等主机集成配置。"
+    },
+    {
+      "id": "archive",
+      "label": "归档",
+      "color": "#82909f",
+      "paths": [
+        "archive"
+      ],
+      "description": "历史备份和临时脚本归档，不作为当前运行入口。"
+    }
+  ],
+  "fileDescriptions": {
+    "README.md": "项目入口说明：目录地图、主要边界、本地运行和常用检查命令。",
+    "AGENTS.md": "仓库开发入口，指向权威规范、架构说明和工作流程。",
+    "package.json": "npm scripts、依赖、workspace 与 Node.js 版本要求。",
+    "src/index.ts": "Cordis 运行入口：生成组合清单、加载插件并等待插件树启动。",
+    "src/compose.ts": "合并 bundle 与 profile patch，校验重复插件并生成 composed.cordis.yml。",
+    "config/app.yml": "应用级基础配置，包括应用名称和 loader 清单路径。",
+    "docs/ARCHITECTURE.md": "L0–L12 分层章程、依赖方向、消息流示例与禁止的架构反模式。",
+    "docs/CI.md": "隔离门禁、变更预算、验证收据与推送后 CI 的约定。",
+    "docs/DEPLOYMENT.md": "构建、备份、迁移和部署步骤。",
+    "docs/ROADMAP.md": "产品阶段规划、里程碑和当前约束。",
+    ".rules/IRON-RULES.md": "UI 样式、开发可观察性、Agent 可插拔等项目铁律的唯一正文。",
+    "plugins/orchestrator/index.ts": "协作回合的调度核心：预算、委托、自治续步与恢复。",
+    "plugins/agent-inbox/index.ts": "Agent 委托收件箱：认领、排队、分发执行以及结果回流。",
+    "plugins/space-api/index.ts": "对客户端公开 RPC/API 方法，并编排会话、Agent 和管理能力。",
+    "plugins/space-push/index.ts": "将新增事件和运行进度推送到在线客户端。",
+    "packages/impl/space-store-sqlite/src/index.ts": "SQLite 数据实现注册入口；加载存储服务和迁移。",
+    "packages/impl/space-agent-runtime/src/index.ts": "Agent runtime 实现入口，负责把一次 Agent 运行接入执行图。",
+    "packages/impl/space-agent-runtime/src/execution-graph.ts": "Agent 运行的执行图与步骤调度实现。",
+    "packages/client-ui/space-client-ui-teamspace/src/index.ts": "团队空间页面插件入口，将浏览器客户端挂入 webui。",
+    "packages/client-ui/space-client-ui-teamspace/client/index.ts": "团队空间主界面：会话、时间线、Agent 状态和交互组合。",
+    "packages/bundle/space-base/cordis.patch.yml": "所有运行表面共享的基础插件组合。",
+    "profiles/teamspace/cordis.patch.yml": "团队空间运行表面的插件配置和覆盖项。",
+    "profiles/debug/cordis.patch.yml": "调试控制台运行表面的插件配置。",
+    "scripts/ci.mjs": "隔离运行静态、运行时、文档和相关变更门禁的入口。",
+    "scripts/project-tree-html.mjs": "扫描 Git 项目文件、补充易读说明，并生成交互式项目结构地图。",
+    "scripts/project-tree-server.mjs": "在本机提供项目地图、规划卡保存和只读 Git 差异接口。",
+    "scripts/project-tree-atlas.template.html": "项目结构地图的大屏画布、节点详情面板和交互操作模板。",
+    "scripts/project-tree.annotations.json": "项目共享的规划卡数据，记录开发指令、状态、标签和关联节点。",
+    "scripts/project-tree.metadata.json": "文件树的模块匹配、配色、职责说明和排除规则。",
+    "scripts/record-action.mjs": "把开发门禁和验证动作记录到本地可观测数据中。",
+    "scripts/store.ts": "本地数据库迁移、seed 和重置命令入口。",
+    "plugins/agent-registry/index.ts": "登记系统里可供团队使用的 Agent，让运行时能按名称找到对应的 Agent 配置。",
+    "plugins/agent-runtime-dispatcher/index.ts": "把 Agent 的执行请求交给对应的运行环境，并把执行结果送回协作流程。",
+    "plugins/ai-summary/index.ts": "根据会话内容生成摘要，帮助用户快速了解讨论重点。",
+    "plugins/ai-todo/index.ts": "从会话中整理待办事项，供团队查看和跟进。",
+    "plugins/brain-llm/index.ts": "连接大语言模型服务，为 Agent 提供生成回复和分析内容的能力。",
+    "plugins/brain-stub/index.ts": "提供不调用真实模型的模拟服务，方便本地开发和测试。",
+    "plugins/command-bus/index.ts": "集中传递系统命令，让发起命令的功能和实际处理命令的功能彼此解耦。",
+    "plugins/decision-commands/index.ts": "提供与决策相关的命令，例如提交选择或处理待确认事项。",
+    "plugins/flow-commands/index.ts": "提供控制协作流程的命令，例如继续、暂停或结束当前流程。",
+    "plugins/health/index.ts": "提供服务健康状态检查，方便确认应用是否正常启动和响应。",
+    "plugins/kb-embedder/index.ts": "把知识库内容转换成可用于语义搜索的向量数据。",
+    "plugins/memory-recorder/index.ts": "记录运行过程中需要保存的 Agent 记忆和相关来源。",
+    "plugins/sandbox-tools/index.ts": "管理受限制环境中的工具调用，避免工具越过授权范围执行操作。",
+    "plugins/session-work/index.ts": "处理会话中的工作任务，包括领取、执行和更新任务状态。",
+    "plugins/space-auth/index.ts": "验证用户身份，并确定请求是否可以访问团队空间功能。",
+    "plugins/space-context/index.ts": "组装 Agent 回复时需要的会话上下文和相关资料。",
+    "plugins/space-cors/index.ts": "设置浏览器跨域访问规则，控制哪些网页可以连接本服务。",
+    "plugins/space-dialog/index.ts": "管理对话回合，把用户消息、Agent 回复和协作状态串成一次交流。",
+    "plugins/space-history/index.ts": "查询和整理会话历史，供时间线、回顾和上下文功能使用。",
+    "plugins/space-message/index.ts": "处理会话消息的接收、保存和发送。",
+    "plugins/space-retrieval/index.ts": "从知识库和历史资料中查找与当前问题相关的内容。",
+    "plugins/space-tool/index.ts": "登记并调度 Agent 可用的工具，统一处理工具调用结果。",
+    "plugins/space-upload/index.ts": "接收上传文件，并把文件信息交给后续存储和读取流程。",
+    "plugins/staging-commands/index.ts": "提供暂存区相关命令，用于查看和处理尚未正式提交的内容。",
+    "plugins/tool-web-search/index.ts": "提供网页搜索工具，让 Agent 按授权查询外部资料。",
+    "plugins/tool-workdir/index.ts": "提供工作目录文件操作工具，让 Agent 在自己的项目目录中读写文件。",
+    "plugins/ui-registry/index.ts": "登记服务端页面和浏览器客户端入口，让 webui 知道要加载哪些界面。",
+    "packages/client-ui/space-client-ui-admin/client/index.ts": "管理页面的浏览器端入口：查看服务状态、调试信息和管理数据。",
+    "packages/client-ui/space-client-ui-auth/client/index.ts": "登录和身份验证页面的浏览器端入口。",
+    "packages/client-ui/space-client-ui-kb/client/index.ts": "知识库页面的浏览器端入口：浏览资料并管理知识库内容。",
+    "packages/client-ui/space-client-ui-sessions/client/index.ts": "会话列表和会话页面的浏览器端入口。",
+    "packages/client-ui/space-client-ui-settings/client/index.ts": "设置页面的浏览器端入口：读取和更新团队空间配置。",
+    "packages/client-ui/space-client-ui-teamspace/client/agents.ts": "管理团队空间页面里的 Agent 展示、状态和相关交互。",
+    "packages/client-ui/space-client-ui-teamspace/client/agent-operations.ts": "整理用户对 Agent 的操作，例如邀请、移除和触发任务。",
+    "packages/client-ui/space-client-ui-teamspace/client/activity-groups.ts": "把会话事件整理成便于阅读的活动分组，供时间线展示。",
+    "packages/client-ui/space-client-ui-teamspace/client/decision-presentation.ts": "把 Agent 提出的决策和待确认选项整理成页面可读的内容。",
+    "packages/client-ui/space-client-ui-teamspace/client/progress.ts": "把协作流程的运行状态转换为页面上的进度信息。"
+  }
+}

@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{PROJECT}} · 项目结构地图</title>
+  <style>
+    :root { color-scheme: dark; font: 14px/1.45 Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif; color: #e5edf7; background: #0b1118; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    button, input, select { color: inherit; font: inherit; }
+    .app { display: grid; grid-template-rows: 66px minmax(0, 1fr); width: 100%; height: 100%; min-width: 680px; background: #0b1118; }
+    .topbar { display: flex; align-items: center; gap: 22px; padding: 0 22px; border-bottom: 1px solid #1c2937; background: #0d141d; }
+    .brand { display: flex; align-items: center; gap: 11px; min-width: 300px; }
+    .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #3c5e81; border-radius: 9px; color: #8dc8ff; background: #14263a; font-size: 17px; }
+    .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
+    .brand p { margin: 2px 0 0; color: #8493a7; font-size: 11px; }
+    .toolbar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+    .search-wrap { position: relative; flex: 1; max-width: 500px; min-width: 180px; }
+    .search-wrap span { position: absolute; top: 9px; left: 12px; color: #8394aa; }
+    .search { width: 100%; height: 36px; padding: 0 12px 0 36px; border: 1px solid #26374a; border-radius: 8px; outline: none; background: #111c28; }
+    .search:focus, .module-filter:focus { border-color: #5598d0; }
+    .search::placeholder { color: #718198; }
+    .module-filter, .tool-button { height: 36px; padding: 0 12px; border: 1px solid #26374a; border-radius: 8px; color: #c4d0df; background: #111c28; cursor: pointer; white-space: nowrap; }
+    .tool-button:hover, .module-filter:hover { border-color: #496887; background: #172638; }
+    .module-filter { max-width: 165px; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 330px; min-height: 0; }
+    .stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; background-color: #0c131c; background-image: radial-gradient(#233244 0.75px, transparent 0.75px); background-size: 22px 22px; }
+    #graph { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+    #graph.dragging { cursor: grabbing; }
+    .edge { fill: none; stroke-width: 1.7; opacity: .76; }
+    .node { cursor: pointer; }
+    .node-card { fill: #121e2b; stroke-width: 1.2; transition: fill .12s, stroke-width .12s; }
+    .node:hover .node-card { fill: #192a3a; stroke-width: 2; }
+    .node.selected .node-card { fill: #1a2a3b; stroke-width: 2; }
+    .node-name { fill: #e1eaf5; font-size: 13px; font-weight: 550; }
+    .node-path { fill: #8293a8; font-size: 10px; }
+    .node-count { fill: #a9bad0; font-size: 10px; }
+    .node-change { fill: #ffbc70; font-size: 9px; font-weight: 700; }
+    .node-annotated { stroke: #e4c16d; stroke-width: 3; }
+    .node.has-change .node-card { stroke: #ffbc70; }
+    .node-icon { font-size: 13px; }
+    .node-toggle { fill: #91a5bb; font-size: 16px; font-weight: 400; cursor: pointer; }
+    .stage-hint { position: absolute; left: 18px; bottom: 16px; color: #708198; font-size: 11px; pointer-events: none; }
+    .zoom-controls { position: absolute; right: 18px; bottom: 16px; display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid #26374a; border-radius: 9px; background: #111c28eF; box-shadow: 0 8px 30px #0005; }
+    .zoom-controls button { width: 32px; height: 30px; border: 0; border-radius: 6px; color: #d4deea; background: transparent; cursor: pointer; }
+    .zoom-controls button:hover { background: #223347; }
+    #zoom-value { min-width: 48px; color: #a9bad0; text-align: center; font-size: 11px; }
+    .inspector { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid #263445; background: #0e1721; }
+    .inspector-head { display: flex; align-items: flex-start; gap: 12px; padding: 22px 18px 18px; border-bottom: 1px solid #1d2a39; }
+    .inspector-icon { display: grid; place-items: center; flex: 0 0 38px; height: 38px; border-radius: 9px; color: #b4d9ff; background: #182c40; font-size: 17px; }
+    .inspector-title { min-width: 0; flex: 1; }
+    .inspector-title h2 { margin: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 650; }
+    .inspector-title p { margin: 5px 0 0; overflow-wrap: anywhere; color: #8292a7; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .inspector-body { min-height: 0; overflow: auto; padding: 18px; }
+    .module-name { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; color: #b8c7d9; font-size: 12px; }
+    .module-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .section-title { margin: 20px 0 10px; color: #8091a6; font-size: 10px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; }
+    .description { margin: 0; color: #c0ccda; font-size: 13px; line-height: 1.75; }
+    .facts { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px 8px; margin: 18px 0 0; font-size: 12px; }
+    .facts dt { color: #7f90a5; }
+    .facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: #bac7d7; }
+    .children { display: grid; gap: 2px; }
+    .child-button { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 8px; border: 0; border-bottom: 1px solid #1b2836; color: #c6d1de; background: transparent; text-align: left; cursor: pointer; }
+    .child-button:hover { border-radius: 6px; color: #fff; background: #172636; }
+    .child-button .child-icon { color: var(--child-tone); }
+    .child-button .child-name { overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; }
+    .child-button .child-count { color: #72839a; font-size: 10px; }
+    .empty-state { display: none; position: absolute; inset: 0; place-items: center; color: #8393a7; pointer-events: none; }
+    .empty-state.visible { display: grid; }
+    .status { position: absolute; top: 14px; left: 18px; color: #8495a9; font-size: 11px; pointer-events: none; }
+    .card-list { display: grid; gap: 10px; }
+    .plan-card { padding: 12px; border: 1px solid #29394a; border-radius: 8px; background: #111c28; }
+    .plan-card-head { display: flex; align-items: flex-start; gap: 8px; }
+    .plan-card-title { flex: 1; color: #e0e9f4; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+    .plan-card-status { border-radius: 4px; padding: 2px 6px; color: #c9d7e7; background: #243448; font-size: 10px; white-space: nowrap; }
+    .plan-card-instruction { margin: 9px 0; color: #b7c5d5; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .plan-card-paths { display: grid; gap: 4px; margin: 8px 0; color: #8da0b5; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .plan-card-path { display: flex; justify-content: space-between; gap: 7px; }
+    .plan-card-path span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    .plan-card-change { flex: 0 0 auto; color: #ffbc70; }
+    .plan-card-clean { flex: 0 0 auto; color: #75889d; }
+    .plan-card-summary { margin: 7px 0; color: #aebdd0; font-size: 10px; }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+    .tag { padding: 2px 6px; border: 1px solid #334b61; border-radius: 4px; color: #9fc9e9; font-size: 10px; }
+    .card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .small-button { padding: 5px 8px; border: 1px solid #33475b; border-radius: 5px; color: #c6d3e2; background: #162435; cursor: pointer; font-size: 11px; }
+    .small-button:hover { border-color: #5a83a7; background: #1b3045; }
+    .small-button.danger { color: #f0a4a0; }
+    .plan-form { display: grid; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid #38516a; border-radius: 8px; background: #111c28; }
+    .plan-form label { display: grid; gap: 4px; color: #8da0b7; font-size: 11px; }
+    .plan-form input, .plan-form textarea, .plan-form select { width: 100%; padding: 7px 8px; border: 1px solid #30445a; border-radius: 5px; color: #dce6f0; background: #0c1520; font: inherit; font-size: 12px; }
+    .plan-form textarea { min-height: 74px; resize: vertical; }
+    .plan-form select[multiple] { min-height: 120px; }
+    .form-error { color: #ffaaa3; font-size: 11px; }
+    .change-list { display: grid; gap: 4px; }
+    .change-button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 1px solid #29394a; border-radius: 5px; color: #cbd7e5; background: #111c28; text-align: left; cursor: pointer; font-size: 11px; }
+    .change-button:hover { border-color: #5a83a7; }
+    .change-kind { color: #ffbc70; font-weight: 700; }
+    .diff-view { max-height: 360px; overflow: auto; padding: 9px; border: 1px solid #29394a; border-radius: 5px; background: #09111a; color: #b9c7d6; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+    .diff-view .added { color: #9bd6a0; }
+    .diff-view .removed { color: #f19c99; }
+    .diff-view .hunk { color: #8cc7ee; }
+    .diff-heading { text-transform: none; overflow-wrap: anywhere; }
+    @media (max-width: 980px) { .workspace { grid-template-columns: minmax(0, 1fr) 285px; } .brand { min-width: 225px; } .topbar { gap: 12px; padding: 0 14px; } .module-filter { max-width: 135px; } }
+    @media (max-width: 720px) { .app { min-width: 0; grid-template-rows: auto minmax(0, 1fr); } .topbar { flex-wrap: wrap; padding: 10px 12px; } .brand { min-width: 100%; } .toolbar { flex-wrap: wrap; } .search-wrap { max-width: none; } .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 240px; } .inspector { border-top: 1px solid #263445; border-left: 0; } .inspector-head { padding: 12px 14px; } .inspector-body { padding: 10px 14px; } .section-title, .facts { margin-top: 12px; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">⌘</span><div><h1>{{PROJECT}}</h1><p>项目结构地图</p></div></div>
+      <div class="toolbar">
+        <label class="search-wrap"><span>⌕</span><input id="search" class="search" type="search" placeholder="搜索文件、路径或说明…" autocomplete="off"></label>
+        <select id="module-filter" class="module-filter" aria-label="按模块定位"><option value="">所有模块</option>{{MODULE_OPTIONS}}</select>
+        <select id="status-filter" class="module-filter" aria-label="按规划状态筛选"><option value="">所有状态</option><option value="todo">待办</option><option value="in-progress">进行中</option><option value="done">完成</option><option value="blocked">阻塞</option></select>
+        <select id="tag-filter" class="module-filter" aria-label="按标签筛选"><option value="">所有标签</option></select>
+        <button id="changes-toggle" class="tool-button" type="button">工作区改动</button>
+        <button id="expand-one" class="tool-button" type="button">展开一层</button>
+        <button id="collapse-all" class="tool-button" type="button">全部折叠</button>
+        <button id="fit" class="tool-button" type="button">适配画布</button>
+      </div>
+    </header>
+    <main class="workspace">
+      <section id="stage" class="stage" aria-label="可交互项目结构树">
+        <svg id="graph" role="img" aria-label="项目文件结构关系图"><g id="viewport"></g></svg>
+        <div id="status" class="status">{{DIRECTORIES}} 个目录 · {{FILES}} 个文件</div>
+        <div id="empty" class="empty-state">没有找到匹配的文件或目录</div>
+        <div class="stage-hint">拖动画布 · 滚轮缩放 · 点击节点说明 · 点击 › 展开</div>
+        <div class="zoom-controls"><button id="zoom-out" aria-label="缩小" type="button">−</button><span id="zoom-value">100%</span><button id="zoom-in" aria-label="放大" type="button">+</button><button id="fit-small" aria-label="适配画布" type="button">⛶</button></div>
+      </section>
+      <aside class="inspector" aria-live="polite">
+        <div class="inspector-head"><div id="inspector-icon" class="inspector-icon">▰</div><div class="inspector-title"><h2 id="inspector-name">项目</h2><p id="inspector-path">.</p></div></div>
+        <div id="inspector-body" class="inspector-body"></div>
+      </aside>
+    </main>
+  </div>
+  <script id="tree-data" type="application/json">{{TREE_JSON}}</script>
+  <script id="tree-api" type="application/json">{{API_BASE}}</script>
+  <script>
+    const data = JSON.parse(document.getElementById('tree-data').textContent)
+    const apiBase = JSON.parse(document.getElementById('tree-api').textContent)
+    const graph = document.getElementById('graph')
+    const viewport = document.getElementById('viewport')
+    const stage = document.getElementById('stage')
+    const searchInput = document.getElementById('search')
+    const moduleFilter = document.getElementById('module-filter')
+    const statusFilter = document.getElementById('status-filter')
+    const tagFilter = document.getElementById('tag-filter')
+    const status = document.getElementById('status')
+    const empty = document.getElementById('empty')
+    const inspectorName = document.getElementById('inspector-name')
+    const inspectorPath = document.getElementById('inspector-path')
+    const inspectorIcon = document.getElementById('inspector-icon')
+    const inspectorBody = document.getElementById('inspector-body')
+    let annotations = { version: 1, cards: [] }
+    let changes = []
+    let showOnlyChanges = false
+    let currentDiffPath = null
+    let saveInProgress = false
+    const expanded = new Set([''])
+    const nodesByPath = new Map()
+    let selectedPath = ''
+    let focusedPath = null
+    let searchResults = []
+    let searchIndex = 0
+    let scale = 1
+    let panX = 0
+    let panY = 0
+    let layoutSize = { width: 800, height: 600 }
+    let pointerStart = null
+    const cardWidth = 220
+    const cardHeight = 38
+    const columnGap = 300
+    let rowGap = 72
+
+    function indexNodes(node) {
+      nodesByPath.set(node.path, node)
+      for (const child of node.children) indexNodes(child)
+    }
+    indexNodes(data)
+
+    function changesForNode(path) {
+      if (!path || path === '@root-files') return changes
+      return changes.filter((change) => change.path === path || change.path.startsWith(path + '/') || change.oldPath === path || change.oldPath?.startsWith(path + '/'))
+    }
+
+    function cardsForNode(path) {
+      const linked = annotations.cards.filter((card) => card.nodePaths.includes(path))
+      if (path === '') {
+        const stale = annotations.cards.filter((card) => card.nodePaths.some((nodePath) => !nodesByPath.has(nodePath)))
+        return [...new Map([...linked, ...stale].map((card) => [card.id, card])).values()]
+      }
+      return linked
+    }
+
+    function hasMatchingCard(node) {
+      const state = statusFilter.value
+      const tag = tagFilter.value
+      if (!state && !tag) return true
+      const paths = new Set([node.path])
+      function collect(child) { paths.add(child.path); for (const grandchild of child.children) collect(grandchild) }
+      for (const child of node.children) collect(child)
+      if (node.path === '') for (const card of annotations.cards) for (const path of card.nodePaths) if (!nodesByPath.has(path)) paths.add(path)
+      return annotations.cards.some((card) => card.nodePaths.some((path) => paths.has(path)) && (!state || card.status === state) && (!tag || card.tags.includes(tag)))
+    }
+
+    async function apiRequest(path, options = {}) {
+      const response = await fetch(apiBase + path, { ...options, headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers } })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error || `请求失败 (${response.status})`)
+      return payload
+    }
+
+    function refreshTagFilter() {
+      const selected = tagFilter.value
+      const tags = [...new Set(annotations.cards.flatMap((card) => card.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      tagFilter.replaceChildren(new Option('所有标签', ''), ...tags.map((tag) => new Option(tag, tag)))
+      if (tags.includes(selected)) tagFilter.value = selected
+    }
+
+    async function loadWorkspaceState() {
+      if (!apiBase) return
+      try {
+        const [saved, gitState] = await Promise.all([apiRequest('/annotations'), apiRequest('/git/changes')])
+        annotations = saved
+        changes = gitState.changes
+        refreshTagFilter()
+        renderGraph()
+        updateInspector(nodesByPath.get(selectedPath) || data)
+        status.textContent = `${changes.length} 个工作区改动 · ${annotations.cards.length} 张规划卡`
+      }
+      catch (error) {
+        status.textContent = `本机数据读取失败：${error.message}`
+      }
+    }
+
+    async function persistAnnotations(next) {
+      if (saveInProgress) return
+      saveInProgress = true
+      try {
+        annotations = await apiRequest('/annotations', { method: 'PUT', body: JSON.stringify(next) })
+        refreshTagFilter()
+        renderGraph()
+        updateInspector(nodesByPath.get(selectedPath) || data)
+      }
+      finally { saveInProgress = false }
+    }
+
+    function descendants(node) {
+      let dirs = 0
+      let files = 0
+      for (const child of node.children) {
+        if (child.kind === 'directory') dirs++
+        else files++
+      }
+      return { dirs, files }
+    }
+
+    function nodeColor(node) { return node.module.color || '#9aa9ba' }
+    function isInFocus(path) {
+      if (!focusedPath) return true
+      if (path === '@root-files') return nodesByPath.get(path)?.children.some((child) => child.path === focusedPath || focusedPath.startsWith(child.path + '/')) ?? false
+      return path === focusedPath || path.startsWith(focusedPath + '/') || focusedPath.startsWith(path + '/')
+    }
+
+    function visibleChildren(node) {
+      if (!expanded.has(node.path)) return []
+      return node.children.filter((child) => isInFocus(child.path) && isVisibleByFilters(child))
+    }
+
+    function isVisibleByFilters(node) {
+      const changed = changesForNode(node.path).length > 0
+      if (showOnlyChanges && !changed) return false
+      if (!hasMatchingCard(node)) return false
+      if (!searchInput.value.trim() && !moduleFilter.value) return true
+      return true
+    }
+
+    function layoutTree() {
+      const positions = []
+      let cursorY = 48
+      let maxDepth = 0
+      function leafCount(node) {
+        const children = visibleChildren(node)
+        return children.length ? children.reduce((sum, child) => sum + leafCount(child), 0) : 1
+      }
+      rowGap = Math.max(40, Math.min(72, (stage.clientHeight - 120) / Math.max(leafCount(data), 1)))
+      function place(node, depth, parent) {
+        const children = visibleChildren(node)
+        const childPositions = children.map((child) => place(child, depth + 1, node))
+        let y
+        if (childPositions.length) y = childPositions.reduce((total, item) => total + item.y, 0) / childPositions.length
+        else { y = cursorY; cursorY += rowGap }
+        const position = { node, parent, depth, x: 42 + depth * columnGap, y }
+        maxDepth = Math.max(maxDepth, depth)
+        positions.push(position)
+        return position
+      }
+      place(data, 0, null)
+      return { positions, width: 42 + maxDepth * columnGap + cardWidth + 48, height: Math.max(cursorY, 112) }
+    }
+
+    function svgElement(name, attributes = {}) {
+      const element = document.createElementNS('http://www.w3.org/2000/svg', name)
+      for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value))
+      return element
+    }
+
+    function selectNode(node) {
+      selectedPath = node.path
+      updateInspector(node)
+      viewport.querySelectorAll('.node').forEach((element) => element.classList.toggle('selected', element.dataset.path === selectedPath))
+    }
+
+    function toggleNode(node) {
+      if (!node.children.length) return
+      if (expanded.has(node.path)) expanded.delete(node.path)
+      else expanded.add(node.path)
+      renderGraph()
+      selectNode(node)
+    }
+
+    function appendEdge(parent, child, parentPosition, childPosition) {
+      const startX = parentPosition.x + cardWidth
+      const endX = childPosition.x
+      const middleX = startX + (endX - startX) * .52
+      const edge = svgElement('path', {
+        class: 'edge',
+        d: `M ${startX} ${parentPosition.y} C ${middleX} ${parentPosition.y}, ${middleX} ${childPosition.y}, ${endX} ${childPosition.y}`,
+        stroke: nodeColor(child),
+      })
+      viewport.append(edge)
+    }
+
+    let layout = { positions: [], width: 800, height: 600 }
+    function applyTransform() {
+      viewport.setAttribute('transform', `translate(${panX} ${panY}) scale(${scale})`)
+      document.getElementById('zoom-value').textContent = Math.round(scale * 100) + '%'
+    }
+
+    function renderGraph() {
+      layout = layoutTree()
+      layoutSize = { width: layout.width, height: layout.height }
+      const size = stage.getBoundingClientRect()
+      graph.setAttribute('viewBox', `0 0 ${Math.max(size.width, 1)} ${Math.max(size.height, 1)}`)
+      viewport.replaceChildren()
+      const ordered = [...layout.positions].sort((a, b) => a.depth - b.depth)
+      for (const position of ordered) if (position.parent) appendEdge(position.parent, position.node, layout.positions.find((item) => item.node === position.parent), position)
+      for (const position of ordered) appendNodeOnly(position)
+      empty.classList.toggle('visible', layout.positions.length === 0)
+      const focused = focusedPath ? ' · 定位：' + focusedPath : ''
+      status.textContent = `${layout.positions.length} 个节点${focused}`
+      applyTransform()
+    }
+
+    function appendNodeOnly(position) {
+      const { node, x, y } = position
+      const color = nodeColor(node)
+      const linkedCards = cardsForNode(node.path)
+      const changedCount = changesForNode(node.path).length
+      const group = svgElement('g', { class: 'node' + (node.path === selectedPath ? ' selected' : '') + (linkedCards.length ? ' annotated' : '') + (changedCount ? ' has-change' : ''), transform: `translate(${x} ${y})`, 'data-path': node.path, tabindex: 0, role: 'button', 'aria-label': node.path || data.name })
+      const title = svgElement('title'); title.textContent = node.path || data.name; group.append(title)
+      group.append(svgElement('rect', { class: 'node-card' + (linkedCards.length ? ' node-annotated' : ''), x: 0, y: -cardHeight / 2, width: cardWidth, height: cardHeight, rx: 10, stroke: color }))
+      group.append(svgElement('circle', { cx: 15, cy: 0, r: 4, fill: color }))
+      const icon = svgElement('text', { class: 'node-icon', x: 28, y: 5, fill: color }); icon.textContent = node.kind === 'directory' ? '▰' : '·'; group.append(icon)
+      const label = svgElement('text', { class: 'node-name', x: 48, y: -2 }); label.textContent = node.name || data.name; group.append(label)
+      const sublabel = svgElement('text', { class: 'node-path', x: 48, y: 13 }); sublabel.textContent = node.path || '项目根目录'; group.append(sublabel)
+      if (changedCount) {
+        const changed = svgElement('text', { class: 'node-change', x: 186, y: -8, 'text-anchor': 'end' }); changed.textContent = `Δ${changedCount}`; group.append(changed)
+      }
+      if (linkedCards.length) {
+        const stateColor = { todo: '#7ea8d1', 'in-progress': '#e5bf65', done: '#81c995', blocked: '#ec8e89' }
+        const marker = svgElement('circle', { cx: 204, cy: -8, r: 3.5, fill: stateColor[linkedCards[0].status] || '#e5bf65' })
+        const markerTitle = svgElement('title'); markerTitle.textContent = `${linkedCards.length} 张规划卡`; marker.append(markerTitle); group.append(marker)
+      }
+      if (node.kind === 'directory') {
+        const count = svgElement('text', { class: 'node-count', x: 194, y: 4, 'text-anchor': 'end' }); count.textContent = String(node.children.length); group.append(count)
+        if (node.children.length) {
+          const toggle = svgElement('text', { class: 'node-toggle', x: 207, y: 5, 'text-anchor': 'middle' })
+          toggle.textContent = expanded.has(node.path) ? '⌄' : '›'
+          toggle.addEventListener('click', (event) => { event.stopPropagation(); toggleNode(node) })
+          group.append(toggle)
+        }
+      }
+      group.addEventListener('click', () => selectNode(node))
+      group.addEventListener('dblclick', (event) => { event.stopPropagation(); toggleNode(node) })
+      group.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectNode(node) }
+        if (event.key === 'ArrowRight' && node.children.length) { event.preventDefault(); expanded.add(node.path); renderGraph(); selectNode(node) }
+        if (event.key === 'ArrowLeft') { event.preventDefault(); expanded.delete(node.path); renderGraph(); selectNode(node) }
+      })
+      viewport.append(group)
+    }
+
+    function fitCanvas() {
+      const rect = stage.getBoundingClientRect()
+      const pad = 54
+      scale = Math.max(.18, Math.min(1.2, (rect.width - pad * 2) / layoutSize.width, (rect.height - pad * 2) / layoutSize.height))
+      panX = (rect.width - layoutSize.width * scale) / 2 - 42 * scale
+      panY = (rect.height - layoutSize.height * scale) / 2 - 24 * scale
+      applyTransform()
+    }
+
+    function updateInspector(node) {
+      inspectorName.textContent = node.name || data.name
+      inspectorPath.textContent = node.path || '.'
+      inspectorIcon.textContent = node.kind === 'directory' ? '▰' : '·'
+      inspectorIcon.style.color = nodeColor(node)
+      inspectorBody.replaceChildren()
+      const module = document.createElement('div'); module.className = 'module-name'
+      const dot = document.createElement('span'); dot.className = 'module-dot'; dot.style.backgroundColor = nodeColor(node)
+      const label = document.createElement('span'); label.textContent = node.module.label
+      module.append(dot, label); inspectorBody.append(module)
+      const descriptionTitle = document.createElement('h3'); descriptionTitle.className = 'section-title'; descriptionTitle.textContent = '职责说明'; inspectorBody.append(descriptionTitle)
+      const description = document.createElement('p'); description.className = 'description'; description.textContent = node.description; inspectorBody.append(description)
+      const facts = document.createElement('dl'); facts.className = 'facts'
+      const entries = [['类型', node.kind === 'directory' ? '目录' : '文件'], ['直接子项', node.kind === 'directory' ? `${node.children.length} 项` : '—']]
+      for (const [term, value] of entries) { const dt = document.createElement('dt'); dt.textContent = term; const dd = document.createElement('dd'); dd.textContent = value; facts.append(dt, dd) }
+      inspectorBody.append(facts)
+      if (node.children.length) {
+        const title = document.createElement('h3'); title.className = 'section-title'; title.textContent = `子项预览（${node.children.length}）`; inspectorBody.append(title)
+        const list = document.createElement('div'); list.className = 'children'
+        for (const child of node.children.slice(0, 24)) {
+          const button = document.createElement('button'); button.className = 'child-button'; button.type = 'button'
+          const icon = document.createElement('span'); icon.className = 'child-icon'; icon.style.setProperty('--child-tone', nodeColor(child)); icon.textContent = child.kind === 'directory' ? '▰' : '·'
+          const name = document.createElement('span'); name.className = 'child-name'; name.textContent = child.name
+          const count = document.createElement('span'); count.className = 'child-count'; count.textContent = child.kind === 'directory' ? String(child.children.length) : ''
+          button.append(icon, name, count)
+          button.addEventListener('click', () => { if (child.kind === 'directory') expanded.add(node.path); renderGraph(); selectNode(child) })
+          list.append(button)
+        }
+        inspectorBody.append(list)
+      }
+      appendPlannerSection(node)
+      if (apiBase) appendChangesSection(node)
+    }
+
+    function section(titleText, count) {
+      const heading = document.createElement('h3')
+      heading.className = 'section-title'
+      heading.textContent = `${titleText}${count === undefined ? '' : `（${count}）`}`
+      inspectorBody.append(heading)
+      return heading
+    }
+
+    function button(label, handler, extraClass = '') {
+      const element = document.createElement('button')
+      element.type = 'button'
+      element.className = `small-button${extraClass ? ` ${extraClass}` : ''}`
+      element.textContent = label
+      element.addEventListener('click', handler)
+      return element
+    }
+
+    function appendPlannerSection(node) {
+      if (!apiBase) return
+      const cards = cardsForNode(node.path)
+      section('规划卡', cards.length)
+      const add = button('＋ 新增规划卡', () => appendPlanForm(node))
+      inspectorBody.append(add)
+      const list = document.createElement('div')
+      list.className = 'card-list'
+      for (const card of cards) {
+        const article = document.createElement('article')
+        article.className = 'plan-card'
+        const head = document.createElement('div'); head.className = 'plan-card-head'
+        const title = document.createElement('div'); title.className = 'plan-card-title'; title.textContent = card.title
+        const statusLabel = document.createElement('span'); statusLabel.className = 'plan-card-status'; statusLabel.textContent = statusNames[card.status]
+        head.append(title, statusLabel); article.append(head)
+        const paths = document.createElement('p'); paths.className = 'plan-card-instruction'; paths.textContent = card.instruction || '尚未填写开发指令。'; article.append(paths)
+        const cardChanges = [...new Map(card.nodePaths.flatMap((path) => changesForNode(path)).map((change) => [change.path, change])).values()]
+        const summary = document.createElement('p'); summary.className = 'plan-card-summary'; summary.textContent = `关联 ${card.nodePaths.length} 个节点 · ${cardChanges.length} 个文件有改动`; article.append(summary)
+        const linked = document.createElement('div'); linked.className = 'plan-card-paths'
+        for (const nodePath of card.nodePaths) {
+          const row = document.createElement('div'); row.className = 'plan-card-path'
+          const name = document.createElement('span'); name.textContent = nodePath || '项目根目录'
+          const count = changesForNode(nodePath).length
+          const missing = !nodesByPath.has(nodePath)
+          const state = document.createElement('span'); state.className = count || missing ? 'plan-card-change' : 'plan-card-clean'; state.textContent = missing ? '路径已不存在' : count ? `${count} 项改动` : '无改动'
+          row.append(name, state); linked.append(row)
+        }
+        article.append(linked)
+        const tags = document.createElement('div'); tags.className = 'tag-list'
+        for (const tagText of card.tags) { const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = tagText; tags.append(tag) }
+        if (card.tags.length) article.append(tags)
+        const actions = document.createElement('div'); actions.className = 'card-actions'
+        actions.append(button('编辑', () => appendPlanForm(node, card)))
+        actions.append(button('删除', async () => {
+          if (!window.confirm(`删除规划卡「${card.title}」？`)) return
+          try { await persistAnnotations({ version: 1, cards: annotations.cards.filter((item) => item.id !== card.id) }) }
+          catch (error) { window.alert(`删除失败：${error.message}`) }
+        }, 'danger'))
+        article.append(actions)
+        list.append(article)
+      }
+      inspectorBody.append(list)
+    }
+
+    const statusNames = { todo: '待办', 'in-progress': '进行中', done: '完成', blocked: '阻塞' }
+    function appendPlanForm(node, existing) {
+      inspectorBody.querySelector('.plan-form')?.remove()
+      const form = document.createElement('form'); form.className = 'plan-form'
+      const titleLabel = document.createElement('label'); titleLabel.textContent = '卡片标题'
+      const titleInput = document.createElement('input'); titleInput.required = true; titleInput.maxLength = 160; titleInput.value = existing?.title || ''; titleLabel.append(titleInput)
+      const instructionLabel = document.createElement('label'); instructionLabel.textContent = '开发指令与验收说明'
+      const instructionInput = document.createElement('textarea'); instructionInput.maxLength = 10000; instructionInput.value = existing?.instruction || ''; instructionLabel.append(instructionInput)
+      const statusLabel = document.createElement('label'); statusLabel.textContent = '推进状态'
+      const statusInput = document.createElement('select')
+      for (const [value, label] of Object.entries(statusNames)) statusInput.add(new Option(label, value))
+      statusInput.value = existing?.status || 'todo'; statusLabel.append(statusInput)
+      const tagsLabel = document.createElement('label'); tagsLabel.textContent = '标签（用逗号分隔）'
+      const tagsInput = document.createElement('input'); tagsInput.placeholder = '例如：重构, API'; tagsInput.value = existing?.tags.join(', ') || ''; tagsLabel.append(tagsInput)
+      const nodesLabel = document.createElement('label'); nodesLabel.textContent = '关联节点（可多选，按住 Ctrl / ⌘）'
+      const nodeSearch = document.createElement('input'); nodeSearch.placeholder = '搜索文件或模块'; nodesLabel.append(nodeSearch)
+      const nodeSelect = document.createElement('select'); nodeSelect.multiple = true; nodeSelect.setAttribute('aria-label', '关联项目节点')
+      const allNodes = [...nodesByPath.values()].filter((item) => item.path !== '@root-files')
+      for (const item of allNodes) {
+        const option = new Option(item.path || data.name, item.path)
+        option.selected = existing ? existing.nodePaths.includes(item.path) : item.path === node.path
+        nodeSelect.add(option)
+      }
+      nodeSearch.addEventListener('input', () => {
+        const query = nodeSearch.value.trim().toLocaleLowerCase('zh-CN')
+        for (const option of nodeSelect.options) option.hidden = !!query && !option.text.toLocaleLowerCase('zh-CN').includes(query)
+      })
+      nodesLabel.append(nodeSelect)
+      const error = document.createElement('div'); error.className = 'form-error'; error.setAttribute('role', 'alert')
+      const actions = document.createElement('div'); actions.className = 'card-actions'
+      const save = document.createElement('button'); save.type = 'submit'; save.className = 'small-button'; save.textContent = '保存规划卡'
+      actions.append(save, button('取消', () => form.remove()))
+      form.append(titleLabel, instructionLabel, statusLabel, tagsLabel, nodesLabel, error, actions)
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault()
+        const now = new Date().toISOString()
+        const card = {
+          id: existing?.id || crypto.randomUUID(),
+          title: titleInput.value.trim(),
+          instruction: instructionInput.value,
+          status: statusInput.value,
+          tags: [...new Set(tagsInput.value.split(',').map((item) => item.trim()).filter(Boolean))],
+          nodePaths: [...nodeSelect.selectedOptions].map((option) => option.value),
+          createdAt: existing?.createdAt || now,
+          updatedAt: now,
+        }
+        const next = existing ? annotations.cards.map((item) => item.id === card.id ? card : item) : [...annotations.cards, card]
+        save.disabled = true
+        try { await persistAnnotations({ version: 1, cards: next }) }
+        catch (failure) { error.textContent = failure.message; save.disabled = false }
+      })
+      inspectorBody.append(form)
+      titleInput.focus()
+    }
+
+    function appendChangesSection(node) {
+      const related = changesForNode(node.path)
+      section('工作区改动', related.length)
+      if (!related.length) {
+        const emptyLabel = document.createElement('p'); emptyLabel.className = 'description'; emptyLabel.textContent = '这个节点当前没有工作区改动。'; inspectorBody.append(emptyLabel)
+        return
+      }
+      const list = document.createElement('div'); list.className = 'change-list'
+      for (const change of related.slice(0, 60)) {
+        const item = document.createElement('button'); item.type = 'button'; item.className = 'change-button'
+        const kind = document.createElement('span'); kind.className = 'change-kind'; kind.textContent = change.code.trim() || change.kind
+        const path = document.createElement('span'); path.textContent = change.path
+        item.append(kind, path)
+        item.addEventListener('click', () => showDiff(change.path))
+        list.append(item)
+      }
+      inspectorBody.append(list)
+      if (related.length > 60) { const note = document.createElement('p'); note.className = 'description'; note.textContent = `还有 ${related.length - 60} 个文件未列出。`; inspectorBody.append(note) }
+      if (currentDiffPath && related.some((item) => item.path === currentDiffPath)) renderDiff(currentDiffPath, inspectorBody)
+    }
+
+    async function showDiff(path) {
+      currentDiffPath = path
+      try {
+        const diff = await apiRequest(`/git/diff?path=${encodeURIComponent(path)}`)
+        const prior = inspectorBody.querySelector('.diff-view')?.parentElement
+        prior?.remove()
+        renderDiff(path, inspectorBody, diff)
+      }
+      catch (error) { window.alert(`读取差异失败：${error.message}`) }
+    }
+
+    function renderDiff(path, parent, value) {
+      if (value === undefined) {
+        apiRequest(`/git/diff?path=${encodeURIComponent(path)}`).then((diff) => renderDiff(path, parent, diff)).catch((error) => { window.alert(`读取差异失败：${error.message}`) })
+        return
+      }
+      const wrapper = document.createElement('div')
+      const heading = document.createElement('h3'); heading.className = 'section-title diff-heading'; heading.textContent = `差异：${path}`; wrapper.append(heading)
+      const pre = document.createElement('pre'); pre.className = 'diff-view'; pre.setAttribute('aria-label', '统一格式文件差异')
+      for (const line of value.text.split('\n')) {
+        const span = document.createElement('span')
+        span.className = line.startsWith('+') && !line.startsWith('+++') ? 'added' : line.startsWith('-') && !line.startsWith('---') ? 'removed' : line.startsWith('@@') ? 'hunk' : ''
+        span.textContent = line + '\n'; pre.append(span)
+      }
+      wrapper.append(pre)
+      parent.append(wrapper)
+    }
+
+    function ancestors(path) {
+      const parts = path.split('/').filter(Boolean)
+      const result = ['']
+      let current = ''
+      for (const part of parts) { current = current ? current + '/' + part : part; result.push(current) }
+      return result
+    }
+
+    function fitSearchPath(path) {
+      const target = layout.positions.find((item) => item.node.path === path)
+      if (!target) return
+      const pathSet = new Set(ancestors(path))
+      if (nodesByPath.get('@root-files')?.children.some((child) => child.path === path)) pathSet.add('@root-files')
+      const chain = layout.positions.filter((item) => pathSet.has(item.node.path))
+      const left = Math.min(...chain.map((item) => item.x))
+      const right = Math.max(...chain.map((item) => item.x + cardWidth))
+      const chainWidth = right - left
+      scale = Math.min(scale, (stage.clientWidth - 80) / chainWidth)
+      panX = (stage.clientWidth - chainWidth * scale) / 2 - left * scale
+      panY = stage.clientHeight / 2 - target.y * scale
+      applyTransform()
+    }
+
+    function focusResult(index) {
+      if (!searchResults.length) return
+      searchIndex = (index + searchResults.length) % searchResults.length
+      const node = searchResults[searchIndex]
+      focusedPath = node.path
+      for (const path of ancestors(node.path).slice(0, -1)) expanded.add(path)
+      if (node.path !== '@root-files' && nodesByPath.get('@root-files')?.children.some((child) => child.path === node.path)) expanded.add('@root-files')
+      renderGraph()
+      fitSearchPath(node.path)
+      selectNode(node)
+      status.textContent = `${searchIndex + 1} / ${searchResults.length} 个匹配 · ${node.path || data.name}`
+    }
+
+    function runSearch() {
+      const query = searchInput.value.trim().toLocaleLowerCase('zh-CN')
+      const moduleId = moduleFilter.value
+      const hasCardFilter = statusFilter.value || tagFilter.value
+      if (!query && !moduleId && !hasCardFilter && !showOnlyChanges) {
+        focusedPath = null
+        searchResults = []
+        expanded.clear(); expanded.add('')
+        renderGraph()
+        selectNode(data)
+        return
+      }
+      const matches = []
+      function visit(node) {
+        const nodeCards = cardsForNode(node.path)
+        const text = `${node.name} ${node.path} ${node.description} ${nodeCards.map((card) => `${card.title} ${card.instruction} ${card.tags.join(' ')} ${card.nodePaths.join(' ')}`).join(' ')}`.toLocaleLowerCase('zh-CN')
+        if ((!query || text.includes(query)) && (!moduleId || node.module.id === moduleId) && hasMatchingCard(node) && (!showOnlyChanges || changesForNode(node.path).length)) matches.push(node)
+        for (const child of node.children) visit(child)
+      }
+      visit(data)
+      searchResults = matches
+      if (!matches.length) { focusedPath = null; renderGraph(); empty.classList.add('visible'); status.textContent = '没有匹配结果'; return }
+      focusResult(0)
+    }
+
+    function zoomAt(nextScale, x = stage.clientWidth / 2, y = stage.clientHeight / 2) {
+      const next = Math.max(.15, Math.min(2, nextScale))
+      const ratio = next / scale
+      panX = x - (x - panX) * ratio
+      panY = y - (y - panY) * ratio
+      scale = next
+      applyTransform()
+    }
+
+    document.getElementById('expand-one').addEventListener('click', () => {
+      for (const position of layout.positions) if (position.node.kind === 'directory' && position.node.children.length) expanded.add(position.node.path)
+      renderGraph(); fitCanvas()
+    })
+    document.getElementById('collapse-all').addEventListener('click', () => { expanded.clear(); focusedPath = null; renderGraph(); fitCanvas() })
+    document.getElementById('fit').addEventListener('click', fitCanvas)
+    document.getElementById('fit-small').addEventListener('click', fitCanvas)
+    document.getElementById('zoom-in').addEventListener('click', () => zoomAt(scale * 1.2))
+    document.getElementById('zoom-out').addEventListener('click', () => zoomAt(scale / 1.2))
+    searchInput.addEventListener('input', runSearch)
+    searchInput.addEventListener('keydown', (event) => { if (event.key === 'Enter' && searchResults.length) focusResult(searchIndex + 1); if (event.key === 'Escape') { searchInput.value = ''; runSearch() } })
+    moduleFilter.addEventListener('change', runSearch)
+    statusFilter.addEventListener('change', runSearch)
+    tagFilter.addEventListener('change', runSearch)
+    document.getElementById('changes-toggle').addEventListener('click', (event) => {
+      showOnlyChanges = !showOnlyChanges
+      event.currentTarget.textContent = showOnlyChanges ? '显示全部文件' : '工作区改动'
+      runSearch()
+    })
+    graph.addEventListener('wheel', (event) => { event.preventDefault(); zoomAt(scale * (event.deltaY < 0 ? 1.08 : .92), event.offsetX, event.offsetY) }, { passive: false })
+    graph.addEventListener('pointerdown', (event) => { if (event.target.closest('.node')) return; pointerStart = { x: event.clientX, y: event.clientY, panX, panY }; graph.classList.add('dragging'); graph.setPointerCapture(event.pointerId) })
+    graph.addEventListener('pointermove', (event) => { if (!pointerStart) return; panX = pointerStart.panX + event.clientX - pointerStart.x; panY = pointerStart.panY + event.clientY - pointerStart.y; applyTransform() })
+    graph.addEventListener('pointerup', () => { pointerStart = null; graph.classList.remove('dragging') })
+    window.addEventListener('resize', () => { renderGraph(); fitCanvas() })
+
+    renderGraph()
+    selectNode(data)
+    requestAnimationFrame(fitCanvas)
+    if (!apiBase) {
+      statusFilter.hidden = true
+      tagFilter.hidden = true
+      document.getElementById('changes-toggle').hidden = true
+    }
+    loadWorkspaceState()
+  </script>
+</body>
+</html>

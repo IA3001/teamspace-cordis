@@ -1,5 +1,7 @@
 # 产品改进：先做能当天落地的小步
 
+当前产品行为的 Gherkin 场景索引见 [Teamspace Gherkin 验收场景](../acceptance/gherkin/README.md)。
+
 竞品调研见 [调研结论](../research/product-benchmark-2026-10-15/README.md)。当前按小切片改真实页面，不先建设完整任务、版本和验收系统。
 
 ## 已落地

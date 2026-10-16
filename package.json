@@ -1,5 +1,6 @@
 {
   "name": "teamspace-cordis",
+  "license": "Apache-2.0",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -92,6 +93,10 @@
     "gate:docs": "node scripts/ci.mjs docs",
     "verify:docs": "node scripts/dev/documents.mjs check",
     "docs:generate": "node scripts/dev/documents.mjs generate",
+    "tree:html": "node scripts/project-tree-html.mjs",
+    "tree:dev": "node scripts/project-tree-server.mjs",
+    "verify:project-tree-html": "node scripts/verify-project-tree-html.mjs && node scripts/record-action.mjs verify-project-tree-html",
+    "verify:project-tree-workbench": "node scripts/verify-project-tree-html.mjs && node scripts/verify-project-tree-workbench.mjs && node scripts/record-action.mjs verify-project-tree-workbench",
     "verify:development": "node scripts/verify-development.mjs",
     "verify:engineering-consumers": "tsx scripts/verify-engineering-consumers.ts",
     "verify:compatibility": "node scripts/dev/compatibility.mjs",

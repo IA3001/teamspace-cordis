@@ -104,3 +104,43 @@ npm run verify:ui          # 浏览器交互验收；需要服务和可用 Chrom
 - [`docs/ROADMAP.md`](docs/ROADMAP.md)：阶段计划和前置条件
 
 CI 平台接入、变更预算与独立审批设置见 [CI 文档](docs/CI.md)。
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE)。
+
+## 交互式项目文件地图
+
+从仓库根目录运行：
+
+```bash
+npm run tree:html
+```
+
+生成的独立页面位于 `data/dev/project-tree.html`。页面以全屏画布展示可展开的层级关系图：可以拖动画布、缩放、搜索并定位模块；双击节点或使用键盘方向键展开层级，选中文件或目录可查看职责说明。生成器从 Git 文件清单自动更新层级，尊重 `.gitignore`，只读取路径和文件名，不读取源码内容，并额外排除 `.env`、数据库和运行数据。页面结构和交互模板位于 `scripts/project-tree-atlas.template.html`。
+
+需要在地图上记录开发意图、标签并查看 Git 改动时，启动本机交互服务：
+
+```bash
+npm run tree:dev
+```
+
+终端会显示本机地址。服务只绑定 `127.0.0.1`；选中文件或目录后可创建关联多个节点的规划卡，支持待办、进行中、完成、阻塞状态与自定义标签。卡片共享数据保存在 `scripts/project-tree.annotations.json`。地图按当前 HEAD 高亮工作区变动，支持查看统一格式 diff；页面不会执行 Git 写操作。按 `Ctrl+C` 停止服务。静态页面仍通过 `tree:html` 生成，不带本机编辑和 diff 功能。
+
+配色、模块匹配和职责说明集中在 [`scripts/project-tree.metadata.json`](scripts/project-tree.metadata.json)：新增普通文件会自动出现在树中；新增需要独立颜色/说明的模块时，只需在此配置中增加路径规则和描述，不用修改生成器逻辑。关键文件的专属解释放在 `fileDescriptions` 中；其他文件会根据文件名和所在层级生成通俗提示。不够准确时，也可按路径补一条专属说明。也可指定其他仓库根目录或输出位置：
+
+```bash
+node scripts/project-tree-html.mjs --root /path/to/repo --out /path/to/project-tree.html
+```
+
+验证生成器能自动发现新文件、读取模块元数据并排除本地运行数据：
+
+```bash
+npm run verify:project-tree-html
+```
+
+验证本机规划卡保存、路径校验和 Git 工作区差异读取：
+
+```bash
+npm run verify:project-tree-workbench
+```

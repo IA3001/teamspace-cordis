@@ -592,6 +592,23 @@
       "timeoutMs": 180000
     },
     {
+      "id": "static-42",
+      "script": "verify:project-tree-workbench",
+      "needs": [],
+      "resources": [],
+      "paths": [
+        "scripts/project-tree-html.mjs",
+        "scripts/project-tree-server.mjs",
+        "scripts/project-tree-atlas.template.html",
+        "scripts/project-tree.metadata.json",
+        "scripts/project-tree.annotations.json",
+        "scripts/verify-project-tree-html.mjs",
+        "scripts/verify-project-tree-workbench.mjs",
+        "package.json"
+      ],
+      "timeoutMs": 180000
+    },
+    {
       "id": "verify:docs",
       "script": "verify:docs",
       "needs": [],

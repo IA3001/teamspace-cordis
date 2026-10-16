@@ -806,6 +806,28 @@ console.log('== 断言区 ==')
   judge('AS1 Shift+Enter 恒换行(双路径)', ok, detail.join(' | '))
 }
 
+// G02: rejecting whitespace-only messages must explain why and preserve the draft.
+{
+  let ok = true; const detail = []
+  try {
+    await ta.fill('   ')
+    await page.getByRole('button', { name: '发送消息' }).click()
+    const emptyMessage = page.locator('.el-alert__title').filter({ hasText: '消息内容不能为空' })
+    await emptyMessage.waitFor({ timeout: 5000 })
+    const draftPreserved = await ta.inputValue() === '   '
+    const feedbackVisible = await emptyMessage.count() === 1
+    detail.push(`错误反馈可见=${feedbackVisible} 空白草稿保留=${draftPreserved}`)
+    ok &&= feedbackVisible && draftPreserved
+    await page.locator('.el-alert').filter({ has: emptyMessage }).locator('.el-alert__close-btn').click()
+    await emptyMessage.waitFor({ state: 'detached' })
+    await ta.fill('')
+  } catch (error) {
+    ok = false
+    detail.push(`异常=${String(error).slice(0, 120)}`)
+  }
+  judge('G02 纯空白消息拒绝并提示且保留草稿', ok, detail.join(' | '))
+}
+
 // AS2 时间线：消息行有稳定事件 ID，作者和时间元数据随消息可见。
 {
   let ok = true; const detail = []
@@ -1327,9 +1349,11 @@ console.log('== 断言区 ==')
         VALUES (?, 'UI 决策卡片验收', 'open', ?, ?)`).run(temporaryDecisionSession, now, now)
       db.prepare(`INSERT INTO session_members(session_id,principal_id,role,status,joined_at,left_at,duty)
         VALUES (?, ?, 'DRI', 'active', ?, NULL, ''), (?, 'a_analyst', '成员', 'active', ?, NULL, ''),
-          (?, 'agent.tester', '成员', 'active', ?, NULL, ''), (?, ?, '成员', 'active', ?, NULL, 'DRI 验收候选人')`)
+          (?, 'agent.tester', '成员', 'active', ?, NULL, ''), (?, ?, '成员', 'active', ?, NULL, 'DRI 验收候选人'),
+          (?, 'a_coordinator', '协调者', 'active', ?, NULL, '')`)
         .run(temporaryDecisionSession, user.user_id, now, temporaryDecisionSession, now,
-          temporaryDecisionSession, now, temporaryDecisionSession, temporaryDecisionUserId, now)
+          temporaryDecisionSession, now, temporaryDecisionSession, temporaryDecisionUserId, now,
+          temporaryDecisionSession, now)
       const addEvent = (id, seq, authorId, authorKind, kind, text, replyTo = null) =>
         db.prepare(`INSERT INTO events(id,session_id,seq,phase_id,ts,author_id,author_kind,kind,text,
           mentions,tool_calls,reply_mode,reply_to) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, '[]', '[]', '', ?)`)
@@ -1354,6 +1378,15 @@ console.log('== 断言区 ==')
     const viewerId = identityDb.prepare('SELECT user_id FROM login_tokens WHERE token=?').get(token)?.user_id
     identityDb.close()
     const membersPanelText = await page.locator('.sp-context-members').innerText()
+    const memberSection = page.locator('.sp-context-section').filter({ has: page.locator('.sp-context-members') })
+    const memberSectionCount = await memberSection.locator('.sp-context-section-count').innerText()
+    const rosterRows = page.locator('.sp-context-members .sp-context-member')
+    const rosterCount = await rosterRows.count()
+    const coordinatorRow = page.locator('.sp-context-member[title*="不可提及"]')
+    const completeRoster = memberSectionCount === '5' && rosterCount === 5 &&
+      await coordinatorRow.isDisabled() && membersPanelText.includes('协调者')
+    detail.push(`摘要与成员清单都包含不可提及的协调者（5/5）=${completeRoster}`)
+    ok &&= completeRoster
     const memberDriNotice = await page.locator('.sp-context-section .el-alert').first().innerText()
     const memberIdentityVisible = Boolean(viewerId) && membersPanelText.includes(viewerId) &&
       memberDriNotice.includes(`当前 DRI：`) && memberDriNotice.includes(viewerId) &&

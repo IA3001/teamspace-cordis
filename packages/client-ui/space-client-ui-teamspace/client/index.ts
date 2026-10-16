@@ -48,6 +48,7 @@ import {
 } from './progress.ts'
 import { groupActivityEvents } from './activity-groups.ts'
 import { decisionAccessGuidance, decisionPresentation } from './decision-presentation.ts'
+import { messageLengthNotice } from './message-validation.ts'
 
 interface SessionLite { id: string; title: string; status: string; updatedAt?: string }
 interface SessionWorkLite {
@@ -1326,9 +1327,11 @@ const TeamspacePage = defineComponent({
       preserveComposer = false,
     ): Promise<boolean> {
       if (!activeId.value) { showReply('请先选择或新建一个会议', false); return false }
-      // IM 化：空输入静默忽略（不再弹错误回执）。
-      if (!text.trim()) return false
+      // Keep the rejection visible and preserve the draft so the user can correct it.
+      if (!text.trim()) { showReply('消息内容不能为空', false); return false }
       if (sending.value || closed.value) return false
+      const lengthNotice = messageLengthNotice(text)
+      if (lengthNotice) { showReply(lengthNotice, false); return false }
       sending.value = true
       const mentions = explicitMentions ?? parseMentions()
       // 引用系统化（2026-10-02）：引用关系走 replyTo 结构化字段，消息正文不再拼前缀。
@@ -2680,7 +2683,7 @@ const TeamspacePage = defineComponent({
           : t?.state === 'static' && t.stopReason && t.stopReason !== 'completed'
             ? h('div', { class: 'sp-context-notice sp-context-notice--paused' }, userFacingPause(t.stopReason))
             : null,
-        contextSection('成员', `${mentionCandidates().length}`, mentionCandidates().length
+        contextSection('成员', `${members.value.length}`, members.value.length
           ? h('div', {}, [
               (() => {
                 const dri = members.value.find((member) => member.role === 'DRI')
@@ -2698,32 +2701,34 @@ const TeamspacePage = defineComponent({
                   closable: false,
                 })
               })(),
-              h('div', { class: 'sp-context-members' }, mentionCandidates().map((m) => {
-              const ag = agents.value.find((a) => a.id === m.principalId)
-              const human = humans.value.find((item) => item.id === m.principalId)
-              const name = ag?.title || human?.displayName || human?.username || m.duty?.trim() || m.role
-              const status = ag
-                ? ag.status === 'working' ? '工作中' : ag.status === 'done' ? '刚完成' : '空闲'
-                : m.role === '群主' ? '会议创建者' : m.role === 'DRI' ? '当前 DRI' : m.role === '成员' ? '团队成员' : m.role
-              const identityStatus = ag ? status : `${status} · ${m.principalId}`
-              return h(ElButton, {
-                key: m.principalId,
-                text: true,
-                class: 'sp-context-member',
-                title: `${name} · ${identityStatus} · 点击 @ 提及`,
-                onClick: () => { insertMention(m.principalId); inputEl.value?.focus() },
-              }, {
-                default: () => [
-                  h(ElAvatar, { size: 30, class: 'sp-context-avatar' }, { default: () => ag
-                    ? h(SvgIcon, { name: ag.iconId ?? DEFAULT_AGENT_ICON })
-                    : name.charAt(0) }),
-                  h('span', { class: 'sp-context-member-copy' }, [
-                    h('span', { class: 'sp-context-member-name' }, name),
-                    h('span', { class: 'sp-context-member-role' }, identityStatus),
-                  ]),
-                  h('span', { class: 'sp-context-mention-mark', 'aria-hidden': 'true' }, '@'),
-                ],
-              })
+              h('div', { class: 'sp-context-members' }, members.value.map((m) => {
+                const ag = agents.value.find((a) => a.id === m.principalId)
+                const human = humans.value.find((item) => item.id === m.principalId)
+                const name = ag?.title || human?.displayName || human?.username || m.duty?.trim() || m.role
+                const mentionable = MENTION_ROLES.has(m.role)
+                const status = ag
+                  ? ag.status === 'working' ? '工作中' : ag.status === 'done' ? '刚完成' : '空闲'
+                  : m.role === '群主' ? '会议创建者' : m.role === 'DRI' ? '当前 DRI' : m.role === '成员' ? '团队成员' : m.role
+                const identityStatus = ag ? status : `${status} · ${m.principalId}`
+                return h(ElButton, {
+                  key: m.principalId,
+                  text: true,
+                  disabled: !mentionable,
+                  class: 'sp-context-member',
+                  title: `${name} · ${identityStatus}${mentionable ? ' · 点击 @ 提及' : ' · 不可提及'}`,
+                  onClick: mentionable ? () => { insertMention(m.principalId); inputEl.value?.focus() } : undefined,
+                }, {
+                  default: () => [
+                    h(ElAvatar, { size: 30, class: 'sp-context-avatar' }, { default: () => ag
+                      ? h(SvgIcon, { name: ag.iconId ?? DEFAULT_AGENT_ICON })
+                      : name.charAt(0) }),
+                    h('span', { class: 'sp-context-member-copy' }, [
+                      h('span', { class: 'sp-context-member-name' }, name),
+                      h('span', { class: 'sp-context-member-role' }, identityStatus),
+                    ]),
+                    mentionable ? h('span', { class: 'sp-context-mention-mark', 'aria-hidden': 'true' }, '@') : null,
+                  ],
+                })
             }))
             ])
           : h('div', { class: 'sp-context-empty' }, '暂无可提及的会话成员')),
@@ -3016,6 +3021,7 @@ const TeamspacePage = defineComponent({
 
       // ── composer 悬浮卡片（贴底居中；已结束会话禁用）────────────────────
       const replySnapshot = replyTo.value
+      const lengthNotice = messageLengthNotice(draft.value)
       const composer = activeId.value ? h('div', [
         h('div', {
           class: CENTERED,
@@ -3073,6 +3079,13 @@ const TeamspacePage = defineComponent({
               type: 'textarea',
               placeholder: closed.value ? '会话已结束，不能继续发言' : '输入消息 · @提及成员',
             }),
+            lengthNotice ? h(ElAlert, {
+              key: 'message-length-warning',
+              title: lengthNotice,
+              type: 'warning',
+              showIcon: true,
+              closable: false,
+            }) : null,
             h(ElRow, { justify: 'space-between', align: 'middle' }, {
               default: () => [
                 // 文件消息入口：选文件 → 上传（20MB 上限）→ 成功后自动发文件消息。
@@ -3098,7 +3111,7 @@ const TeamspacePage = defineComponent({
                 ]),
                 h(ElButton, {
                   key: 'send-btn', class: 'sp-send-icon',
-                  type: 'primary', loading: sending.value, disabled: closed.value,
+                  type: 'primary', loading: sending.value, disabled: closed.value || !!lengthNotice,
                   'aria-label': '发送消息',
                   title: '发送（Enter）',
                   onClick: () => void sendText(draft.value),

@@ -2082,7 +2082,12 @@ judge('AS10 UI 验收账号退出 seed 演示会话', memberCleanupOk, memberCle
     const authErrors = []
     authPage.on('pageerror', (error) => authErrors.push(String(error).slice(0, 120)))
     await authPage.goto(`${teamspaceBase}/login`, { waitUntil: 'networkidle', timeout: 20000 })
+    await authPage.evaluate(() => localStorage.setItem('space_token', 'ui-verify-invalid-token'))
+    await authPage.reload({ waitUntil: 'networkidle', timeout: 20000 })
+    const expiredNotice = await authPage.getByText('之前的登录凭证已失效，请重新登录。').count() === 1
+    const staleTokenCleared = await authPage.evaluate(() => localStorage.getItem('space_token') === null)
     await authPage.locator('.sp-auth-card').waitFor({ timeout: 5000 })
+    detail.push(`无效 token 显示过期提示并清理本地凭证=${expiredNotice && staleTokenCleared}`)
     const loginLabels = await authPage.locator('label[for="login-username"], label[for="login-password"]').count() === 2
     const loginAutocomplete = await authPage.locator('#login-username').getAttribute('autocomplete') === 'username' &&
       await authPage.locator('#login-password').getAttribute('autocomplete') === 'current-password'
@@ -2095,7 +2100,7 @@ judge('AS10 UI 验收账号退出 seed 演示会话', memberCleanupOk, memberCle
     const mobileFit = width.document <= width.viewport
     detail.push(`登录字段关联可见标签=${loginLabels} | 自动填充语义=${loginAutocomplete}`)
     detail.push(`注册字段关联可见标签=${registerLabels} | 自动填充语义=${registerAutocomplete} | 窄屏无横向溢出=${mobileFit}（${width.document}/${width.viewport}px）`)
-    ok &&= loginLabels && loginAutocomplete && registerLabels && registerAutocomplete && mobileFit && authErrors.length === 0
+    ok &&= expiredNotice && staleTokenCleared && loginLabels && loginAutocomplete && registerLabels && registerAutocomplete && mobileFit && authErrors.length === 0
     await authPage.screenshot({ path: '/tmp/ui-auth-mobile.png' })
   } catch (error) {
     ok = false

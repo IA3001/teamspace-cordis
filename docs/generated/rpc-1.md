@@ -58,6 +58,8 @@
   `username: string, password: string, displayName: string`
 - [packages/client-ui/space-client-ui-auth/src/index.ts](../../packages/client-ui/space-client-ui-auth/src/index.ts)：`login`
   `username: string, password: string`
+- [packages/client-ui/space-client-ui-auth/src/index.ts](../../packages/client-ui/space-client-ui-auth/src/index.ts)：`me`
+  `token: string`
 - [packages/client-ui/space-client-ui-kb/src/index.ts](../../packages/client-ui/space-client-ui-kb/src/index.ts)：`docs`
   `token: string`
 - [packages/client-ui/space-client-ui-kb/src/index.ts](../../packages/client-ui/space-client-ui-kb/src/index.ts)：`folders`

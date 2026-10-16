@@ -465,7 +465,7 @@ async function partE(): Promise<void> {
     // Admin API settings are the preferred runtime source. With env empty, both
     // brain providers must still agree on one configured LLM and register only
     // brain-llm (the former env-only stub check caused duplicate_brain here).
-    {
+    await (async function verifySettingsConfiguration() {
       const configuredValues: Record<string, string> = {
         'llm.apiKey': 'settings-mock-key',
         'llm.baseURL': 'https://settings.mock/v1',
@@ -482,11 +482,11 @@ async function partE(): Promise<void> {
       brainApply(ctx)
       brainLlmApply(ctx)
       check('E0 后台 settings 配置（无 LLM_* env）只注册真模型大脑', brains.length === 1, `registered=${brains.length}`)
-    }
+    })()
 
     // E1 无 key → 大脑选择确定性：两脑都 apply（组合根顺序 stub 先），只有
     // stub 注册（让位日志在 5172 可见）；未命中 → 占位回复。
-    {
+    await (async function verifyNoKeyBrainSelection() {
       const tmp = mkdtempSync(join(tmpdir(), 'p8-llm-a-'))
       const db = memoryDb(true)
       const ctx = new Context()
@@ -515,12 +515,12 @@ async function partE(): Promise<void> {
         r1?.case === 'replied' && r1.reply.includes('【占位】'), JSON.stringify(r1))
       rmSync(tmp, { recursive: true, force: true })
       db.close()
-    }
+    })()
 
     setEnv()
 
     // E2/E3 有 key（mock base）→ brain-llm 上线；原始输出过三级兜底零改动。
-    {
+    await (async function verifyConfiguredBrainFallbacks() {
       const db = memoryDb(true)
       const ctx = new Context()
       new SqliteSessionStore(ctx, db)
@@ -558,7 +558,7 @@ async function partE(): Promise<void> {
       check('E3b LLM 调用失败 → coordinator_error 暂停（不猜不重试）',
         t3.state === 'static' && t3.stopReason === 'coordinator_error', JSON.stringify(t3))
       db.close()
-    }
+    })()
 
     // E4 perform 真模型模式：提示词取用 + artifact 落盘 + 回执诚实标注。
     {
@@ -586,9 +586,12 @@ async function partE(): Promise<void> {
       } })
       ctx.agents.get('agent.coder').descriptor.toolIds = ['web.search']
       mock.mode = 'ok-artifact'
+      let runtimeRoot = ''
+      await (async function verifyAgentReceiptAndStreamingProgress() {
       const r = await ctx.agentRuntime.perform('agent.coder', 'MOCK-实现登录页', {
         sessionId: 's_progress', sourceEventId: 'evt_progress',
       })
+      runtimeRoot = r.root
       check('E4a 回执诚实标注【真模型】+ model=mock-model、mode=llm（LLM_SABOTAGE=1 时此处红）',
         r.mode === 'llm' && r.receipt.includes('【真模型】') && r.receipt.includes('model=mock-model'),
         r.receipt)
@@ -612,7 +615,10 @@ async function partE(): Promise<void> {
         progressEvents.some((event) => event.phase === 'text-delta' && event.delta?.includes('MOCK-产物正文')) &&
           !progressEvents.some((event) => event.delta?.includes('MOCK-实现登录页')) &&
           ctx.eventLog.listBySession('s_progress').length === 0)
+      })()
+
       mock.mode = 'ok-tool'
+      await (async function verifyToolProgressSummaries() {
       const toolRun = await ctx.agentRuntime.perform('agent.coder', 'MOCK-运行搜索工具', {
         sessionId: 's_progress', sourceEventId: 'evt_tool_progress',
       })
@@ -626,10 +632,12 @@ async function partE(): Promise<void> {
           !toolProgress.some((event) => event.phase === 'text-delta' && event.delta?.includes('safe test query')),
         JSON.stringify({ resultCount: toolRun.toolResults?.length, hasToolInput, hasToolResult,
           worklog: toolRun.worklog?.filter((step) => step.kind === 'tool') }))
+      })()
 
       // Reproduce Teamspace's data-first creation path with a fresh ID and no
       // Agent-specific plugin: catalog definition → identity → registry → invite
       // → generic dispatch → configured tool → timeline receipt.
+      await (async function verifyCustomAgentDispatch() {
       const customId = 'research_helper_42'
       const customDefinition = ctx.agentCatalog.create({
         title: '自定义研究助手', description: '使用团队搜索工具完成研究任务并提供依据。',
@@ -657,9 +665,12 @@ async function partE(): Promise<void> {
         JSON.stringify({ events: customEvents.map((event) => [event.authorId, event.kind, event.text]),
           progress: progressEvents.filter((event) => event.agentId === customId).map(({ phase, toolId }) => [phase, toolId]),
           status: ctx.agents.get(customId).status }))
+      })()
+
+      await (async function verifyRunCancellation() {
       mock.mode = 'hold'
       const requestsBeforeCancel = mock.requests
-      const artifactCountBeforeCancel = readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length
+      const artifactCountBeforeCancel = readdirSync(runtimeRoot).filter((name) => name.startsWith('artifact-')).length
       const nativeSetInterval = globalThis.setInterval
       let triggerHeartbeat: (() => void) | undefined
       const controlledSetInterval: typeof setInterval = (handler, timeout, ...args) => {
@@ -703,11 +714,13 @@ async function partE(): Promise<void> {
             ctx.agents.get('agent.coder').status === 'idle' && !ctx.agentRuntime.listActiveProgress().some((run) => run.sourceEventId === 'evt_cancel_run'),
           `count=${cancelledCount}, error=${(cancellationError as Error | undefined)?.name}, status=${ctx.agents.get('agent.coder').status}`)
         check('E4f 已取消的旧运行不会写出最终产物',
-          readdirSync(r.root).filter((name) => name.startsWith('artifact-')).length === artifactCountBeforeCancel)
+          readdirSync(runtimeRoot).filter((name) => name.startsWith('artifact-')).length === artifactCountBeforeCancel)
       } finally {
         globalThis.setInterval = nativeSetInterval
       }
+      })()
 
+      await (async function verifyDelegatedAgentCancellation() {
       let staleAnalystReported = false
       let analystLedgerCleared = false
       Object.assign(ctx, {
@@ -728,7 +741,9 @@ async function partE(): Promise<void> {
       check('E4g catalog Agent 经通用 dispatcher 进入取消屏障，取消后不回报旧结果',
         cancelledAnalysts === 1 && analystLedgerCleared && !staleAnalystReported,
         `count=${cancelledAnalysts}, cleared=${analystLedgerCleared}, reported=${staleAnalystReported}`)
+      })()
 
+      await (async function verifyLongStreamCompleteness() {
       mock.mode = 'long-stream'
       const longSource = 'evt_long_stream'
       const longReceipt = await ctx.agentRuntime.perform('agent.coder', 'MOCK-长回复流', {
@@ -742,7 +757,9 @@ async function partE(): Promise<void> {
         `delta=${longDeltas.length}，frames=${longProgress.length}，receipt=${longReceipt.receipt.length}`)
       check('E4i 超长答复完整写入工作区产物',
         readFileSync(join(longReceipt.root, longReceipt.files.at(-1)!), 'utf8').includes(longDeltas))
+      })()
 
+      await (async function verifyInterruptedStream() {
       mock.mode = 'stream-drop'
       const droppedSource = 'evt_stream_drop'
       const eventsBeforeDrop = ctx.eventLog.listBySession('s_progress').length
@@ -773,12 +790,14 @@ async function partE(): Promise<void> {
           droppedError.code === 'http_error',
         JSON.stringify({ error: droppedError?.constructor?.name, code: (droppedError as { code?: string })?.code,
           worklog: (droppedError as AgentExecutionFailureError | undefined)?.worklog }))
+      })()
+
       rmSync(tmp, { recursive: true, force: true })
       db.close()
     }
 
     // E5 无 key → perform 占位模式（诚实标注【占位】，绝不冒充真模型）。
-    {
+    await (async function verifyNoKeyAgentPlaceholder() {
       clearEnv()
       const tmp = mkdtempSync(join(tmpdir(), 'p8-llm-c-'))
       const db = memoryDb(true)
@@ -799,7 +818,7 @@ async function partE(): Promise<void> {
         r.files.length === 1 && r.files[0]!.startsWith('tasks/') && r.files[0]!.endsWith('/task.md'))
       rmSync(tmp, { recursive: true, force: true })
       db.close()
-    }
+    })()
   } finally {
     server.close()
     // env 还原（不留探针残留；saved 全为 undefined → 等价于再清一遍）

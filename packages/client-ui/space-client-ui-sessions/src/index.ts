@@ -116,10 +116,15 @@ export async function removeSessionMember(ctx: Context, sessionId: string, princ
   const targetUser = await ctx.users.byId(principalId)
   const targetAgent = ctx.agents.list().find((agent) => agent.descriptor.id === principalId)
   const targetName = targetUser?.displayName || targetAgent?.descriptor.title || principalId
+  const wasDri = ctx.session.listMembers(sessionId, true).some((member) =>
+    member.principalId === principalId && member.role === 'DRI')
   ctx.session.leave(sessionId, principalId)
+  const text = wasDri
+    ? `${actorName}（${actorId}）将当前 DRI ${targetName}（${principalId}）移出会话。现在没有专属 DRI，群主可继续处理 Agent 待决事项；请在成员管理中指定新的 DRI。`
+    : `${actorName}（${actorId}）将 ${targetName}（${principalId}）移出会话。`
   ctx.eventLog.append({
     id: randomUUID(), sessionId, authorId: null, authorKind: 'system', kind: 'system', phaseId: null,
-    text: `${actorName}（${actorId}）将 ${targetName}（${principalId}）移出会话。`,
+    text,
     mentions: [], toolCalls: [], replyMode: '',
   })
   return ctx.session.listMembers(sessionId, true)
@@ -142,6 +147,22 @@ export async function changeSessionMemberRole(ctx: Context, sessionId: string, p
   const nextRole = roleInput as Role
   if (current.role === nextRole) return members
   try {
+    if (nextRole === 'DRI') {
+      const previousDri = members.find((member) => member.role === 'DRI')
+      ctx.session.setRole(sessionId, principalId, nextRole)
+      const previousDriId = previousDri?.principalId
+      const previousName = previousDriId
+        ? (await ctx.users.byId(previousDriId))?.displayName || previousDriId
+        : ''
+      ctx.eventLog.append({
+        id: randomUUID(), sessionId, authorId: null, authorKind: 'system', kind: 'system', phaseId: null,
+        text: previousName
+          ? `${actorName}（${actorId}）将会话 DRI 从 ${previousName}（${previousDriId}）转交给 ${target.displayName}（${principalId}）。`
+          : `${actorName}（${actorId}）将 ${target.displayName}（${principalId}）设为本会话 DRI。`,
+        mentions: [], toolCalls: [], replyMode: '',
+      })
+      return ctx.session.listMembers(sessionId, true)
+    }
     ctx.session.setRole(sessionId, principalId, nextRole)
   } catch (error) {
     return { error: (error as { code?: string }).code ?? 'role_change_failed', detail: (error as Error).message }

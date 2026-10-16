@@ -179,6 +179,7 @@ export class SqliteSessionStore extends SessionService {
       .get(sessionId, principalId) as Row | undefined
     if (!existing) throw new SessionError('not_found', `该参与者不在册（或已离开）: ${principalId}`)
     if (existing.role === role) return toMembership(existing)
+    if (role === 'DRI') return this.transferDri(sessionId, principalId)
     try {
       this.db.prepare(`UPDATE session_members SET role = ? WHERE session_id = ? AND principal_id = ? AND status = 'active'`)
         .run(role, sessionId, principalId)
@@ -188,6 +189,40 @@ export class SqliteSessionStore extends SessionService {
     const row = this.db
       .prepare(`SELECT * FROM session_members WHERE session_id = ? AND principal_id = ?`)
       .get(sessionId, principalId) as Row
+    return toMembership(row)
+  }
+
+  private transferDri(sessionId: string, principalId: string): Membership {
+    const target = this.db.prepare(
+      `SELECT * FROM session_members WHERE session_id = ? AND principal_id = ? AND status = 'active'`,
+    ).get(sessionId, principalId) as Row | undefined
+    if (!target) throw new SessionError('not_found', `该参与者不在册（或已离开）: ${principalId}`)
+
+    const current = this.db.prepare(
+      `SELECT * FROM session_members WHERE session_id = ? AND role = 'DRI' AND status = 'active'`,
+    ).get(sessionId) as Row | undefined
+    if (current?.principal_id === principalId) {
+      return toMembership(target)
+    }
+
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (current) {
+        this.db.prepare(
+          `UPDATE session_members SET role = '成员' WHERE session_id = ? AND principal_id = ? AND status = 'active'`,
+        ).run(sessionId, String(current.principal_id))
+      }
+      this.db.prepare(
+        `UPDATE session_members SET role = 'DRI' WHERE session_id = ? AND principal_id = ? AND status = 'active'`,
+      ).run(sessionId, principalId)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      mapConstraintError(error)
+    }
+    const row = this.db.prepare(
+      `SELECT * FROM session_members WHERE session_id = ? AND principal_id = ? AND status = 'active'`,
+    ).get(sessionId, principalId) as Row
     return toMembership(row)
   }
 

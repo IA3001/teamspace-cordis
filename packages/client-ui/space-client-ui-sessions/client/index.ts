@@ -959,7 +959,7 @@ const SessionsRail = defineComponent({
             return h(ElAlert, {
               title: 'DRI 负责处理 Agent 的待决事项',
               description: `邀请已有账号会把它作为独立成员加入，不会替换或合并相似名称账号；成员 ID 才是唯一身份。${canManageMembers
-                ? '群主/管理员可在此调整角色或移出成员。群主角色固定；请将另一名人类成员设为 DRI，再由该 DRI 登录并在 Agent 回复卡片下方选择「通过」或「其他处理」。'
+                ? '群主/管理员可在下方“会话角色”直接将已入会的人类成员设为 DRI；选择另一名成员为 DRI 会原子转交决策权。群主角色固定，不能指定自己；没有专属 DRI 时群主可直接决策。移出当前 DRI 后群主继续接管，系统会在聊天记录中提示重新指派。'
                 : '只有群主/管理员可以调整角色或移出成员；请由他们将目标人类成员设为 DRI，再由该 DRI 登录并在 Agent 回复卡片下方选择「通过」或「其他处理」。'}`,
               type: 'info',
               showIcon: true,
@@ -1000,7 +1000,7 @@ const SessionsRail = defineComponent({
                     onChange: () => { void doSetMemberRole(scope.row) },
                   }, { default: () => [
                     h(ElOption, { label: '普通成员', value: '成员' }),
-                    h(ElOption, { label: 'DRI', value: 'DRI' }),
+                    h(ElOption, { label: 'DRI（设为/转交决策负责人）', value: 'DRI' }),
                     h(ElOption, { label: '管理员', value: '管理员' }),
                   ] })
               },
